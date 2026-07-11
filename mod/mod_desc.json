@@ -1,0 +1,7 @@
+{
+  "displayedName": "Shadows MCP Server",
+  "prefix": "smcp",
+  "description": "Embeds an MCP (Model Context Protocol) server in the game so AI assistants and scripts can query the live game state and command your agents over HTTP. Query locations, units, persons, societies and your god's state; move agents, perform challenges, use powers and end the turn.",
+  "versionsSupported": ["FILL_IN_GAME_VERSION"],
+  "modCredit": "Laurent Bureau"
+}

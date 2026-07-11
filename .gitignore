@@ -1,0 +1,15 @@
+# Game assemblies (user-provided, copyrighted — never commit)
+lib/
+
+# Decompiled game sources (generated, copyrighted — never commit)
+decompiled/
+
+# Build outputs
+bin/
+obj/
+dist/
+
+# IDE
+.vs/
+.idea/
+*.user

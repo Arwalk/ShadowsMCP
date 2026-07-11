@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- The game is a Unity/Mono title; community mods (e.g. CommunityLib) target net472. -->
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>9</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <RootNamespace>ShadowsMcp</RootNamespace>
+    <AssemblyName>ShadowsMCP</AssemblyName>
+    <Version>0.1.0</Version>
+    <!-- Embedded portable PDB: readable stack traces in Player.log with a single-file mod. -->
+    <DebugType>embedded</DebugType>
+    <Deterministic>true</Deterministic>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Lets `dotnet build` produce net472 assemblies on Linux/macOS without a Windows targeting pack. -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net472" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Game assemblies: copy the game's ShadowsOfForbiddenGods_Data/Managed/ folder to lib/Managed/.
+         Private=false: the game already provides these at runtime; never ship them with the mod. -->
+    <Reference Include="Assembly-CSharp">
+      <HintPath>../../lib/Managed/Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>../../lib/Managed/UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Shared protocol layer — the exact sources smoke-tested by the Linux TestHost. -->
+    <Compile Include="../Core/**/*.cs" LinkBase="Core" />
+  </ItemGroup>
+
+  <Target Name="EnsureGameAssemblies" BeforeTargets="CoreCompile">
+    <Error Condition="!Exists('../../lib/Managed/Assembly-CSharp.dll')"
+           Text="lib/Managed/Assembly-CSharp.dll not found. Copy the game's ShadowsOfForbiddenGods_Data/Managed/ folder to lib/Managed/ first." />
+  </Target>
+
+</Project>
