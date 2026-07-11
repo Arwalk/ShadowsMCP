@@ -1,5 +1,6 @@
-# Game assemblies (user-provided, copyrighted — never commit)
+# Game assemblies and full game copy (user-provided, copyrighted — never commit)
 lib/
+game/
 
 # Decompiled game sources (generated, copyrighted — never commit)
 decompiled/

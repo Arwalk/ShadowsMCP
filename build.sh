@@ -27,8 +27,8 @@ rm -rf dist/ShadowsMCP
 mkdir -p dist/ShadowsMCP
 cp src/Mod/bin/Release/ShadowsMCP.dll dist/ShadowsMCP/
 cp mod/mod_desc.json dist/ShadowsMCP/
-[ -f mod/params.txt ] && cp mod/params.txt dist/ShadowsMCP/
-[ -f mod/preview.png ] && cp mod/preview.png dist/ShadowsMCP/
+cp mod/mod_config.json dist/ShadowsMCP/
+[ -f mod/preview.png ] && cp mod/preview.png dist/ShadowsMCP/ || true
 
 echo ""
 echo "Done. Install by copying dist/ShadowsMCP/ to:"

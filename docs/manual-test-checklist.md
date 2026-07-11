@@ -8,7 +8,7 @@ If anything fails, collect the two logs listed at the bottom and the exact comma
 
 - [ ] Copy `dist/ShadowsMCP/` → `<game>\data\optionalData\ShadowsMCP\`
       (default: `C:\Program Files (x86)\Steam\steamapps\common\Shadows of Forbidden Gods\data\optionalData\ShadowsMCP\`)
-- [ ] The folder contains `ShadowsMCP.dll`, `mod_desc.json` (and `params.txt` if shipped)
+- [ ] The folder contains `ShadowsMCP.dll`, `mod_desc.json` and `mod_config.json`
 - [ ] Launch the game → mod menu → **Shadows MCP Server** appears and is enabled
 - [ ] If the mod is greyed out / missing: the game version may not match `versionsSupported`
       in `mod_desc.json` — edit it to your game version (shown in the main menu) and restart
