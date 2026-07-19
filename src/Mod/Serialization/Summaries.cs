@@ -122,6 +122,24 @@ namespace ShadowsMcp
             return JsonValue.NewObject().Set("id", UnitId(ctx, u)).Set("name", SafeName(() => u.getName()));
         }
 
+        // ---------- threats ----------
+
+        /// <summary>One entry from the game's built-in threats panel (Overmind.getThreats()).
+        /// severity is the event priority (higher = more pressing); beneficial flags the few
+        /// positive/opportunity entries. location is the hex the event points at, or null.</summary>
+        public static JsonValue ThreatEvent(GameContext ctx, MsgEvent e)
+        {
+            if (e == null) return JsonValue.Null;
+            Location loc = null;
+            try { if (e.hex != null && e.hex.locationIndex != -1) loc = e.hex.location; }
+            catch { }
+            return JsonValue.NewObject()
+                .Set("message", e.msg)
+                .Set("severity", Round2(e.priority))
+                .Set("beneficial", e.beneficial)
+                .Set("location", LocationRef(loc));
+        }
+
         // ---------- recruitment / end-of-game ----------
 
         /// <summary>An agent archetype you can enthrall (from overmind.agentsGeneric/agentsUnique).</summary>
@@ -177,20 +195,24 @@ namespace ShadowsMcp
 
         public static JsonValue UnitSummary(GameContext ctx, Unit u)
         {
+            // A dead unit keeps a stale task and can still report isCommandable()==true; force the
+            // caller-facing view to null/false so a remembered id can't look actionable (the action
+            // layer already rejects commands to it with "<unit> is dead").
+            bool dead = u.isDead;
             JsonValue o = JsonValue.NewObject()
                 .Set("id", UnitId(ctx, u))
                 .Set("name", SafeName(() => u.getName()))
                 .Set("type", u.GetType().Name)
                 .Set("kind", u is UA ? "agent" : (u is UM ? "military" : "other"))
-                .Set("commandable", u.isCommandable())
+                .Set("commandable", !dead && u.isCommandable())
                 .Set("location", LocationRef(u.location))
                 .Set("society", SocialGroupRef(u.society))
                 .Set("hp", u.hp)
                 .Set("maxHp", u.maxHp)
                 .Set("movesTaken", u.movesTaken)
                 .Set("maxMoves", u.getMaxMoves())
-                .Set("task", TaskBrief(u.task));
-            if (u.isDead) o.Set("isDead", true);
+                .Set("task", dead ? JsonValue.Null : TaskBrief(u.task));
+            if (dead) o.Set("isDead", true);
             return o;
         }
 
@@ -200,7 +222,7 @@ namespace ShadowsMcp
                 .Set("menace", Round2(u.menace))
                 .Set("profile", Round2(u.profile))
                 .Set("person", u.person != null ? PersonSummary(ctx, u.person) : JsonValue.Null)
-                .Set("taskDetail", TaskDetail(u.task))
+                .Set("taskDetail", u.isDead ? JsonValue.Null : TaskDetail(ctx, u.task))
                 .Set("engagedBy", UnitRef(ctx, u.engagedBy))
                 .Set("engagedThisTurn", u.engagedBy != null && u.turnLastEngaged == u.map.turn);
             if (u.rituals != null && u.rituals.Count > 0)
@@ -224,7 +246,7 @@ namespace ShadowsMcp
             return JsonValue.Of(desc);
         }
 
-        private static JsonValue TaskDetail(Task t)
+        private static JsonValue TaskDetail(GameContext ctx, Task t)
         {
             if (t == null) return JsonValue.Null;
             JsonValue o = JsonValue.NewObject().Set("type", t.GetType().Name);
@@ -240,6 +262,28 @@ namespace ShadowsMcp
             if (go != null)
             {
                 o.Set("destination", LocationRef(go.target));
+            }
+            // Enemy intent: who this unit is hunting / disrupting / guarding, and how long until
+            // it loses the trail. Lets you answer "who is targeting my agent" from get_unit.
+            Task_AttackUnit attack = t as Task_AttackUnit;
+            if (attack != null)
+            {
+                o.Set("target", UnitRef(ctx, attack.target))
+                 .Set("turnsRemaining", attack.turnsRemaining);
+            }
+            Task_DisruptUA disrupt = t as Task_DisruptUA;
+            if (disrupt != null)
+            {
+                o.Set("target", UnitRef(ctx, disrupt.other))
+                 .Set("turnsLeft", disrupt.turnsLeft);
+            }
+            Task_Bodyguard guard = t as Task_Bodyguard;
+            if (guard != null)
+            {
+                o.Set("target", UnitRef(ctx, guard.target))
+                 .Set("turnsRemaining", guard.turnsRemaining);
+                if (guard.targetChallenge != null)
+                    o.Set("challenge", SafeName(() => guard.targetChallenge.getName()));
             }
             return o;
         }

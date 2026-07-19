@@ -96,11 +96,15 @@ namespace ShadowsMcp.Tools.Decisions
                 if (!args["force"].AsBool())
                     return ToolResult.Error("pick an option with optionIndex (see get_pending_decision), " +
                         "or pass force=true to dismiss this popup.");
+                // Capture identity BEFORE dismissing (the blocker is destroyed by Dismiss). Prefer the
+                // popup's title (what a human sees); fall back to its Popup* type name.
+                string title = Title(blocker);
+                string dismissed = !string.IsNullOrEmpty(title) ? title : PopupType(blocker);
                 Dismiss(ui, blocker);
                 return ToolResult.Ok(JsonValue.NewObject()
                     .Set("resolved", true)
                     .Set("kind", "popup")
-                    .Set("dismissed", PopupType(blocker)));
+                    .Set("dismissed", dismissed));
             }
 
             List<Button> buttons = Buttons(blocker);

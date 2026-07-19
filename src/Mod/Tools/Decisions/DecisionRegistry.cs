@@ -217,7 +217,11 @@ namespace ShadowsMcp.Tools.Decisions
             return o;
         }
 
-        private static void PumpQueue(GameContext ctx)
+        /// <summary>Promote any popup sitting in the delayed blocker queue into <c>ui.blocker</c>.
+        /// A decision that opens a follow-up popup (e.g. a level-up chaining into the next) leaves it
+        /// queued, not yet the live blocker; end_turn calls this before deciding the turn is stuck so a
+        /// freshly-queued decision is surfaced instead of being mis-reported as an unknown guard.</summary>
+        internal static void PumpQueue(GameContext ctx)
         {
             try
             {

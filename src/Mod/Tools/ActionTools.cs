@@ -369,8 +369,12 @@ namespace ShadowsMcp.Tools
                     return ToolResult.Error("unknown agent code " + code + " - see list_recruitable_agents.");
                 target = Summaries.ResolveId(ctx, a["locationId"].AsString()) as Location;
                 if (target == null)
-                    return ToolResult.Error("archetype recruitment needs a valid locationId; got: " +
-                        a["locationId"].AsString());
+                {
+                    string got = a["locationId"].AsString();
+                    return ToolResult.Error(string.IsNullOrEmpty(got)
+                        ? "archetype recruitment needs a locationId (none was provided) - see list_locations."
+                        : "archetype recruitment could not resolve locationId '" + got + "' - see list_locations.");
+                }
             }
 
             // validTarget also enforces the agent cap; getRestrictions explains a placement failure.
@@ -449,15 +453,30 @@ namespace ShadowsMcp.Tools
             }
 
             int before = map.turn;
-            world.bEndTurn(force);
-            int after = map.turn;
+            int after;
+            JsonValue autoDismiss;
+            try
+            {
+                world.bEndTurn(force);
+                after = map.turn;
 
-            // With force=true, clear purely-informational popups (agent deaths, message boxes) that turn
-            // processing may have raised, so an unattended end_turn(force) loop never stalls on a notice.
-            // A popup carrying a real choice is left open and surfaced via pendingDecision below.
-            JsonValue autoDismiss = force
-                ? Decisions.DecisionRegistry.AutoDismissInformational(ctx)
-                : JsonValue.Null;
+                // With force=true, clear purely-informational popups (agent deaths, message boxes) that turn
+                // processing may have raised, so an unattended end_turn(force) loop never stalls on a notice.
+                // A popup carrying a real choice is left open and surfaced via pendingDecision below.
+                autoDismiss = force
+                    ? Decisions.DecisionRegistry.AutoDismissInformational(ctx)
+                    : JsonValue.Null;
+            }
+            catch (System.InvalidOperationException)
+            {
+                // Turn processing can race with itself when an event mutates a world collection mid-tick
+                // (e.g. a civil-war resolution creates a new society while social groups are being
+                // enumerated), throwing "Collection was modified". It is transient and self-healing, so
+                // return a clean, actionable error instead of leaking the raw .NET message. The turn may
+                // have partly advanced; the caller should re-query and retry.
+                return ToolResult.Error("turn processing hit a transient state change (an event altered the " +
+                    "world mid-turn). No stable result this call - re-check game_overview and call end_turn again.");
+            }
 
             if (after > before)
             {
@@ -475,7 +494,15 @@ namespace ShadowsMcp.Tools
 
             // Turn did not advance. If a decision is blocking, surface it with its options so the agent can
             // answer it via resolveOptionIndex - rather than returning a bare "a dialog is open" error.
+            // Resolving a decision this call (e.g. a level-up) can chain into a follow-up popup that is
+            // still sitting in the delayed queue, not yet the live blocker; promote it before concluding
+            // the turn is stuck, so we surface a real decision instead of an opaque "unknown guard".
             JsonValue pending = Decisions.DecisionRegistry.FullOrNull(ctx);
+            if (pending.IsNull)
+            {
+                Decisions.DecisionRegistry.PumpQueue(ctx);
+                pending = Decisions.DecisionRegistry.FullOrNull(ctx);
+            }
             if (!pending.IsNull)
             {
                 JsonValue result = JsonValue.NewObject()
@@ -484,6 +511,18 @@ namespace ShadowsMcp.Tools
                     .Set("pendingDecision", DecorateResolveHint(pending));
                 if (!resolved.IsNull) result.Set("resolved", resolved);
                 return ToolResult.Ok(result);
+            }
+
+            // We answered a decision but the turn still hasn't advanced and nothing is pending: that is
+            // progress, not a failure. Report it cleanly and actionably (call end_turn again) instead of
+            // erroring with an unactionable guard string an MCP client can't act on.
+            if (!resolved.IsNull)
+            {
+                return ToolResult.Ok(JsonValue.NewObject()
+                    .Set("advanced", false)
+                    .Set("turn", after)
+                    .Set("resolved", resolved)
+                    .Set("hint", "decision answered, but the turn has not advanced yet - call end_turn again to continue."));
             }
 
             // Some other guard fired: report which one.

@@ -25,11 +25,11 @@ return. Do not use any tools other than the `shadows` server's.
 The game: you play a dark god corrupting the world through agents (your commandable units). You are
 authorized to freely mutate THIS game (it is expendable). Actions are irreversible — there is no save/undo.
 
-### Tools available (22)
-game_overview, list_locations, get_location, list_units, get_unit, list_persons, get_person,
-list_social_groups, get_social_group, get_player_state, list_recruitable_agents, list_powers,
-list_challenges, inspect, move_unit, cancel_task, perform_challenge, use_power, recruit_agent,
-get_pending_decision, resolve_decision, end_turn.
+### Tools available (23)
+game_overview, get_threats, list_locations, get_location, list_units, get_unit, list_persons,
+get_person, list_social_groups, get_social_group, get_player_state, list_recruitable_agents,
+list_powers, list_challenges, inspect, move_unit, cancel_task, perform_challenge, use_power,
+recruit_agent, get_pending_decision, resolve_decision, end_turn.
 
 ### Preflight (if this fails, stop and report BLOCKED)
 1. Call `game_overview`. If it errors ("no game in progress" / not ready) or the core tools are missing,
@@ -158,6 +158,23 @@ get_pending_decision, resolve_decision, end_turn.
 - I2 (error): a malformed call (e.g. `perform_challenge {"unitId":"U1"}` with no challengeId, or a stale id
   after several turns) returns a clean error, not a hang.
 
+**J. Threats & enemy intent**
+- J1: `get_threats` returns a `count` and a `threats` array. Each entry has `message` (string),
+  `severity` (number), `beneficial` (bool), and `location` (a `{id,name}` ref or null). PASS if the
+  shape holds for every entry (the array MAY be empty on a very early/quiet turn — that's still PASS;
+  note it and lean on J3 later once the world is more active).
+- J2 (consistency): assert `threats` is sorted by `severity` descending, and every non-null
+  `location.id` (`L*`) round-trips via `get_location`.
+- J3 (opportunistic, enemy intent): scan `list_units {"scope":"all"}` for a hostile unit whose `task`
+  brief mentions hunting/attacking/disrupting; `get_unit` on it and assert `taskDetail.target` is a
+  `U*` ref that round-trips via `get_unit`, plus a `turnsRemaining` or `turnsLeft` number is present.
+  Cross-check with `list_units {"scope":"hostileToMe"}` — any unit it returns MUST expose such a
+  `taskDetail.target`. NOTE: `hostileToMe` (and `get_threats`) intentionally cover units hostile to your
+  *interests*, not strictly your own commandable agents — this mirrors the game's own threat panel
+  (`target.isCommandable() || target is UAE`), so a hero hunting a shadow-aligned third party such as an
+  **orc upstart** is a correct match, NOT a FAIL. If no hostile-to-you unit exists within ~15 `end_turn`s,
+  mark SKIP (enemy intent is not forcible) — do NOT FAIL.
+
 ### Reporting (required output)
 1. Print a table with columns: `id | area | result (PASS/FAIL/SKIP/BLOCKED) | expected | observed (tool +
    before→after) | notes`. One row per check above.
@@ -167,7 +184,7 @@ get_pending_decision, resolve_decision, end_turn.
    directory (use the starting turn number from preflight so the name is stable). Confirm the file path in
    your final message.
 
-Work through A→I in order. Be concise in intermediate narration; the value is in the evidence and the final
+Work through A→J in order. Be concise in intermediate narration; the value is in the evidence and the final
 report.
 ````
 

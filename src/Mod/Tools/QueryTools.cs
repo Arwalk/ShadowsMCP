@@ -63,6 +63,25 @@ namespace ShadowsMcp.Tools
                 })));
 
             host.Register(new ToolDefinition(
+                "get_threats",
+                "Current threats and opportunities, mirroring the game's built-in Threats panel: "
+                + "heroes moving to attack your agents, the most-inclined attacker per agent (with "
+                + "motivation %), the Chosen One's prophecy progress, seal/Iastur rituals, incoming "
+                + "wars and holy-order mood. Sorted by severity (highest first).",
+                Schema.Object(),
+                a => WithMap(ctx, map =>
+                {
+                    var threats = new List<MsgEvent>(map.overmind.getThreats());
+                    // Highest priority first; MsgEvent.priority carries the severity.
+                    threats.Sort((x, y) => y.priority.CompareTo(x.priority));
+                    JsonValue arr = JsonValue.NewArray();
+                    foreach (MsgEvent e in threats) arr.Add(Summaries.ThreatEvent(ctx, e));
+                    return ToolResult.Ok(JsonValue.NewObject()
+                        .Set("count", threats.Count)
+                        .Set("threats", arr));
+                })));
+
+            host.Register(new ToolDefinition(
                 "list_locations",
                 "List locations on the world map, with owner, settlement, units present and neighbours. Paginated.",
                 Schema.Object(
@@ -110,7 +129,7 @@ namespace ShadowsMcp.Tools
                 "list_units",
                 "List units. Default scope 'mine' = your commandable agents. Paginated.",
                 Schema.Object(
-                    Schema.Prop("scope", Schema.StringEnum("Filter: mine (default), agents, military, all", "mine", "agents", "military", "all")),
+                    Schema.Prop("scope", Schema.StringEnum("Filter: mine (default), agents, military, all, hostileToMe (units hunting/disrupting a shadow-aligned unit you benefit from - your own agents or allied evil units such as orc upstarts; mirrors get_threats)", "mine", "agents", "military", "all", "hostileToMe")),
                     Schema.Prop("socialGroupId", Schema.String("Only units of this social group (e.g. SG3)")),
                     Schema.Prop("limit", Schema.Integer("Max results (default " + DefaultLimit + ")")),
                     Schema.Prop("offset", Schema.Integer("Skip this many results"))),
@@ -134,6 +153,7 @@ namespace ShadowsMcp.Tools
                             case "agents": if (!(u is UA)) continue; break;
                             case "military": if (!(u is UM)) continue; break;
                             case "all": break;
+                            case "hostileToMe": if (!IsHostileToMe(u)) continue; break;
                             default: return ToolResult.Error("invalid scope: " + scope);
                         }
                         matches.Add(u);
@@ -380,6 +400,22 @@ namespace ShadowsMcp.Tools
                 pd.Set("resolveHint", "pick an option by its index: call end_turn with resolveOptionIndex " +
                     "(or resolve_decision with optionIndex). force=true skips/dismisses where allowed.");
             return pd;
+        }
+
+        /// <summary>True when this unit's current task targets a shadow-aligned unit you benefit from —
+        /// a commandable unit (your agent) OR any UAE (evil agents on your side, including player-seeded
+        /// orc upstarts) — i.e. it is hunting or disrupting your interests. Mirrors the exact target test
+        /// in Overmind.getThreats() (`target.isCommandable() || target is UAE`), which is why an attack on
+        /// an orc upstart also qualifies.</summary>
+        private static bool IsHostileToMe(Unit u)
+        {
+            Task_AttackUnit attack = u.task as Task_AttackUnit;
+            if (attack != null && attack.target != null)
+                return attack.target.isCommandable() || attack.target is UAE;
+            Task_DisruptUA disrupt = u.task as Task_DisruptUA;
+            if (disrupt != null && disrupt.other != null)
+                return disrupt.other.isCommandable() || disrupt.other is UAE;
+            return false;
         }
 
         internal static ToolResult WithMap(GameContext ctx, Func<Map, ToolResult> body)

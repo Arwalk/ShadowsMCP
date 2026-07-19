@@ -94,6 +94,12 @@ Unit fields: `map`, `personID` (persons index, -1 if none), `homeLocation`, `loc
 - `UM : Unit` — military. `playerTriesToStartChallenge` is **public** (UM.cs:69) with a
   simpler sequence; `playerOrdersAttack(UM)` (:102).
 
+Task subtypes decoded by `Summaries.TaskDetail`: `Task_PerformChallenge` (`challenge`,
+`progress`, `turnsTaken`), `Task_GoToLocation` (`target: Location`), and the enemy-intent
+tasks — `Task_AttackUnit` (`target: Unit`, `turnsRemaining: int`; Task_AttackUnit.cs:24,26),
+`Task_DisruptUA` (`other: UA`, `turnsLeft: int`; Task_DisruptUA.cs:8,10), `Task_Bodyguard`
+(`target: Unit`, `turnsRemaining: int`, `targetChallenge: Challenge`; Task_Bodyguard.cs:7,9,13).
+
 ## Player movement (UIInputs.cs:630 `rightClickOnHex`)
 
 Guards: `isCommandable()`; `engagedBy != null && turnLastEngaged == map.turn` → blocked
@@ -173,6 +179,12 @@ Warns (confirm dialog) when abandoning a `Task_PerformChallenge` whose progress 
 `power: double`, `god: God`, `agents: List<Unit>`, `enthralled: Person`,
 `availableEnthrallments`, `nEnthralled`, `sealsBroken`, `sealProgress`, `victoryMode`
 (+ VICTORY_MODE_* consts), `victoryAchieved`, `endOfGameAchieved`, `panicFrom*` fields.
+
+`getThreats(): List<MsgEvent>` (Overmind.cs:740) — the game's built-in threats panel;
+surfaced by `get_threats`. `MsgEvent` (MsgEvent.cs): `msg: string`, `priority: double`
+(severity; higher = more pressing), `beneficial: bool`, `hex: Hex` (target; `Hex.locationIndex`
+== -1 when none, else `Hex.location`). Note: `getThreats()` has benign side effects (writes
+`SocialGroup.data_highestAttackThreat`, calls `getAttackUtility`) — same as the in-game panel.
 
 ## Recruitment / enthrallment (Overmind.cs, UAE_Abstraction.cs, Sel_CreateAgent.cs, PopupAgentCreation.cs)
 
