@@ -31,6 +31,16 @@
       <HintPath>../../lib/Managed/UnityEngine.CoreModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- uGUI (Button/Text/Image) and TextMeshPro (TMP_Text): read decision-popup fields
+         (PopupEvent.options, PopupAgentLevelup, popup titles) to expose choices to the agent. -->
+    <Reference Include="UnityEngine.UI">
+      <HintPath>../../lib/Managed/UnityEngine.UI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Unity.TextMeshPro">
+      <HintPath>../../lib/Managed/Unity.TextMeshPro.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>
@@ -41,6 +51,10 @@
   <Target Name="EnsureGameAssemblies" BeforeTargets="CoreCompile">
     <Error Condition="!Exists('../../lib/Managed/Assembly-CSharp.dll')"
            Text="lib/Managed/Assembly-CSharp.dll not found. Copy the game's ShadowsOfForbiddenGods_Data/Managed/ folder to lib/Managed/ first." />
+    <Error Condition="!Exists('../../lib/Managed/UnityEngine.UI.dll')"
+           Text="lib/Managed/UnityEngine.UI.dll not found. Copy the game's ShadowsOfForbiddenGods_Data/Managed/ folder to lib/Managed/ first." />
+    <Error Condition="!Exists('../../lib/Managed/Unity.TextMeshPro.dll')"
+           Text="lib/Managed/Unity.TextMeshPro.dll not found. Copy the game's ShadowsOfForbiddenGods_Data/Managed/ folder to lib/Managed/ first." />
   </Target>
 
 </Project>

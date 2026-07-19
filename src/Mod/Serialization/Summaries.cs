@@ -6,8 +6,9 @@ using ShadowsMcp.Core.Json;
 namespace ShadowsMcp
 {
     /// <summary>
-    /// Game object → JSON. Every direct game-field access in the mod is confined to this file
-    /// and Tools/ActionTools.cs; each member used here is recorded in docs/ground-truth-notes.md.
+    /// Game object → JSON. Every direct game-field access in the mod is confined to this file,
+    /// Tools/ActionTools.cs and Tools/Decisions/; each member used here is recorded in
+    /// docs/ground-truth-notes.md.
     ///
     /// Id scheme: locations, persons and social groups have stable native indices → "L3",
     /// "P42", "SG5". Units and challenges get session-scoped registry ids → "U17", "C8".

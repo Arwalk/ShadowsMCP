@@ -317,11 +317,21 @@ namespace ShadowsMcp.Tools
             world.bEndTurn(force);
             int after = map.turn;
 
+            // With force=true, clear purely-informational popups (agent deaths, message boxes) that turn
+            // processing may have raised, so an unattended end_turn(force) loop never stalls on a notice.
+            // A popup carrying a real choice is left open and surfaced via the pending-decision banner.
+            JsonValue autoDismiss = force
+                ? Decisions.DecisionRegistry.AutoDismissInformational(ctx)
+                : JsonValue.Null;
+
             if (after > before)
             {
-                return ToolResult.Ok(JsonValue.NewObject()
+                JsonValue result = JsonValue.NewObject()
                     .Set("turn", after)
-                    .Set("advancedBy", after - before));
+                    .Set("advancedBy", after - before);
+                if (!autoDismiss.IsNull && autoDismiss["count"].AsInt(0) > 0)
+                    result.Set("autoDismissed", autoDismiss);
+                return ToolResult.Ok(result);
             }
 
             // bEndTurn returned without advancing: report which of its guards fired.
@@ -345,7 +355,8 @@ namespace ShadowsMcp.Tools
                 if (u is UA && u.person != null && u.person.skillPoints > 0 && !u.person.cachedOutOfTraits)
                     return u.getName() + " has unspent skill points (force=true auto-spends them)";
                 if (world.option_idleAlert && u.task == null && u.movesTaken == 0)
-                    return u.getName() + " is idle and the idle-agent alert is on (give it an order, or force=true)";
+                    return u.getName() + " is idle and the idle-agent alert is on (give it an order, " +
+                        "pass it via resolve_decision, or force=true)";
             }
             return "unknown guard - check the game window for popups";
         }

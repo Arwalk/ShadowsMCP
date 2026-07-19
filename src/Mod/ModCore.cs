@@ -46,6 +46,20 @@ namespace ShadowsMcp
         public override void onTurnStart(Map map) { OnMapSeen(map); }
         public override void onTurnEnd(Map map) { OnMapSeen(map); }
 
+        // The game calls this whenever the modal blocker changes (a decision popup opened or
+        // closed). We keep no state — the decision tools read ui.blocker live — but logging the
+        // transition helps trace agent runs. Never throw out of a game hook.
+        public override void onUIFullscreenBlockerUpdate(GameObject blocker)
+        {
+            try
+            {
+                Log.Info(blocker != null
+                    ? "decision popup opened: " + blocker.name
+                    : "decision popup closed");
+            }
+            catch { }
+        }
+
         // Option names must match mod_config.json exactly; values arrive when the player
         // applies the in-game mod config popup and again when a game is started.
         public override void receiveModConfigOpts_int(string optName, int value)
@@ -98,6 +112,7 @@ namespace ShadowsMcp
                 QueryTools.RegisterAll(_host, _ctx);
                 ActionTools.RegisterAll(_host, _ctx);
                 InspectTool.RegisterAll(_host, _ctx);
+                DecisionTools.RegisterAll(_host, _ctx);
 
                 _server = new McpServer(_host, "shadows-mcp", ModVersion);
                 RestartTransport();

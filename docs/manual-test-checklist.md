@@ -72,6 +72,63 @@ mcp move_unit '{"unitId":"U1","locationId":"L12"}'
 - [ ] `mcp list_powers` → `mcp use_power` with a castable power and a valid target → visible effect
 - [ ] Invalid moves fail cleanly: moving an enemy unit, a bad location id, a stale id after reload
 
+## 6b. Decision windows (events, level-ups)
+
+- [ ] With nothing open, `mcp get_pending_decision` returns `{"pending": false}` and
+      `game_overview.pendingDecision` is `null`
+- [ ] Play until an agent has a skill point (a level-up popup opens on `end_turn`, or is pending):
+      `game_overview.pendingDecision.kind == "levelUp"`, and **every** tool result now starts with a
+      `⚠ A decision is pending …` banner
+- [ ] `mcp get_pending_decision` lists the available traits with indices
+- [ ] `mcp resolve_decision '{"optionIndex":0}'` → popup closes in-game; the trait shows in
+      `get_person` for that agent and its `skillPoints` dropped
+- [ ] Trigger a narrative event (e.g. explore ruins). `get_pending_decision` lists the choices with
+      `enabled` flags; `resolve_decision` on an enabled option closes it and returns the outcome; a
+      disabled option returns a clear "condition isn't met" error
+- [ ] After resolving, `mcp end_turn` (no force) advances instead of "a dialog is open"
+
+**Any other popup (generic button coverage):**
+
+- [ ] An informational popup (e.g. `PopupMsg`, an intro/tutorial box) shows up as
+      `pendingDecision.kind == "popup"`; `get_pending_decision` lists its button(s) (e.g. "Continue"/
+      "OK") and the body text; `resolve_decision '{"optionIndex":0}'` dismisses it
+- [ ] With an info popup queued **ahead** of a trait pick, dismissing it surfaces the trait popup
+      next (banner flags it) — the early-game trait pick is no longer blocked
+- [ ] A `PopupConfirmOrder` lists confirm/abort as options; picking one resolves it in-game
+- [ ] Any popup can be closed with `resolve_decision '{"force":true}'` (equivalent to pressing OK)
+- [ ] Clicking a power/agent option that opens a targeting selector returns `openedSelector: true`
+      with a hint to use the relevant action tool
+
+**Agent-death notice (informational popup raised during turn processing):**
+
+- [ ] Get an agent killed (e.g. a high-danger challenge like "Infiltrate Holy Site", or losing a
+      battle). On the `end_turn` that kills it, the turn **still advances**; afterwards
+      `game_overview.pendingDecision.kind == "death"` and every tool result carries a
+      `⚠ A decision is pending (death: … has died) …` banner
+- [ ] `mcp get_pending_decision` shows `kind:"death"`, the message text, and two options
+      ("Dismiss" / "Focus the fallen agent's location, then dismiss")
+- [ ] `mcp resolve_decision '{"optionIndex":0}'` closes it and returns `resolved:true`; the banner
+      clears and `mcp end_turn` (no force) advances. With several agents dying the same turn, each
+      `resolve_decision` clears one and the banner re-flags the next until all are gone
+- [ ] **Headless auto-dismiss:** trigger a death, then `mcp end_turn '{"force":true}'` → the result
+      shows the turn advanced **and** `autoDismissed:{count:…,dismissed:["death", …]}`; the banner is
+      already clear afterward. Repeating `end_turn '{"force":true}'` across many turns never stalls on
+      a death/message popup
+- [ ] **Real choices are preserved:** when a narrative event (`kind:"event"`) or level-up
+      (`kind:"levelUp"`) is the pending popup, `end_turn '{"force":true}'` does **not** auto-dismiss it —
+      the result/`pendingDecision` still flags it for `get_pending_decision` / `resolve_decision`
+
+**Idle-agent alert (non-modal — no popup, but blocks end turn):**
+
+- [ ] With an agent that has no order and hasn't moved: `game_overview.pendingDecision.kind ==
+      "idleAgents"` and every tool result carries a `⚠ … agents are idle …` banner (even though no
+      popup is visible in-game)
+- [ ] `mcp get_pending_decision` lists the idle agents (ids + names) and the "pass all" option
+- [ ] Order one idle agent (`move_unit`) → it drops off the idle list and the banner count falls
+- [ ] `mcp resolve_decision '{"optionIndex":0}'` → remaining idle agents show "Passing Turn" in
+      `get_unit`; the banner clears and `mcp end_turn` (no force) advances
+- [ ] Turn the in-game idle-agent alert **off** → no idle pending decision is reported
+
 ## 7. Save-game safety
 
 - [ ] Save the game, load the save → no errors in Player.log, game state intact

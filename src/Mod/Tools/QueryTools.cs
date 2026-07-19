@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Assets.Code;
 using ShadowsMcp.Core.Json;
 using ShadowsMcp.Core.Mcp;
+using ShadowsMcp.Tools.Decisions;
 
 namespace ShadowsMcp.Tools
 {
@@ -37,6 +38,8 @@ namespace ShadowsMcp.Tools
                         .Set("sealsBroken", map.overmind.sealsBroken)
                         .Set("availableEnthrallments", map.overmind.availableEnthrallments)
                         .Set("victoryAchieved", map.overmind.victoryAchieved)
+                        // null unless the game is waiting on a decision popup; see get_pending_decision.
+                        .Set("pendingDecision", DecisionRegistry.Compact(ctx))
                         .Set("counts", JsonValue.NewObject()
                             .Set("locations", map.locations.Count)
                             .Set("units", map.units.Count)

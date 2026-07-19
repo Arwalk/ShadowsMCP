@@ -47,6 +47,7 @@ See `docs/manual-test-checklist.md` for a full end-to-end test script.
 | `move_unit` | Send one of your agents toward a location |
 | `perform_challenge` | Have an agent start a challenge |
 | `use_power` | Cast one of your god's powers |
+| `get_pending_decision` / `resolve_decision` | Read and answer a pending decision popup (level-up trait pick, event choice) |
 | `end_turn` | Advance the turn and wait for it to complete |
 
 ### Entity ids

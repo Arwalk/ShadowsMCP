@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using ShadowsMcp.Core.Json;
 using ShadowsMcp.Core.Mcp;
+using ShadowsMcp.Tools.Decisions;
 
 namespace ShadowsMcp
 {
@@ -35,9 +36,33 @@ namespace ShadowsMcp
             lock (_singleFlight)
             {
                 if (_serverThreadTools.Contains(name))
-                    return base.Execute(name, args);
-                return _ctx.Dispatcher.Run(() => base.Execute(name, args), _ctx.Config.ToolTimeoutMs);
+                {
+                    // Server-thread tools do their own dispatching; stamp on a short main-thread hop.
+                    ToolResult r = base.Execute(name, args);
+                    return _ctx.Dispatcher.Run(() => Stamp(r), _ctx.Config.ToolTimeoutMs);
+                }
+                return _ctx.Dispatcher.Run(() => Stamp(base.Execute(name, args)), _ctx.Config.ToolTimeoutMs);
             }
+        }
+
+        /// <summary>
+        /// While a modal decision popup is open, prepend a one-line banner to every tool result so
+        /// the agent can't miss it (it also shows in game_overview). Runs on the main thread.
+        /// </summary>
+        private ToolResult Stamp(ToolResult result)
+        {
+            if (result == null) return null;
+            try
+            {
+                string banner = DecisionRegistry.Banner(_ctx);
+                if (!string.IsNullOrEmpty(banner))
+                    result.Text = banner + "\n\n" + (result.Text ?? "");
+            }
+            catch
+            {
+                // Stamping is advisory; never fail a tool because of it.
+            }
+            return result;
         }
     }
 }

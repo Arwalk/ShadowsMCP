@@ -174,6 +174,72 @@ Warns (confirm dialog) when abandoning a `Task_PerformChallenge` whose progress 
 `availableEnthrallments`, `nEnthralled`, `sealsBroken`, `sealProgress`, `victoryMode`
 (+ VICTORY_MODE_* consts), `victoryAchieved`, `endOfGameAchieved`, `panicFrom*` fields.
 
+## Decision windows / popups (UIMaster.cs, PopupEvent.cs, PopupAgentLevelup.cs, ModKernel.cs)
+
+The game is single-threaded UI: it "waits for the player" whenever a **modal blocker** is open.
+
+- **The signal**: `map.world.ui.blocker` (`GameObject`, `UIMaster.cs:49`) is non-null while a modal
+  popup is showing; queued popups sit in `ui.blockerQueue`/`blockerQueueDelayed` and are promoted
+  by `checkBlockerQueue`/`removeBlocker`. This is the same field `bEndTurn` guards on.
+- **Push hook**: `ModKernel.onUIFullscreenBlockerUpdate(GameObject blocker)` (`ModKernel.cs:181`)
+  is called on every mod on each blocker change (open/close/promote). The mod overrides it only to
+  log; the decision tools read `ui.blocker` live instead (no state to go stale across save/load).
+- **Identify the popup**: `blocker.GetComponent<PopupEvent>()` / `GetComponent<PopupAgentLevelup>()`
+  etc. `~40 Popup*` MonoBehaviours exist; all shown via `ui.addBlocker*`.
+- **Narrative events** — `PopupEvent` (`PopupEvent.cs`): `Button[] options` bound to
+  `EventData.choices` (`EventData.cs`; `Choice{name,description,condition,outcomes}`). `populate`
+  labels each active button (`GetComponentInChildren<Text>().text`), stores per-option help in
+  `optDescs[4]`, **greys condition-failed choices to colour (0,0,0,0.5) and wires no listener**,
+  and wires enabled ones to `dismiss(choice, ctx)` → `EventManager.chooseOutcome` + `ui.removeBlocker`.
+  The context isn't stored on the popup, so **answering = invoking the chosen button's `onClick`**
+  (replays the captured `dismiss(choice, ctx)`); success shows up as `ui.blocker` changing.
+- **Level-ups** — `PopupAgentLevelup` (`PopupAgentLevelup.cs`): public `UA unit`; options are
+  `Trait.getAvailableTraits(unit)` (`Trait.getName()`/`getDesc()`); public `choose(Trait)` does
+  `person.skillPoints--; person.receiveTrait(t); ui.removeBlocker(...)`. `dismiss()` closes without
+  spending. Triggered from `bEndTurn` via `prefabStore.popAgentLevelUp` when `skillPoints > 0`.
+- **Every other popup — the generic path**: almost all of the ~51 `Popup*` classes wire their
+  clicks through Unity Inspector `Button.onClick` → a `bXxx()`/`dismiss()` method (only `PopupEvent`
+  and `PopupMinionDismissal` wire clicks in code). So the mod's `GenericButtonHandler` (registry
+  fallback) drives any popup by `blocker.GetComponentsInChildren<Button>()`, listing each
+  interactable button (label from its child `Text`/`TMP_Text`, or the `UIE_*` data object —
+  `UIE_Trait.trait`, `UIE_GodPower.power`, `UIE_AgentSelect.abstraction`) and committing the chosen
+  one with `button.onClick.Invoke()`. `force=true` dismisses: `dismissKeyHit()` if the popup is a
+  `UI_Dismissable` (11 do — `PopupMsg`, `PopupConfirmOrder`, …), else `ui.removeBlocker(blocker)`.
+  Exceptions whose main interaction isn't a button (still dismiss/cancel-able, flagged in the
+  option note): item-trading (drag), mod-config (text/toggle), carousels (`PopupScrollSet`/
+  `PopupXScroll`/`PopupBox*`), text-entry (`PopupSaveDialog`/`PopupMsgRenameAgent`/options), and the
+  stepwise `PopupBattleAgent`. Some buttons (`UIE_GodPower.bCast`, `UIE_AgentSelect.bCast`) set
+  `world.selector` instead of closing — the resolve result flags `openedSelector`.
+- **Agent-death notice** — `PopupMsgAgentsDeath` (`PopupMsgAgentsDeath.cs`): raised inside
+  `map.turnTick()` when one of your agents dies (`PrefabStore.popMsgAgentDeath → ui.addBlocker`, the
+  immediate queue). Purely informational — `bDismiss`/`bDismissAgentA` both call `ui.removeBlocker`
+  (the second pans the camera first). The mod's bespoke `PopupMsgAgentsDeathHandler` (registered
+  before the generic fallback) labels the two buttons and answers by invoking `dismiss()` /
+  `dismissAgentA()` directly. Because `bEndTurn` opens it *during* `turnTick` and returns (never
+  blocking the main thread), the turn still advances; the popup just sits on `ui.blocker` afterward.
+- **Headless auto-dismiss**: `end_turn(force:true)` calls `DecisionRegistry.AutoDismissInformational`,
+  which force-dismisses purely-informational popups (deaths, `PopupMsg*`, autosave — the
+  `IDecisionHandler.IsInformational` whitelist) in a loop so an unattended `end_turn(force)` never
+  stalls on a notice. It stops at the first popup carrying a real choice (`PopupEvent`,
+  `PopupAgentLevelup`) or any unknown popup, leaving it open and flagged for `resolve_decision` —
+  never silently answered. Note the Unity gotcha the handlers guard against: after `removeBlocker`
+  nulls `ui.blocker` and `DestroyImmediate`s the popup, `ui.blocker != blocker` reads **false**
+  (Unity's `==` treats a destroyed object as equal to null), so success is checked as
+  `blocker == null || ui.blocker != blocker`.
+- **Non-modal blocks (no `ui.blocker`)**: some things stop `end_turn` without any popup. The
+  **idle-agent alert** (`bEndTurn`, `World.cs:699`): with `option_idleAlert` on (default), a
+  commandable `UA` whose `task == null && movesTaken == 0` makes `bEndTurn` just select the unit and
+  return — no blocker. Resolve by ordering the agent or assigning `new Task_PassTurn()` (its
+  `turnTick` clears itself). The mod models these as `INonModalDecision` (idle = `IdleAgentsDecision`),
+  checked by `DecisionRegistry` only when `ui.blocker == null`, and surfaced/answered through the
+  same `pendingDecision` / `get_pending_decision` / `resolve_decision` path as modal popups.
+
+Mod wrapping: `src/Mod/Tools/Decisions/` (handler per popup family + `DecisionRegistry`) and
+`src/Mod/Tools/DecisionTools.cs` (`get_pending_decision`, `resolve_decision`). A pending decision
+is also reported in `game_overview.pendingDecision` and banner-stamped on every tool result
+(`GameToolHost`). Requires the `UnityEngine.UI` + `Unity.TextMeshPro` references (Button/Text/Image,
+TMP_Text). All UI-field access is confined to `Tools/Decisions/`.
+
 ## Entity id scheme (decided)
 
 Native indices exist for **locations, persons, social groups** → ids `L<index>`, `P<index>`,
