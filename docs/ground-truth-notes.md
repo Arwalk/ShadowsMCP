@@ -236,8 +236,12 @@ The game is single-threaded UI: it "waits for the player" whenever a **modal blo
 
 Mod wrapping: `src/Mod/Tools/Decisions/` (handler per popup family + `DecisionRegistry`) and
 `src/Mod/Tools/DecisionTools.cs` (`get_pending_decision`, `resolve_decision`). A pending decision
-is also reported in `game_overview.pendingDecision` and banner-stamped on every tool result
-(`GameToolHost`). Requires the `UnityEngine.UI` + `Unity.TextMeshPro` references (Button/Text/Image,
+is also reported **in full** (options + indices) in `game_overview.pendingDecision`, banner-stamped
+on every tool result (`GameToolHost`), and — because some MCP clients leave the two decision tools
+deferred and never load them — resolvable straight through **`end_turn`**: it returns the pending
+decision when blocked and takes `resolveOptionIndex` to answer it (then continues ending the turn),
+so an agent that only ever loaded `game_overview` + `end_turn` can still see and resolve every popup.
+`PopupEvent` also accepts `force=true` as a last-resort escape (takes the first available choice). Requires the `UnityEngine.UI` + `Unity.TextMeshPro` references (Button/Text/Image,
 TMP_Text). All UI-field access is confined to `Tools/Decisions/`.
 
 ## Entity id scheme (decided)

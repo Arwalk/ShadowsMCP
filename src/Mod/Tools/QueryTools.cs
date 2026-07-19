@@ -38,8 +38,10 @@ namespace ShadowsMcp.Tools
                         .Set("sealsBroken", map.overmind.sealsBroken)
                         .Set("availableEnthrallments", map.overmind.availableEnthrallments)
                         .Set("victoryAchieved", map.overmind.victoryAchieved)
-                        // null unless the game is waiting on a decision popup; see get_pending_decision.
-                        .Set("pendingDecision", DecisionRegistry.Compact(ctx))
+                        // null unless the game is waiting on a decision popup; otherwise the full detail
+                        // (options with indices) so you can resolve it without loading get_pending_decision:
+                        // pass the chosen index to end_turn's resolveOptionIndex (or resolve_decision).
+                        .Set("pendingDecision", PendingDecisionForOverview(ctx))
                         .Set("counts", JsonValue.NewObject()
                             .Set("locations", map.locations.Count)
                             .Set("units", map.units.Count)
@@ -309,6 +311,20 @@ namespace ShadowsMcp.Tools
         }
 
         // ---------- helpers ----------
+
+        /// <summary>
+        /// The full pending-decision object for game_overview (null when nothing is pending), tagged with
+        /// a hint on how to answer it without loading a separate tool: pass the chosen option index to
+        /// end_turn's resolveOptionIndex.
+        /// </summary>
+        private static JsonValue PendingDecisionForOverview(GameContext ctx)
+        {
+            JsonValue pd = DecisionRegistry.FullOrNull(ctx);
+            if (!pd.IsNull)
+                pd.Set("resolveHint", "pick an option by its index: call end_turn with resolveOptionIndex " +
+                    "(or resolve_decision with optionIndex). force=true skips/dismisses where allowed.");
+            return pd;
+        }
 
         internal static ToolResult WithMap(GameContext ctx, Func<Map, ToolResult> body)
         {

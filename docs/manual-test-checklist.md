@@ -87,6 +87,20 @@ mcp move_unit '{"unitId":"U1","locationId":"L12"}'
       disabled option returns a clear "condition isn't met" error
 - [ ] After resolving, `mcp end_turn` (no force) advances instead of "a dialog is open"
 
+**Resolving decisions without the decision tools (via end_turn / game_overview):**
+
+- [ ] With an event blocking, `mcp game_overview` shows the full `pendingDecision` inline — its
+      `options` (index + label + enabled) and a `resolveHint` — not just a "call get_pending_decision" hint
+- [ ] `mcp end_turn` (no args, event blocking) does **not** advance; it returns
+      `{advanced:false, blockedBy:"decision", pendingDecision:{options…, resolveHint}}`
+- [ ] `mcp end_turn '{"resolveOptionIndex":0}'` answers the event with option 0 and then advances (or
+      returns the next `pendingDecision` if the outcome raised a follow-up popup); the result carries
+      `resolved:{ok:true,…}`
+- [ ] `mcp end_turn '{"resolveOptionIndex":0}'` also works for a level-up (picks that trait) and for the
+      idle-agent alert (index 0 passes all idle agents), each then advancing the turn
+- [ ] `mcp resolve_decision '{"force":true}'` on an event takes the first available choice and returns
+      `forcedDefault:true` (last-resort escape)
+
 **Any other popup (generic button coverage):**
 
 - [ ] An informational popup (e.g. `PopupMsg`, an intro/tutorial box) shows up as

@@ -70,16 +70,20 @@ namespace ShadowsMcp.Tools
             // per-tool timeout, so it dispatches its own job with the longer budget.
             host.RegisterServerThread(new ToolDefinition(
                 "end_turn",
-                "End your turn (runs the full turn processing; may take a few seconds). With force=true, " +
-                "auto-resolves whatever blocks the turn end (pending battles are fought automatically, " +
-                "skill points auto-spent, idle-agent warnings skipped) - same as the game's own force path.",
+                "End your turn (runs the full turn processing; may take a few seconds). If a decision popup " +
+                "is blocking the turn, this returns it with its options (also in game_overview.pendingDecision) " +
+                "and does not advance; pass resolveOptionIndex to pick an option, and it resolves that decision " +
+                "then continues ending the turn. With force=true, auto-resolves whatever blocks the turn end " +
+                "(pending battles fought automatically, skill points auto-spent, idle-agent warnings skipped, " +
+                "informational popups like agent deaths dismissed) - same as the game's own force path.",
                 Schema.Object(
-                    Schema.Prop("force", Schema.Boolean("Push through battle/level-up/idle-agent interruptions"))),
+                    Schema.Prop("force", Schema.Boolean("Push through battle/level-up/idle-agent interruptions and dismiss informational popups")),
+                    Schema.Prop("resolveOptionIndex", Schema.Integer("If a decision popup is blocking the turn, choose this option (index from the pendingDecision options) to resolve it, then continue ending the turn"))),
                 a =>
                 {
                     bool force = a["force"].AsBool();
                     return ctx.Dispatcher.Run(
-                        () => QueryTools.WithMap(ctx, map => EndTurn(ctx, map, force)),
+                        () => QueryTools.WithMap(ctx, map => EndTurn(ctx, map, force, a)),
                         ctx.Config.EndTurnTimeoutMs);
                 }));
         }
@@ -308,10 +312,24 @@ namespace ShadowsMcp.Tools
 
         // ---------- end turn ----------
 
-        private static ToolResult EndTurn(GameContext ctx, Map map, bool force)
+        private static ToolResult EndTurn(GameContext ctx, Map map, bool force, JsonValue args)
         {
             World world = map.world;
             if (world == null) return ToolResult.Error("game world not ready");
+
+            // If the caller passed a choice for a blocking decision, answer it before advancing. This lets
+            // an agent resolve popups through end_turn alone, without loading the get_pending_decision /
+            // resolve_decision tools (which some MCP clients leave deferred and never load).
+            JsonValue resolved = JsonValue.Null;
+            if (!args["resolveOptionIndex"].IsNull &&
+                !Decisions.DecisionRegistry.FullOrNull(ctx).IsNull)
+            {
+                JsonValue rargs = JsonValue.NewObject().Set("optionIndex", args["resolveOptionIndex"]);
+                ToolResult rr = Decisions.DecisionRegistry.Resolve(ctx, rargs);
+                resolved = JsonValue.NewObject()
+                    .Set("ok", rr != null && !rr.IsError)
+                    .Set("detail", rr != null ? rr.Text : null);
+            }
 
             int before = map.turn;
             world.bEndTurn(force);
@@ -319,7 +337,7 @@ namespace ShadowsMcp.Tools
 
             // With force=true, clear purely-informational popups (agent deaths, message boxes) that turn
             // processing may have raised, so an unattended end_turn(force) loop never stalls on a notice.
-            // A popup carrying a real choice is left open and surfaced via the pending-decision banner.
+            // A popup carrying a real choice is left open and surfaced via pendingDecision below.
             JsonValue autoDismiss = force
                 ? Decisions.DecisionRegistry.AutoDismissInformational(ctx)
                 : JsonValue.Null;
@@ -329,14 +347,40 @@ namespace ShadowsMcp.Tools
                 JsonValue result = JsonValue.NewObject()
                     .Set("turn", after)
                     .Set("advancedBy", after - before);
+                if (!resolved.IsNull) result.Set("resolved", resolved);
                 if (!autoDismiss.IsNull && autoDismiss["count"].AsInt(0) > 0)
                     result.Set("autoDismissed", autoDismiss);
+                // A fresh decision may have popped during processing (e.g. an event's follow-up).
+                JsonValue nowPending = Decisions.DecisionRegistry.FullOrNull(ctx);
+                if (!nowPending.IsNull) result.Set("pendingDecision", DecorateResolveHint(nowPending));
                 return ToolResult.Ok(result);
             }
 
-            // bEndTurn returned without advancing: report which of its guards fired.
+            // Turn did not advance. If a decision is blocking, surface it with its options so the agent can
+            // answer it via resolveOptionIndex - rather than returning a bare "a dialog is open" error.
+            JsonValue pending = Decisions.DecisionRegistry.FullOrNull(ctx);
+            if (!pending.IsNull)
+            {
+                JsonValue result = JsonValue.NewObject()
+                    .Set("advanced", false)
+                    .Set("blockedBy", "decision")
+                    .Set("pendingDecision", DecorateResolveHint(pending));
+                if (!resolved.IsNull) result.Set("resolved", resolved);
+                return ToolResult.Ok(result);
+            }
+
+            // Some other guard fired: report which one.
             string reason = DiagnoseEndTurnBlock(map, world);
             return ToolResult.Error("the turn did not advance: " + reason);
+        }
+
+        /// <summary>Tag a pending-decision object with how to answer it through end_turn.</summary>
+        private static JsonValue DecorateResolveHint(JsonValue pending)
+        {
+            if (!pending.IsNull)
+                pending.Set("resolveHint", "call end_turn again with resolveOptionIndex set to the index " +
+                    "of your chosen option (or force=true to skip/dismiss where allowed).");
+            return pending;
         }
 
         private static string DiagnoseEndTurnBlock(Map map, World world)

@@ -47,8 +47,8 @@ See `docs/manual-test-checklist.md` for a full end-to-end test script.
 | `move_unit` | Send one of your agents toward a location |
 | `perform_challenge` | Have an agent start a challenge |
 | `use_power` | Cast one of your god's powers |
-| `get_pending_decision` / `resolve_decision` | Read and answer a pending decision popup (level-up trait pick, event choice) |
-| `end_turn` | Advance the turn and wait for it to complete |
+| `get_pending_decision` / `resolve_decision` | Read and answer a pending decision popup (level-up trait pick, event choice, agent-death notice) |
+| `end_turn` | Advance the turn; if a decision popup blocks it, returns the options and accepts `resolveOptionIndex` to answer them (so decisions can be resolved without the two tools above) |
 
 ### Entity ids
 

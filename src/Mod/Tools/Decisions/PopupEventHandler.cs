@@ -40,7 +40,8 @@ namespace ShadowsMcp.Tools.Decisions
                 .Set("popupType", "PopupEvent")
                 .Set("title", Title(popup))
                 .Set("description", Description(popup))
-                .Set("resolveWith", "resolve_decision with optionIndex");
+                .Set("resolveWith", "pick an option by index: end_turn with resolveOptionIndex " +
+                    "(or resolve_decision with optionIndex); force=true takes the first available choice");
 
             JsonValue options = JsonValue.NewArray();
             Button[] buttons = popup.options;
@@ -67,27 +68,42 @@ namespace ShadowsMcp.Tools.Decisions
             PopupEvent popup = blocker.GetComponent<PopupEvent>();
             Button[] buttons = popup.options;
 
+            Button target;
+            bool forcedDefault = false;
             if (args["optionIndex"].IsNull)
-                return ToolResult.Error("this event needs an optionIndex (see get_pending_decision).");
-            int wanted = args["optionIndex"].AsInt(-1);
-
-            // Map the requested visible index back to the underlying (active) button.
-            Button target = null;
-            int visible = 0;
-            if (buttons != null)
             {
-                foreach (Button b in buttons)
-                {
-                    if (b == null || !b.gameObject.activeSelf) continue;
-                    if (visible == wanted) { target = b; break; }
-                    visible++;
-                }
+                // No explicit choice: force=true is a last-resort escape - take the first available choice
+                // so the agent is never stranded on an event it can't otherwise answer.
+                if (!args["force"].AsBool())
+                    return ToolResult.Error("this event needs an optionIndex (see the options in " +
+                        "get_pending_decision / game_overview.pendingDecision), or force=true to take the " +
+                        "first available choice.");
+                target = FirstEnabled(buttons);
+                forcedDefault = true;
+                if (target == null)
+                    return ToolResult.Error("this event has no available choice to auto-pick.");
             }
-            if (target == null)
-                return ToolResult.Error("optionIndex " + wanted + " is out of range (there are " +
-                    visible + (visible == 1 ? " option)." : " options)."));
-            if (!IsEnabled(target))
-                return ToolResult.Error("that choice is unavailable right now (its condition isn't met).");
+            else
+            {
+                int wanted = args["optionIndex"].AsInt(-1);
+                // Map the requested visible index back to the underlying (active) button.
+                target = null;
+                int visible = 0;
+                if (buttons != null)
+                {
+                    foreach (Button b in buttons)
+                    {
+                        if (b == null || !b.gameObject.activeSelf) continue;
+                        if (visible == wanted) { target = b; break; }
+                        visible++;
+                    }
+                }
+                if (target == null)
+                    return ToolResult.Error("optionIndex " + wanted + " is out of range (there are " +
+                        visible + (visible == 1 ? " option)." : " options)."));
+                if (!IsEnabled(target))
+                    return ToolResult.Error("that choice is unavailable right now (its condition isn't met).");
+            }
 
             string label = ButtonLabel(target);
             UIMaster ui = SafeUi(ctx);
@@ -102,10 +118,24 @@ namespace ShadowsMcp.Tools.Decisions
             if (!resolved)
                 return ToolResult.Error("that choice did not resolve the event (it may be disabled).");
 
-            return ToolResult.Ok(JsonValue.NewObject()
+            JsonValue ok = JsonValue.NewObject()
                 .Set("resolved", true)
                 .Set("kind", "event")
-                .Set("chose", label));
+                .Set("chose", label);
+            if (forcedDefault) ok.Set("forcedDefault", true);
+            return ToolResult.Ok(ok);
+        }
+
+        /// <summary>First active, condition-met choice button, or null if the event has none.</summary>
+        private static Button FirstEnabled(Button[] buttons)
+        {
+            if (buttons == null) return null;
+            foreach (Button b in buttons)
+            {
+                if (b == null || !b.gameObject.activeSelf) continue;
+                if (IsEnabled(b)) return b;
+            }
+            return null;
         }
 
         // ---------- reading popup fields ----------

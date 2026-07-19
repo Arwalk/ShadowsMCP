@@ -83,6 +83,18 @@ namespace ShadowsMcp.Tools.Decisions
             return JsonValue.NewObject().Set("pending", false);
         }
 
+        /// <summary>
+        /// Full decision detail for game_overview / end_turn: the same object get_pending_decision
+        /// returns (kind, title, options with indices &amp; labels), or JsonValue.Null when nothing is
+        /// pending. Surfacing the whole thing inline lets an agent that only has game_overview / end_turn
+        /// loaded see exactly what to pick, without needing the (deferrable) get_pending_decision tool.
+        /// </summary>
+        public static JsonValue FullOrNull(GameContext ctx)
+        {
+            JsonValue full = Current(ctx);
+            return full["pending"].AsBool() ? full : JsonValue.Null;
+        }
+
         /// <summary>Compact summary for game_overview: null when nothing is pending.</summary>
         public static JsonValue Compact(GameContext ctx)
         {
