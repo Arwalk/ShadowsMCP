@@ -22,7 +22,19 @@ namespace ShadowsMcp
     /// </summary>
     public class ModCore : ModKernel
     {
-        public const string ModVersion = "0.1.0";
+        /// <summary>
+        /// The mod's release version — read from the assembly, whose version is set by
+        /// &lt;Version&gt; in ShadowsMCP.csproj (the single source of truth). Surfaced over MCP
+        /// in serverInfo.version (initialize) and in the game_overview tool so a connected
+        /// client can confirm which build it is talking to.
+        /// </summary>
+        public static readonly string ModVersion = ReadAssemblyVersion();
+
+        private static string ReadAssemblyVersion()
+        {
+            System.Version v = typeof(ModCore).Assembly.GetName().Version;
+            return v != null ? v.ToString(3) : "0.0.0";
+        }
 
         private static readonly object BootLock = new object();
         private static bool _booted;

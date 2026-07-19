@@ -79,11 +79,45 @@ Options (port, LAN vs localhost-only) are exposed through the game's per-mod con
 Needs the .NET SDK (8+) on any OS, plus the game's assemblies:
 
 1. Copy `<game>/ShadowsOfForbiddenGods_Data/Managed/` → `lib/Managed/` (gitignored, never redistribute).
-2. `./build.sh` — runs the protocol smoke test, builds the mod, assembles `dist/ShadowsMCP/`.
+2. `./build.sh` — runs the protocol smoke test, builds the mod (Debug + Release), and assembles
+   both `dist/ShadowsMCP/` (local install) and `dist/upload/ShadowsMCP/` (Workshop upload).
 
 Repo map: `src/Core/` = game-independent MCP/JSON/HTTP layer (also compiled into
 `src/TestHost/`, a Linux console host used by `tools/smoke-test.sh`); `src/Mod/` = the
 game-facing mod layer; `docs/` = game data-model reference, modding tutorial, test checklist.
+
+## Publishing to the Steam Workshop
+
+The game uploads a mod from its **`modUploadFolder/`** (next to the game exe) — *not* from
+`data/optionalData/`. `build.sh` assembles the exact layout it expects at
+`dist/upload/ShadowsMCP/`:
+
+```
+ShadowsMCP/
+├── mod.json       Workshop listing (title, description, tags) — from mod/mod.json
+├── preview.png    thumbnail — from mod/preview.png (optional)
+└── content/       the payload that gets uploaded (mod_desc.json + mod_config.json + DLL)
+```
+
+`mod.json` (the Workshop page) is a different file from `content/mod_desc.json` (the in-game mod
+descriptor) — both are required. To publish:
+
+1. `./build.sh`
+2. Copy `dist/upload/ShadowsMCP/` into the game's `modUploadFolder/`.
+3. In-game: **Workshop menu → User Mods → publish**. The first publish creates the item; the game
+   records its `PublishedFileId` locally, so every later publish **updates the same item**.
+
+## Releasing
+
+The release version lives in **one place**: `<Version>` in `src/Mod/ShadowsMCP.csproj`. It flows
+automatically into the DLL, into `serverInfo.version` (MCP `initialize`), into the `modVersion`
+field of the `game_overview` tool (so a connected client can confirm which build it's talking to),
+and into the Workshop description (`build.sh` stamps `Build X.Y.Z`). Per release, while pre-1.0:
+
+1. Bump `<Version>` in `src/Mod/ShadowsMCP.csproj` (semver: `0.MINOR.PATCH`).
+2. `./build.sh` and sanity-check.
+3. Commit, then tag: `git tag vX.Y.Z && git push --tags`.
+4. Publish to the Workshop (above).
 
 ## Documentation
 

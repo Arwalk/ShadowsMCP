@@ -31,6 +31,7 @@ namespace ShadowsMcp.Tools
                     int agentCap = om.god != null ? om.getAgentCap() : 0;
                     bool canRecruit = om.availableEnthrallments > 0 && om.nEnthralled < agentCap;
                     JsonValue o = JsonValue.NewObject()
+                        .Set("modVersion", ModCore.ModVersion)
                         .Set("turn", map.turn)
                         .Set("god", JsonValue.NewObject()
                             .Set("name", map.overmind.god != null ? map.overmind.god.getName() : null)
