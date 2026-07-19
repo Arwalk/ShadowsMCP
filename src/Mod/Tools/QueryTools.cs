@@ -26,6 +26,10 @@ namespace ShadowsMcp.Tools
                     {
                         if (u.isCommandable()) commandable++;
                     }
+                    Overmind om = map.overmind;
+                    om.calculateAgentsUsed();
+                    int agentCap = om.god != null ? om.getAgentCap() : 0;
+                    bool canRecruit = om.availableEnthrallments > 0 && om.nEnthralled < agentCap;
                     JsonValue o = JsonValue.NewObject()
                         .Set("turn", map.turn)
                         .Set("god", JsonValue.NewObject()
@@ -37,6 +41,12 @@ namespace ShadowsMcp.Tools
                         .Set("awarenessOfUnderground", Summaries.Round2(map.awarenessOfUnderground))
                         .Set("sealsBroken", map.overmind.sealsBroken)
                         .Set("availableEnthrallments", map.overmind.availableEnthrallments)
+                        // Losing all agents is NOT a loss (you are the god, points regenerate); recruit more
+                        // with recruit_agent. The game truly ends only when endOfGameAchieved is set.
+                        .Set("agentCap", agentCap)
+                        .Set("canRecruit", canRecruit)
+                        .Set("endOfGameAchieved", om.endOfGameAchieved)
+                        .Set("defeated", om.endOfGameAchieved && !om.victoryAchieved)
                         .Set("victoryAchieved", map.overmind.victoryAchieved)
                         // null unless the game is waiting on a decision popup; otherwise the full detail
                         // (options with indices) so you can resolve it without loading get_pending_decision:
@@ -226,6 +236,8 @@ namespace ShadowsMcp.Tools
                 a => WithMap(ctx, map =>
                 {
                     Overmind om = map.overmind;
+                    om.calculateAgentsUsed();
+                    int agentCap = om.god != null ? om.getAgentCap() : 0;
                     JsonValue agents = JsonValue.NewArray();
                     foreach (Unit u in om.agents)
                     {
@@ -247,9 +259,52 @@ namespace ShadowsMcp.Tools
                         .Set("sealProgress", om.sealProgress)
                         .Set("availableEnthrallments", om.availableEnthrallments)
                         .Set("enthralledCount", om.nEnthralled)
+                        .Set("agentCap", agentCap)
+                        .Set("canRecruit", om.availableEnthrallments > 0 && om.nEnthralled < agentCap)
+                        .Set("endOfGameAchieved", om.endOfGameAchieved)
+                        .Set("victoryMode", om.endOfGameAchieved ? Summaries.VictoryModeLabel(om.victoryMode) : null)
                         .Set("victoryProgress", Summaries.Round2(map.data_victoryProgess))
                         .Set("agents", agents)
                         .Set("powers", powers));
+                })));
+
+            host.Register(new ToolDefinition(
+                "list_recruitable_agents",
+                "What you can recruit right now: your recruitment capacity, the agent archetypes you can " +
+                "enthrall onto a location (pass an archetype's code to recruit_agent with a target locationId), " +
+                "and any existing heroes corrupted enough to turn to your side in place (pass their unit id " +
+                "as recruit_agent's heroUnitId). Recruiting spends one recruitment point.",
+                Schema.Object(),
+                a => WithMap(ctx, map =>
+                {
+                    Overmind om = map.overmind;
+                    if (om.god == null) return ToolResult.Error("no god selected yet");
+                    om.calculateAgentsUsed();
+                    int cap = om.getAgentCap();
+
+                    JsonValue archetypes = JsonValue.NewArray();
+                    foreach (UAE_Abstraction ab in om.agentsGeneric) archetypes.Add(Summaries.AbstractionSummary(ab, "generic"));
+                    foreach (UAE_Abstraction ab in om.agentsUnique) archetypes.Add(Summaries.AbstractionSummary(ab, "unique"));
+
+                    JsonValue heroes = JsonValue.NewArray();
+                    foreach (Unit u in map.units)
+                    {
+                        if (!Summaries.IsCorruptibleHero(u)) continue;
+                        heroes.Add(JsonValue.NewObject()
+                            .Set("unit", Summaries.UnitRef(ctx, u))
+                            .Set("location", Summaries.LocationRef(u.location))
+                            .Set("shadow", Summaries.Round2(u.person.shadow))
+                            .Set("insane", u.person.isInsane()));
+                    }
+
+                    return ToolResult.Ok(JsonValue.NewObject()
+                        .Set("capacity", JsonValue.NewObject()
+                            .Set("availableEnthrallments", om.availableEnthrallments)
+                            .Set("nEnthralled", om.nEnthralled)
+                            .Set("agentCap", cap)
+                            .Set("canRecruit", om.availableEnthrallments > 0 && om.nEnthralled < cap))
+                        .Set("archetypes", archetypes)
+                        .Set("corruptibleHeroes", heroes));
                 })));
 
             host.Register(new ToolDefinition(

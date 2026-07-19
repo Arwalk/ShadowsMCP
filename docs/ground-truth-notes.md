@@ -174,6 +174,42 @@ Warns (confirm dialog) when abandoning a `Task_PerformChallenge` whose progress 
 `availableEnthrallments`, `nEnthralled`, `sealsBroken`, `sealProgress`, `victoryMode`
 (+ VICTORY_MODE_* consts), `victoryAchieved`, `endOfGameAchieved`, `panicFrom*` fields.
 
+## Recruitment / enthrallment (Overmind.cs, UAE_Abstraction.cs, Sel_CreateAgent.cs, PopupAgentCreation.cs)
+
+Recruiting agents is **not** a castable `Power` for most gods — it goes through a popup + map selector,
+which the mod replicates directly (`recruit_agent` in `ActionTools.cs`; `list_recruitable_agents` in
+`QueryTools.cs`).
+
+- **Points**: `overmind.availableEnthrallments` (starts 2, `Overmind.cs:623`); regenerates every
+  `param.overmind_enthrallmentUseRegainPeriod` turns up to `param.overmind_maxBankedEnthrallments`
+  (`Overmind.cs:107-111`). **Cap**: `overmind.getAgentCap()` = `god.getAgentCaps()[sealsBroken]`
+  (`Overmind.cs:200-203`; default `{2,3,4,5,6}`, `God.cs:128`), grows as seals break.
+- **`calculateAgentsUsed()`** (`Overmind.cs:574`) recomputes `agents`/`nEnthralled` from `map.units`; call
+  it before reading `nEnthralled` or the cap.
+- **Templates**: `overmind.agentsGeneric` / `agentsUnique` are `List<UAE_Abstraction>` — one per archetype
+  (`UAE_Abstraction.code`, consts `CODE_WARLOCK=-3`…`CODE_SEEKER=15`, `code==0` = corrupt an existing hero
+  in place). API: `getName()`, `getDesc()`, `getRestrictions()`, `getStat{Might,Intrigue,Lore,Command}()`,
+  `validTarget(Location)` (rejects when `nEnthralled >= getAgentCap()`), `createAgent(Location)`.
+- **`createAgent(loc)`** (`UAE_Abstraction.cs:1063`) constructs the concrete `UAE_*` unit, appends to
+  `map.units` / `overmind.agents`, sets `person.shadow=1`, `state=enthralled`, `skillPoints++`, decrements
+  `availableEnthrallments`, and (when `!map.automatic`) pops a `PopupAgentLevelup` for the new skill point.
+  For `code==0` it instead flips the hero's `corrupted=true`, adds it to `agents`, and reuses its own
+  location (no new unit appended).
+- **Commit sequence** (from `Sel_CreateAgent.onClick`, `Sel_CreateAgent.cs:27-41`): `validTarget(loc)` →
+  `createAgent(loc)` → `foreach mod: mod.onAgentCreated(map.units[last])`, guarded by `!map.tutorial`.
+- **Corruptible-hero scan** (`PopupAgentCreation.populate`, `PopupAgentCreation.cs:174-195`, mirrored by
+  `Summaries.IsCorruptibleHero`): live `UA` that is `UAG`/`UAA`, not commandable, no `T_ChosenOne` trait,
+  `person.shadow >= 0.98 || person.isInsane()`.
+
+## End of game (Overmind.cs)
+
+Losing all your agents is **not** a loss — you are the god, and points regenerate. The game ends only when
+`overmind.endOfGameAchieved` is set: by `Overmind.victory()` (`:981`, also sets `victoryAchieved`, sets
+`victoryMode` 0-5) or `Overmind.defeat(msg)` (`:1116`, heroes reforge the seals / fulfil the prophecy, monster
+hearts slain, etc. — never from unit count). The mod surfaces `endOfGameAchieved` + `defeated`/`victoryMode`
+in `game_overview` / `get_player_state`, and `end_turn` returns `gameOver` (with outcome) without advancing
+once it is set (`ActionTools.EndTurn`). Agent death itself stays a purely informational `PopupMsgAgentsDeath`.
+
 ## Decision windows / popups (UIMaster.cs, PopupEvent.cs, PopupAgentLevelup.cs, ModKernel.cs)
 
 The game is single-threaded UI: it "waits for the player" whenever a **modal blocker** is open.
@@ -220,9 +256,15 @@ The game is single-threaded UI: it "waits for the player" whenever a **modal blo
 - **Headless auto-dismiss**: `end_turn(force:true)` calls `DecisionRegistry.AutoDismissInformational`,
   which force-dismisses purely-informational popups (deaths, `PopupMsg*`, autosave — the
   `IDecisionHandler.IsInformational` whitelist) in a loop so an unattended `end_turn(force)` never
-  stalls on a notice. It stops at the first popup carrying a real choice (`PopupEvent`,
-  `PopupAgentLevelup`) or any unknown popup, leaving it open and flagged for `resolve_decision` —
-  never silently answered. Note the Unity gotcha the handlers guard against: after `removeBlocker`
+  stalls on a notice. It stops at the first popup carrying a real choice (`PopupEvent`, or a
+  `PopupAgentLevelup` *that still has an unspent skill point and traits to pick*) or any unknown popup,
+  leaving it open and flagged for `resolve_decision` — never silently answered. Note the level-up
+  subtlety: `bEndTurn(forceThrough=true)` bypasses the `ui.blocker` guard and **auto-spends** each
+  commandable agent's skill point (`spendSkillPoint()` AI-picks a trait; `World.cs:688-691`) but does
+  **not** close a level-up popup a prior non-force `end_turn` already opened. So by the time
+  `AutoDismissInformational` runs, that popup's unit has `skillPoints == 0` →
+  `PopupLevelupHandler.IsInformational` returns true → it is dismissed (rather than lingering
+  banner-flagged across every subsequent forced end-turn, which was the pre-fix behaviour). Note the Unity gotcha the handlers guard against: after `removeBlocker`
   nulls `ui.blocker` and `DestroyImmediate`s the popup, `ui.blocker != blocker` reads **false**
   (Unity's `==` treats a destroyed object as equal to null), so success is checked as
   `blocker == null || ui.blocker != blocker`.

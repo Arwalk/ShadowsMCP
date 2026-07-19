@@ -122,6 +122,57 @@ namespace ShadowsMcp
             return JsonValue.NewObject().Set("id", UnitId(ctx, u)).Set("name", SafeName(() => u.getName()));
         }
 
+        // ---------- recruitment / end-of-game ----------
+
+        /// <summary>An agent archetype you can enthrall (from overmind.agentsGeneric/agentsUnique).</summary>
+        public static JsonValue AbstractionSummary(UAE_Abstraction abstr, string category)
+        {
+            return JsonValue.NewObject()
+                .Set("code", abstr.code)
+                .Set("name", SafeName(() => abstr.getName()))
+                .Set("category", category)
+                .Set("stats", JsonValue.NewObject()
+                    .Set("might", abstr.getStatMight())
+                    .Set("intrigue", abstr.getStatIntrigue())
+                    .Set("lore", abstr.getStatLore())
+                    .Set("command", abstr.getStatCommand()))
+                .Set("restrictions", SafeName(() => abstr.getRestrictions()))
+                .Set("desc", SafeName(() => abstr.getDesc()));
+        }
+
+        /// <summary>
+        /// Whether a unit is an existing hero you could corrupt in place (code==0 enthrallment).
+        /// Mirrors the corruptible-heroes scan in PopupAgentCreation.populate: a live UAG/UAA that is
+        /// not commandable, not the Chosen One, and at 100% shadow or insane.
+        /// </summary>
+        public static bool IsCorruptibleHero(Unit unit)
+        {
+            if (unit == null || unit.isDead) return false;
+            UA ua = unit as UA;
+            if (ua == null || (!(ua is UAG) && !(ua is UAA))) return false;
+            if (ua.isCommandable() || ua.person == null) return false;
+            foreach (Trait t in ua.person.traits)
+            {
+                if (t is T_ChosenOne) return false;
+            }
+            return ua.person.shadow >= 0.98 || ua.person.isInsane();
+        }
+
+        /// <summary>Overmind.victoryMode int → label (see Overmind.VICTORY_MODE_* constants); null if unknown.</summary>
+        public static string VictoryModeLabel(int mode)
+        {
+            switch (mode)
+            {
+                case 0: return "SHADOW";
+                case 1: return "INSANITY";
+                case 2: return "DARK_EMPIRE";
+                case 3: return "RUIN";
+                case 4: return "FROZEN";
+                case 5: return "DEEP_ONES";
+                default: return null;
+            }
+        }
+
         // ---------- units ----------
 
         public static JsonValue UnitSummary(GameContext ctx, Unit u)

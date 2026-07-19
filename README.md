@@ -40,15 +40,17 @@ See `docs/manual-test-checklist.md` for a full end-to-end test script.
 | `list_units` / `get_unit` | Units (default scope: yours); kind, position, hp, current task |
 | `list_persons` / `get_person` | People: rulers, nobles, traits, relationships |
 | `list_social_groups` / `get_social_group` | Societies and factions, relations, wars |
-| `get_player_state` | Your god, power resource, agents, powers |
+| `get_player_state` | Your god, power resource, agents, recruitment capacity, powers, end-of-game state |
+| `list_recruitable_agents` | Recruitment capacity, enthrallable archetypes, and corruptible heroes |
 | `list_powers` | Your god's powers and whether each is castable now |
 | `list_challenges` | Challenges available to one of your agents where it stands |
 | `inspect` | **Query ANY element** by path, e.g. `map.locations[4].settlement` (read-only reflection) |
 | `move_unit` | Send one of your agents toward a location |
 | `perform_challenge` | Have an agent start a challenge |
 | `use_power` | Cast one of your god's powers |
+| `recruit_agent` | Spend a recruitment point to enthrall a new agent (archetype onto a location, or corrupt an eligible hero in place) |
 | `get_pending_decision` / `resolve_decision` | Read and answer a pending decision popup (level-up trait pick, event choice, agent-death notice) |
-| `end_turn` | Advance the turn; if a decision popup blocks it, returns the options and accepts `resolveOptionIndex` to answer them (so decisions can be resolved without the two tools above) |
+| `end_turn` | Advance the turn; if a decision popup blocks it, returns the options and accepts `resolveOptionIndex` to answer them (so decisions can be resolved without the two tools above). Once the game is over (`endOfGameAchieved`), returns `gameOver` with the outcome and does not advance |
 
 ### Entity ids
 

@@ -52,7 +52,8 @@ mcp get_player_state
 mcp inspect '{"path":"map.turn"}'
 mcp inspect '{"path":"map.locations[0]","depth":2}'
 ```
-- [ ] `game_overview` shows the right turn number and your god's name
+- [ ] `game_overview` shows the right turn number and your god's name, plus `availableEnthrallments`,
+      `agentCap`, `canRecruit`, `endOfGameAchieved` and `defeated`
 - [ ] `list_units` shows your agents with `"commandable": true` and correct locations
 - [ ] `inspect map.turn` matches the in-game turn counter
 - [ ] With **no game loaded** (exit to main menu): `mcp game_overview` returns a clear
@@ -71,6 +72,37 @@ mcp move_unit '{"unitId":"U1","locationId":"L12"}'
 - [ ] `mcp perform_challenge '{"unitId":"U1","challengeId":"C3"}'` → agent starts it (check in-game)
 - [ ] `mcp list_powers` → `mcp use_power` with a castable power and a valid target → visible effect
 - [ ] Invalid moves fail cleanly: moving an enemy unit, a bad location id, a stale id after reload
+
+## 6c. Recruitment (enthralling new agents)
+
+```bash
+mcp get_player_state                             # note availableEnthrallments, agentCap, canRecruit
+mcp list_recruitable_agents
+```
+- [ ] `list_recruitable_agents.capacity` shows `availableEnthrallments`, `nEnthralled`, `agentCap`,
+      `canRecruit`; `archetypes` lists agents (e.g. a Hierophant — "Can be placed anywhere") with codes,
+      stats and restrictions
+- [ ] Recruit an archetype onto a valid location (Hierophant works almost anywhere):
+      `mcp recruit_agent '{"agentCode":-1,"locationId":"L12"}'` → a new agent appears in-game and in
+      `list_units` (scope mine); `availableEnthrallments` dropped by 1; result may flag `levelUpPending`
+- [ ] The new agent's level-up (if `map.automatic` is off) surfaces as a pending decision — resolve it
+      via `resolve_decision` or `end_turn '{"resolveOptionIndex":0}'`
+- [ ] Error paths return clean messages, not crashes: with 0 points ("no recruitment points"), at the
+      agent cap ("agent cap reached (n/cap)"), a bad target (returns the archetype's restriction text),
+      both/neither of agentCode+heroUnitId, an archetype code with no locationId
+- [ ] **Hero corruption:** with a hero at ≥98% shadow or insane listed under
+      `list_recruitable_agents.corruptibleHeroes`, `mcp recruit_agent '{"heroUnitId":"U9"}'` corrupts it
+      in place — it becomes commandable, `availableEnthrallments` dropped
+
+## 6d. Game over (end_turn stops)
+
+- [ ] While the game is ongoing, `game_overview.endOfGameAchieved` is `false` and `end_turn` advances
+- [ ] Reach an end state (win, or lose via heroes reforging the seals / the prophecy; `Cheat` can force
+      it): `game_overview.endOfGameAchieved` is `true`, `defeated`/`victoryAchieved` reflect the outcome
+- [ ] `mcp end_turn` now returns `{gameOver:true, outcome:"victory"|"defeat", victoryMode, turn}` and
+      does **not** advance `map.turn`
+- [ ] Losing your **last agent** does NOT set `endOfGameAchieved` — `end_turn` keeps advancing and you
+      can `recruit_agent` again once points regenerate
 
 ## 6b. Decision windows (events, level-ups)
 
@@ -128,9 +160,14 @@ mcp move_unit '{"unitId":"U1","locationId":"L12"}'
       shows the turn advanced **and** `autoDismissed:{count:…,dismissed:["death", …]}`; the banner is
       already clear afterward. Repeating `end_turn '{"force":true}'` across many turns never stalls on
       a death/message popup
-- [ ] **Real choices are preserved:** when a narrative event (`kind:"event"`) or level-up
-      (`kind:"levelUp"`) is the pending popup, `end_turn '{"force":true}'` does **not** auto-dismiss it —
-      the result/`pendingDecision` still flags it for `get_pending_decision` / `resolve_decision`
+- [ ] **Real choices are preserved:** when a narrative event (`kind:"event"`) is the pending popup,
+      `end_turn '{"force":true}'` does **not** auto-dismiss it — the result/`pendingDecision` still flags
+      it for `get_pending_decision` / `resolve_decision`
+- [ ] **Level-up under force is resolved, not left dangling:** open a level-up (a prior non-force
+      `end_turn` pops it), then `end_turn '{"force":true}'` — `bEndTurn(force)` auto-spends the skill
+      point (a trait is auto-picked, nothing lost) and the now-stale level-up popup is auto-dismissed
+      (`autoDismissed.dismissed` includes `"levelUp"`); the banner clears and it does **not** reappear on
+      the next forced `end_turn`. (Regression: it used to linger across every forced end-turn.)
 
 **Idle-agent alert (non-modal — no popup, but blocks end turn):**
 

@@ -66,6 +66,19 @@ namespace ShadowsMcp.Tools
                     Schema.Prop("targetLocationId", Schema.String("Target location id, e.g. L3"))),
                 a => QueryTools.WithMap(ctx, map => UsePower(ctx, map, a))));
 
+            host.Register(new ToolDefinition(
+                "recruit_agent",
+                "Recruit a new agent by spending one recruitment point (enthrallment). Either enthrall an " +
+                "archetype (pass agentCode from list_recruitable_agents plus a target locationId) or corrupt " +
+                "an eligible existing hero in place (pass heroUnitId). Note: losing all your agents is not a " +
+                "loss - recruit more here. Recruiting grants the new agent a skill point, so a level-up trait " +
+                "pick may then be pending (resolve it via resolve_decision or end_turn).",
+                Schema.Object(
+                    Schema.Prop("agentCode", Schema.Integer("Archetype code from list_recruitable_agents (e.g. -3 for a Warlock). Requires locationId.")),
+                    Schema.Prop("heroUnitId", Schema.String("Instead of an archetype, corrupt this eligible hero in place, e.g. U17 (from list_recruitable_agents.corruptibleHeroes)")),
+                    Schema.Prop("locationId", Schema.String("Target location for the archetype, e.g. L3 (ignored when heroUnitId is given)"))),
+                a => QueryTools.WithMap(ctx, map => RecruitAgent(ctx, map, a))));
+
             // Registered as a server-thread tool: end-turn processing can exceed the normal
             // per-tool timeout, so it dispatches its own job with the longer budget.
             host.RegisterServerThread(new ToolDefinition(
@@ -310,12 +323,116 @@ namespace ShadowsMcp.Tools
                 .Set("remainingPower", Summaries.Round2(map.overmind.power)));
         }
 
+        // ---------- recruit ----------
+
+        private static ToolResult RecruitAgent(GameContext ctx, Map map, JsonValue a)
+        {
+            Overmind om = map.overmind;
+            if (om.god == null) return ToolResult.Error("no god selected yet");
+            om.calculateAgentsUsed();
+
+            if (om.availableEnthrallments <= 0)
+                return ToolResult.Error("no recruitment points available; they regenerate every few turns " +
+                    "(see get_player_state.availableEnthrallments).");
+            int cap = om.getAgentCap();
+            if (om.nEnthralled >= cap)
+                return ToolResult.Error("agent cap reached (" + om.nEnthralled + "/" + cap +
+                    "); break more seals to raise it.");
+
+            bool hasCode = !a["agentCode"].IsNull;
+            bool hasHero = !string.IsNullOrEmpty(a["heroUnitId"].AsString());
+            if (hasCode == hasHero)
+                return ToolResult.Error("specify exactly one of agentCode (with locationId) or heroUnitId.");
+
+            UAE_Abstraction abstr;
+            Location target;
+            Unit heroUnit = null;
+
+            if (hasHero)
+            {
+                Unit u = Summaries.ResolveId(ctx, a["heroUnitId"].AsString()) as Unit;
+                if (u == null)
+                    return ToolResult.Error("unknown or stale unit id: " + a["heroUnitId"].AsString() +
+                        " - re-run list_recruitable_agents.");
+                if (!Summaries.IsCorruptibleHero(u))
+                    return ToolResult.Error(u.getName() + " cannot be corrupted (must be a non-commandable " +
+                        "hero/acolyte at 100% shadow or insane, and not the Chosen One).");
+                heroUnit = u;
+                abstr = new UAE_Abstraction(map, (UA)u);
+                target = u.location;
+            }
+            else
+            {
+                int code = a["agentCode"].AsInt();
+                abstr = FindAbstraction(om, code);
+                if (abstr == null)
+                    return ToolResult.Error("unknown agent code " + code + " - see list_recruitable_agents.");
+                target = Summaries.ResolveId(ctx, a["locationId"].AsString()) as Location;
+                if (target == null)
+                    return ToolResult.Error("archetype recruitment needs a valid locationId; got: " +
+                        a["locationId"].AsString());
+            }
+
+            // validTarget also enforces the agent cap; getRestrictions explains a placement failure.
+            if (!abstr.validTarget(target))
+                return ToolResult.Error("cannot place " + abstr.getName() + " at " + target.getName() +
+                    ": " + abstr.getRestrictions());
+
+            // Commit, mirroring Sel_CreateAgent.onClick: createAgent then fire the onAgentCreated mod hook.
+            int beforeUnits = map.units.Count;
+            abstr.createAgent(target);
+            Unit created = map.units.Count > beforeUnits ? map.units[map.units.Count - 1] : heroUnit;
+            if (!map.tutorial && created != null)
+            {
+                foreach (Assets.Code.Modding.ModKernel mod in map.mods)
+                {
+                    try { mod.onAgentCreated(created); } catch { }
+                }
+            }
+            om.calculateAgentsUsed();
+            CheckUiData(map);
+
+            JsonValue result = JsonValue.NewObject()
+                .Set("recruited", created != null ? Summaries.UnitSummary(ctx, created) : JsonValue.Null)
+                .Set("availableEnthrallments", om.availableEnthrallments)
+                .Set("nEnthralled", om.nEnthralled)
+                .Set("agentCap", cap);
+            if (created != null && created.person != null && created.person.skillPoints > 0)
+                result.Set("levelUpPending", "the new agent has a skill point to spend; a level-up trait " +
+                    "pick may be waiting - resolve it via resolve_decision or end_turn.");
+            return ToolResult.Ok(result);
+        }
+
+        private static UAE_Abstraction FindAbstraction(Overmind om, int code)
+        {
+            foreach (UAE_Abstraction ab in om.agentsGeneric) if (ab.code == code) return ab;
+            foreach (UAE_Abstraction ab in om.agentsUnique) if (ab.code == code) return ab;
+            return null;
+        }
+
         // ---------- end turn ----------
 
         private static ToolResult EndTurn(GameContext ctx, Map map, bool force, JsonValue args)
         {
             World world = map.world;
             if (world == null) return ToolResult.Error("game world not ready");
+
+            // The game is over: stop advancing and say so unmistakably. Losing your agents is NOT this -
+            // only Overmind.endOfGameAchieved (heroes reforged the seals / fulfilled the prophecy, or you won).
+            Overmind om = map.overmind;
+            if (om != null && om.endOfGameAchieved)
+            {
+                string vm = om.victoryAchieved ? Summaries.VictoryModeLabel(om.victoryMode) : null;
+                return ToolResult.Ok(JsonValue.NewObject()
+                    .Set("gameOver", true)
+                    .Set("advanced", false)
+                    .Set("outcome", om.victoryAchieved ? "victory" : "defeat")
+                    .Set("victoryMode", vm)
+                    .Set("turn", map.turn)
+                    .Set("message", om.victoryAchieved
+                        ? "You have won - the game is over. Further turns do nothing."
+                        : "You have been defeated - the game is over. Further turns do nothing."));
+            }
 
             // If the caller passed a choice for a blocking decision, answer it before advancing. This lets
             // an agent resolve popups through end_turn alone, without loading the get_pending_decision /

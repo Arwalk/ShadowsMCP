@@ -21,8 +21,25 @@ namespace ShadowsMcp.Tools.Decisions
 
         public string Kind(GameObject blocker) { return "levelUp"; }
 
-        // The trait pick matters (and the skill point would be lost on dismiss): never auto-dismiss.
-        public bool IsInformational(GameObject blocker) { return false; }
+        // A level-up is a real choice only while the agent still has a skill point AND a trait to spend
+        // it on. Once the point is spent or no traits remain, the popup is a stale notification with
+        // nothing to lose on dismiss. This matters for end_turn(force): bEndTurn(force) auto-spends the
+        // skill point (World.bEndTurn) but does NOT close a level-up popup a prior non-force end_turn
+        // already opened, so without this the stale banner would survive every subsequent forced end_turn
+        // (observed in QA). Reporting it informational once spent lets AutoDismissInformational clear it.
+        public bool IsInformational(GameObject blocker)
+        {
+            PopupAgentLevelup popup = blocker != null ? blocker.GetComponent<PopupAgentLevelup>() : null;
+            if (popup == null) return false;
+            try
+            {
+                UA u = popup.unit;
+                if (u == null || u.person == null) return true;   // nothing this popup can act on
+                if (u.person.skillPoints <= 0) return true;       // point already spent (e.g. by force)
+                return AvailableTraits(popup).Count == 0;         // no trait left to pick
+            }
+            catch { return false; } // can't read it → treat as a real choice, never auto-dismiss blindly
+        }
 
         public string Headline(GameContext ctx, GameObject blocker)
         {
@@ -65,6 +82,11 @@ namespace ShadowsMcp.Tools.Decisions
                 if (args["force"].AsBool())
                 {
                     popup.dismiss();
+                    // Verify it actually closed (Unity's == treats a destroyed object as null, so
+                    // blocker==null covers the last-blocker case). AutoDismissInformational's loop relies
+                    // on a truthful Ok/Error here to avoid spinning on a dismiss that no-opped.
+                    bool cleared = blocker == null || ui == null || ui.blocker != blocker;
+                    if (!cleared) return ToolResult.Error("could not dismiss the level-up popup.");
                     return ToolResult.Ok(JsonValue.NewObject()
                         .Set("resolved", true)
                         .Set("kind", "levelUp")
