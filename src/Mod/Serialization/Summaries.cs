@@ -207,7 +207,7 @@ namespace ShadowsMcp
                 .Set("settlement", l.settlement != null
                     ? JsonValue.NewObject()
                         .Set("type", l.settlement.GetType().Name)
-                        .Set("name", l.settlement.name)
+                        .Set("name", SafeName(() => l.settlement.getName()))
                     : JsonValue.Null);
 
             JsonValue units = JsonValue.NewArray();
@@ -235,7 +235,7 @@ namespace ShadowsMcp
             {
                 JsonValue s = JsonValue.NewObject()
                     .Set("type", l.settlement.GetType().Name)
-                    .Set("name", l.settlement.name)
+                    .Set("name", SafeName(() => l.settlement.getName()))
                     .Set("shadow", Round2(l.settlement.shadow))
                     .Set("defences", Round2(l.settlement.defences))
                     .Set("isHuman", l.settlement.isHuman)
