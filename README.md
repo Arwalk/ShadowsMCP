@@ -65,6 +65,12 @@ Options (port, LAN vs localhost-only) are exposed through the game's per-mod con
 > game and move your agents. That's the intended scope (home LAN). Switch to localhost-only
 > if the machine is on an untrusted network.
 
+> **Runs in the background:** MCP requests are processed on the game's main thread, which Unity
+> pauses when the window loses focus. So the mod forces `Application.runInBackground = true`
+> (and downgrades exclusive fullscreen to borderless, which would otherwise minimize and pause
+> on focus loss). This keeps MCP calls responsive while you work in another window, at the cost
+> of the game continuing to run/render when unfocused.
+
 ## Building from source
 
 Needs the .NET SDK (8+) on any OS, plus the game's assemblies:
