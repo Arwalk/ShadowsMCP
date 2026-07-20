@@ -188,8 +188,26 @@ namespace ShadowsMcp.Tools.Decisions
 
         // ---------- dismissal ----------
 
+        /// <summary>
+        /// The autosave popup performs its disk write in <c>Update()</c> (i.e. on the next Unity frame). Under
+        /// <c>end_turn(force)</c> we raise it (bEndTurn → popAutosave) and force-dismiss it within one dispatcher
+        /// job, so no frame ticks and the save would be skipped. Run it synchronously first, reusing the game's
+        /// own <c>Autosave_N_.sv</c> rotation + <c>world.save(popMsg:false)</c>. Idempotent (guarded by
+        /// <c>hasSaved</c>) and a no-op for every other popup and for non-force paths (where the save already ran).
+        /// </summary>
+        private static void FlushPendingAutosave(GameObject blocker)
+        {
+            try
+            {
+                PopupAutosaveDialog dialog = blocker.GetComponent<PopupAutosaveDialog>();
+                if (dialog != null && !dialog.hasSaved) dialog.Update();
+            }
+            catch { }
+        }
+
         private static void Dismiss(UIMaster ui, GameObject blocker)
         {
+            FlushPendingAutosave(blocker); // ensure the autosave hits disk before we destroy the popup
             try
             {
                 UI_Dismissable d = blocker.GetComponent<UI_Dismissable>();

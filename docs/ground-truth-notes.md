@@ -75,9 +75,13 @@ off + `turnLock` / `ui.blocker != null` / `selector != null`; commandable unit e
 turn (pops battle unless forceThrough → auto-resolves); pending skill points (pops level-up
 unless forceThrough → auto-spends); idle-agent alert (`option_idleAlert` && task == null &&
 movesTaken == 0 → selects unit, first pass assigns `Task_PassTurn`). Then: `turnLock = true;
-map.turnTick(); turnLock = false; ui.checkData(); EventManager.turnTick(map);` autosave every
-`autosavePeriod` turns. **Synchronous on the main thread** → end_turn tool = one dispatcher
-job with a long timeout; compare `map.turn` before/after; on no-advance, report which guard hit.
+map.turnTick(); turnLock = false; ui.checkData(); EventManager.turnTick(map);` then
+`popAutosave()` every `autosavePeriod` (15) turns. **Synchronous on the main thread** → end_turn tool =
+one dispatcher job with a long timeout; compare `map.turn` before/after; on no-advance, report which guard hit.
+Note `popAutosave` only *raises* the `PopupAutosaveDialog` (via `ui.addBlocker`); the actual `world.save(...)`
+runs inside that popup's `Update()` on the **next Unity frame**. A forced `end_turn` creates and destroys the
+popup within one dispatcher job (no frame between), so the mod flushes the save before dismissing it — see the
+autosave note under "Headless auto-dismiss" below.
 
 ## Units (Unit.cs, UA.cs, UM.cs)
 
@@ -295,7 +299,10 @@ The game is single-threaded UI: it "waits for the player" whenever a **modal blo
 - **Headless auto-dismiss**: `end_turn(force:true)` calls `DecisionRegistry.AutoDismissInformational`,
   which force-dismisses purely-informational popups (deaths, `PopupMsg*`, autosave — the
   `IDecisionHandler.IsInformational` whitelist) in a loop so an unattended `end_turn(force)` never
-  stalls on a notice. It stops at the first popup carrying a real choice (`PopupEvent`, or a
+  stalls on a notice. The autosave popup is special-cased in `GenericButtonHandler.Dismiss`
+  (`FlushPendingAutosave`): its disk write lives in `PopupAutosaveDialog.Update()` (next frame), which never
+  ticks during the same-job create+destroy, so the mod runs that save synchronously before dismissing —
+  otherwise every forced batch would skip the game's 15-turn autosave. It stops at the first popup carrying a real choice (`PopupEvent`, or a
   `PopupAgentLevelup` *that still has an unspent skill point and traits to pick*) or any unknown popup,
   leaving it open and flagged for `resolve_decision` — never silently answered. Note the level-up
   subtlety: `bEndTurn(forceThrough=true)` bypasses the `ui.blocker` guard and **auto-spends** each

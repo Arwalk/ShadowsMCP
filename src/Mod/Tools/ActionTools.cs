@@ -104,7 +104,8 @@ namespace ShadowsMcp.Tools
                 "and does not advance; pass resolveOptionIndex to pick an option, and it resolves that decision " +
                 "then continues ending the turn. With force=true, auto-resolves what else blocks a single " +
                 "turn's end (skill points auto-spent, and purely-informational popups dismissed: the " +
-                "agent-death NOTICE - kind:\"death\", PopupMsgAgentsDeath - and autosave/message boxes). " +
+                "agent-death NOTICE - kind:\"death\", PopupMsgAgentsDeath - and message boxes; the periodic " +
+                "autosave is written to disk first, then its notice dismissed). " +
                 "Three things force never auto-answers: a pending agent battle (it always blocks - " +
                 "blockedBy:\"combat\" - and must be resolved: fight to the end, flee, or retreat via " +
                 "resolveOptionIndex / resolve_decision); the idle-agent alert (blockedBy:\"decision\", " +

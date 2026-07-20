@@ -224,6 +224,17 @@ recruit_agent, command_army, get_pending_decision, resolve_decision, end_turn.
   used to be missed) or rises to it mid-batch. Also confirm `motivationPct` can now read >100 when the game's
   own threat text does (the flat-100 cap was removed), so a threshold >100 is accepted. SKIP only if no
   hunter with motivation >0 exists.
+- H8 (autosave popup handled every 15 turns): the game raises an autosave notice when `turn` becomes a
+  multiple of 15. (a) **force path** — advance in `count`≤10 force batches
+  (`end_turn {"count":10,"force":true,"passIdleAgents":true}`, repeated) until `turn` crosses a multiple of 15;
+  assert each batch advances cleanly with NO leftover `pendingDecision` of `popupType:"PopupAutosaveDialog"`
+  (force auto-dismisses the informational notice, so it never stalls the batch). (b) **non-force surfacing** —
+  from a turn one below a multiple of 15 (advance there with force first if needed), `end_turn` with NO force
+  onto the multiple of 15: assert `turn` rose by 1 AND a `pendingDecision` appears with
+  `popupType:"PopupAutosaveDialog"`, `kind:"popup"` (title "Saving game…"/"Game Saved…"); clear it with
+  `resolve_decision {"force":true}` and assert pending becomes false. The on-disk write (`Autosave_*.sv`) is
+  host-verified only — the MCP surface reads no save file (see `docs/manual-test-checklist.md` §7). If the run
+  can't reach turn 15 within budget, SKIP with the reached turn noted.
 
 **I. Robustness / soak**
 - I1: run `end_turn {"force":true,"passIdleAgents":true}` for ~5–10 turns in a row; assert it never stalls

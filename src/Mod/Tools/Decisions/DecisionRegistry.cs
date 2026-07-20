@@ -222,6 +222,9 @@ namespace ShadowsMcp.Tools.Decisions
         /// boxes, autosave notices), so a headless <c>end_turn(force:true)</c> loop never stalls on a
         /// notification. Stops at the first popup that carries a real choice (narrative event, level-up)
         /// or is otherwise unknown — that one is left open and flagged, never silently answered.
+        /// The autosave notice is flushed to disk before it is dismissed (its <c>world.save</c> runs in
+        /// <c>PopupAutosaveDialog.Update()</c>, which never ticks in this same-job create+destroy — see
+        /// <c>GenericButtonHandler.FlushPendingAutosave</c>), so a forced batch still autosaves every 15 turns.
         ///
         /// Runs on the main thread (called from within end_turn's dispatcher job). Death popups queue on
         /// the immediate <c>blockerQueue</c>, which <c>removeBlocker</c> promotes synchronously; we also

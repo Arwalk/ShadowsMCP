@@ -196,6 +196,15 @@ mcp list_recruitable_agents
 
 - [ ] Save the game, load the save → no errors in Player.log, game state intact
 - [ ] After the load, old entity ids are rejected with "stale id" style errors; re-query works
+- [ ] **Autosave fires under `end_turn(force)`:** note the newest `Autosave_*.sv` in the game's save
+      folder (`%APPDATA%\ShadowsForbiddenGodsSaves\`, i.e. `…\AppData\Roaming\…`), then advance with
+      `mcp end_turn '{"count":10,"force":true,"passIdleAgents":true}'` (repeat; `count` maxes at 10) until the
+      turn passes a multiple of 15 → a fresh `Autosave_*.sv` is written (mtime advances; the `Autosave_1.._5`
+      rotation moves on). Regression: before the fix the popup was destroyed before its save ran, so forced
+      batches wrote no autosave
+- [ ] Non-force `end_turn` onto a multiple of 15 surfaces the popup as
+      `pendingDecision.popupType == "PopupAutosaveDialog"` ("Saving game…"/"Game Saved…", kind `"popup"`);
+      the file is still written and `resolve_decision '{"force":true}'` dismisses it
 
 ## 8. Real MCP client
 
