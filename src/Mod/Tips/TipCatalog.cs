@@ -165,6 +165,16 @@ namespace ShadowsMcp.Tips
                 "ruler, who then ignores the menace; or store the agent, which halves both and clears the floors. " +
                 "Acting before it is fully huntable is far cheaper than reviving a hunted agent."),
 
+            Ctx("agent_under_attack", "An agent is under attack - resolve the battle", "tactics", AgentUnderAttack,
+                "An agent was attacked this turn and a battle is pending. Fight, flee, or retreat via get_pending_decision - it blocks end_turn.",
+                "One of your agents has been reached by a hostile hero and a battle is now pending (game_overview." +
+                "threats.agentsUnderAttack, and get_unit shows engagedThisTurn). This is a real decision, not " +
+                "automatic: call get_pending_decision to open the combat menu, then resolve_decision to 'fight to " +
+                "the end' (best when your dangerEstimate beats theirs), or 'flee'/'retreat'. Fleeing only unlocks " +
+                "from round 2 - at round 2 you escape but lose ALL your minions; from round 3 the retreat is safe. " +
+                "Winning lets you loot the loser. end_turn is blocked (even with force=true) until every pending " +
+                "battle is resolved, so an agent can never sleepwalk into a fight it should have fled."),
+
             Ctx("army_orders", "Commandable armies: raze, drive back, attack", "tactics", HasCommandableArmy,
                 "A commandable military unit has special orders (command_army): raze cities, drive back heroes, attack armies.",
                 "You control a military unit (a UM) - for example an awakened god-army such as She Who Will Feast, " +
@@ -175,6 +185,15 @@ namespace ShadowsMcp.Tips
                 "is destroyed) - this is how She Who Will Feast wins; order=drive_back forces an enemy hero on its " +
                 "tile to retreat; order=attack starts a battle with an enemy army on its tile. If this unit IS your " +
                 "awakened god, guard it - its death ends the game."),
+
+            Ctx("army_in_battle", "An army is fighting a field battle", "tactics", ArmyInBattle,
+                "One of your armies is in a multi-turn field battle (inBattle). It auto-resolves each turn; watch it via get_unit.battle.",
+                "One of your military units is locked in an army-vs-army field battle (list_units shows inBattle; " +
+                "get_unit shows a 'battle' block with both sides, the command-advantage %, and this cycle's combat " +
+                "log). Unlike an agent duel this resolves automatically, one cycle per turn - there is no menu to " +
+                "drive and it does not block end_turn. You sway it indirectly: bring more armies to the tile " +
+                "(command_army attack), or command as a hero via the battle-command challenges, which add command " +
+                "advantage. commandAdvantagePct's sign shows who is currently favoured."),
 
             Ctx("politics", "War & civil war", "politics", AnyWar,
                 "Wars devastate human nations; hierophants in an infiltrated capital can start them and civil wars.",
@@ -406,6 +425,28 @@ namespace ShadowsMcp.Tips
             foreach (Unit u in m.units)
                 if (u is UA && !u.isDead && u.isCommandable() && u.profile >= 40.0 && u.menace >= 20.0)
                     return true;
+            return false;
+        }
+
+        // Fires when one of your agents was attacked this turn - engagedBy set and turnLastEngaged == turn (the
+        // fight-icon condition, UIE_AgentRoster.bFight). A battle is pending; AgentCombatDecision surfaces it.
+        private static bool AgentUnderAttack(GameContext c)
+        {
+            Map m = c != null ? c.Map : null;
+            if (m == null || m.units == null) return false;
+            foreach (Unit u in m.units)
+                if (u is UA && !u.isDead && u.isCommandable() && u.engagedBy != null && u.turnLastEngaged == m.turn)
+                    return true;
+            return false;
+        }
+
+        // Fires when one of your armies is in a multi-turn field battle (Task_InBattle → BattleArmy).
+        private static bool ArmyInBattle(GameContext c)
+        {
+            Map m = c != null ? c.Map : null;
+            if (m == null || m.units == null) return false;
+            foreach (Unit u in m.units)
+                if (u is UM && !u.isDead && u.isCommandable() && u.task is Task_InBattle) return true;
             return false;
         }
 

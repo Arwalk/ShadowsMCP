@@ -26,15 +26,18 @@ namespace ShadowsMcp.Tools.Decisions
             new PopupEventHandler(),
             new PopupLevelupHandler(),
             new PopupMsgAgentsDeathHandler(),
-            // ... add richer bespoke handlers (PopupBattleAgent, PopupHolyOrder …) here, before the fallback.
+            new PopupItemTradingHandler(),
+            new PopupBattleAgentHandler(), // the agent-duel combat menu (multi-round: step / flee / retreat / reorder)
+            // ... add further bespoke handlers (PopupHolyOrder …) here, before the fallback.
             new GenericButtonHandler(), // must stay last: CanHandle is always true; lists any popup's buttons
         };
 
         // Checked only when no modal blocker is open. Order = priority.
         private static readonly INonModalDecision[] NonModal =
         {
+            new AgentCombatDecision(), // an agent under attack this turn — most urgent (bEndTurn checks it first)
             new IdleAgentsDecision(),
-            // ... future: pending skill points, pending combat …
+            // ... future: pending skill points …
         };
 
         private static INonModalDecision FirstNonModal(GameContext ctx)

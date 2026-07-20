@@ -53,7 +53,7 @@ namespace ShadowsMcp.Tools
                 "is elsewhere, it travels there first and then begins.",
                 Schema.Object(
                     Schema.Prop("unitId", Schema.String("Your unit's id, e.g. U17"), required: true),
-                    Schema.Prop("challengeId", Schema.String("Challenge id from list_challenges, e.g. C8"), required: true),
+                    Schema.Prop("challengeId", Schema.String("Challenge id from list_challenges (stable across turns and save/load; no need to re-list before performing)"), required: true),
                     Schema.Prop("force", Schema.Boolean("Abandon an in-progress challenge without confirmation"))),
                 a => QueryTools.WithMap(ctx, map => PerformChallenge(ctx, map, a))));
 
@@ -102,17 +102,23 @@ namespace ShadowsMcp.Tools
                 "End your turn (runs the full turn processing; may take a few seconds). If a decision popup " +
                 "is blocking the turn, this returns it with its options (also in game_overview.pendingDecision) " +
                 "and does not advance; pass resolveOptionIndex to pick an option, and it resolves that decision " +
-                "then continues ending the turn. With force=true, auto-resolves whatever blocks the turn end " +
-                "(pending battles fought automatically, skill points auto-spent, idle-agent warnings skipped, " +
-                "informational popups like agent deaths dismissed) - same as the game's own force path. Pass " +
+                "then continues ending the turn. With force=true, auto-resolves whatever else blocks the turn " +
+                "end (skill points auto-spent, idle-agent warnings skipped, informational popups like agent " +
+                "deaths dismissed). A pending agent battle is the one thing force will NOT skip: it always " +
+                "blocks (blockedBy:\"combat\") and must be resolved - fight to the end, flee, or retreat via " +
+                "resolveOptionIndex / resolve_decision. Pass " +
                 "count to advance several turns at once (force=true recommended so it doesn't stall on the " +
                 "repetitive 'Life Continues'-type popups); it stops early and reports stopReason on any "
-                + "decision, game over, or threat escalation, and a threatAlert lists agents a hero just "
-                + "started hunting. A 'tips' array may also appear, explaining a mechanic that just became relevant.",
+                + "decision, game over, or a meaningful threat escalation (an agent becomes huntable / a hero "
+                + "it is not favoured against starts hunting it / its odds worsen), with a threatAlert listing "
+                + "the affected agents (each tagged with what triggered it). Set stopOnThreatMotivation to also "
+                + "halt on rising hunter motivation, before an agent is exposed. A 'tips' array may also appear, "
+                + "explaining a mechanic that just became relevant.",
                 Schema.Object(
-                    Schema.Prop("count", Schema.Integer("Advance up to this many turns (default 1, max 10). Stops early on any decision, game over, or a threat escalation (a hero starts hunting an agent / an agent's odds worsen).")),
+                    Schema.Prop("count", Schema.Integer("Advance up to this many turns (default 1, max 10). Stops early on any decision, game over, or a meaningful threat escalation (an agent becomes huntable, a hero it is not favoured against starts hunting it, or its odds worsen).")),
                     Schema.Prop("force", Schema.Boolean("Push through battle/level-up/idle-agent interruptions and dismiss informational popups")),
-                    Schema.Prop("resolveOptionIndex", Schema.Integer("If a decision popup is blocking the turn, choose this option (index from the pendingDecision options) to resolve it, then continue ending the turn"))),
+                    Schema.Prop("resolveOptionIndex", Schema.Integer("If a decision popup is blocking the turn, choose this option (index from the pendingDecision options) to resolve it, then continue ending the turn")),
+                    Schema.Prop("stopOnThreatMotivation", Schema.Integer("Opt-in caution: also stop the batch the first turn a hunter's motivation toward one of your agents rises to >= this percent (1-100), even while the agent is still favoured - catches threat building up before an agent becomes huntable. Omit or 0 to disable (default)."))),
                 a =>
                 {
                     bool force = a["force"].AsBool();
@@ -136,7 +142,8 @@ namespace ShadowsMcp.Tools
             // Same guards as UIInputs.rightClickOnHex:
             if (u.engagedBy != null && u.turnLastEngaged == map.turn)
                 return ToolResult.Error(u.getName() + " is under attack by " + u.engagedBy.getName() +
-                    " and must resolve this combat first (end_turn with force=true auto-resolves it).");
+                    " and must resolve this combat first (get_pending_decision, then resolve_decision to fight, " +
+                    "flee, or retreat).");
             if (u.task is Task_Disrupted)
                 return ToolResult.Error(u.getName() + " is disrupted and cannot move this turn.");
 
@@ -193,10 +200,9 @@ namespace ShadowsMcp.Tools
             ToolResult err = ResolveCommandable(ctx, a["unitId"].AsString(), out u);
             if (err != null) return err;
 
-            Challenge c = Summaries.ResolveId(ctx, a["challengeId"].AsString()) as Challenge;
+            Challenge c = Summaries.ResolveChallengeForUnit(ctx, u, a["challengeId"].AsString());
             if (c == null)
-                return ToolResult.Error("unknown or stale challenge id: " + a["challengeId"].AsString() +
-                    " - re-run list_challenges");
+                return ToolResult.Error(StaleChallengeError(ctx, u, a["challengeId"].AsString()));
 
             UA ua = u as UA;
             UM um = u as UM;
@@ -206,7 +212,7 @@ namespace ShadowsMcp.Tools
             // Guards, mirroring UA/UM.playerTriesToStartChallenge:
             if (u.engagedBy != null && u.turnLastEngaged == map.turn)
                 return ToolResult.Error(u.getName() + " is under attack by " + u.engagedBy.getName() +
-                    " and must resolve this combat first.");
+                    " and must resolve this combat first (get_pending_decision, then resolve_decision).");
             // Surface the game's own reason text (getRestriction) so a rejected attempt says WHY, not just
             // "requirements not met" - e.g. "Requires 100% Infiltration. Cannot perform if Ward > 50%".
             string restr;
@@ -276,6 +282,41 @@ namespace ShadowsMcp.Tools
                 .Set("status", "started")
                 .Set("menaceGain", Summaries.Round2(c.getMenace()))
                 .Set("profileGain", Summaries.Round2(c.getProfile())));
+        }
+
+        /// <summary>A stale/unknown-challenge error that also lists the unit's currently-available challenge
+        /// ids+names, so the agent can retry immediately instead of guessing. With deterministic ids this is
+        /// rare (it means the challenge is genuinely gone), so we spend the words on actionable alternatives.</summary>
+        private static string StaleChallengeError(GameContext ctx, Unit u, string id)
+        {
+            var lines = new List<string>();
+            try
+            {
+                Location loc = u.location;
+                if (loc != null)
+                {
+                    loc.populateStandardChallenges();
+                    foreach (Challenge c in loc.GetChallenges())
+                    {
+                        if (c == null) continue;
+                        lines.Add(Summaries.ChallengeId(ctx, c) + " (" + Summaries.ChallengeName(c) + ")");
+                        if (lines.Count >= 12) break;
+                    }
+                }
+                if (u.rituals != null)
+                    foreach (Challenge r in u.rituals)
+                    {
+                        if (r == null) continue;
+                        lines.Add(Summaries.ChallengeId(ctx, r) + " (" + Summaries.ChallengeName(r) + ")");
+                        if (lines.Count >= 16) break;
+                    }
+            }
+            catch { }
+            string head = "unknown or stale challenge id: " + id + ". ";
+            if (lines.Count > 0)
+                return head + "Challenges available to " + u.getName() + " now: " +
+                    string.Join(", ", lines.ToArray()) + ".";
+            return head + "Re-run list_challenges for " + u.getName() + ".";
         }
 
         // ---------- powers ----------
@@ -589,6 +630,7 @@ namespace ShadowsMcp.Tools
             int count = args["count"].AsInt(1);
             if (count < 1) count = 1;
             if (count > MaxTurnBatch) count = MaxTurnBatch;
+            int motivationStopPct = args["stopOnThreatMotivation"].AsInt(0);
 
             // Single turn: preserve the original result shapes exactly, plus a threatAlert if a hero began
             // hunting one of your agents this turn.
@@ -600,8 +642,9 @@ namespace ShadowsMcp.Tools
                 if (st1 == StepStatus.Error) return ToolResult.Error(payload1["error"].AsString());
                 if (st1 == StepStatus.Advanced)
                 {
-                    JsonValue alert = Summaries.ThreatAlert(ctx, map, before1);
-                    if (!alert.IsNull) payload1.Set("threatAlert", alert);
+                    JsonValue alert1; string reason1;
+                    Summaries.EvaluateThreatStop(ctx, map, before1, args["stopOnThreatMotivation"].AsInt(0), out alert1, out reason1);
+                    if (!alert1.IsNull) payload1.Set("threatAlert", alert1);
                 }
                 JsonValue tips1 = TipEngine.CollectContextual(ctx);
                 if (!tips1.IsNull) payload1.Set("tips", tips1);
@@ -623,6 +666,12 @@ namespace ShadowsMcp.Tools
             {
                 StepStatus st;
                 JsonValue payload = AdvanceOneTurn(ctx, map, world, force, applyResolve: i == 0, args, out st);
+                if (st == StepStatus.Error && payload["transient"].AsBool())
+                {
+                    // Benign mid-tick collision (an event mutated a world collection): retry this turn once
+                    // before giving up. Any resolveOptionIndex was already applied on the first attempt.
+                    payload = AdvanceOneTurn(ctx, map, world, force, applyResolve: false, args, out st);
+                }
 
                 if (st == StepStatus.Error)
                 {
@@ -640,9 +689,11 @@ namespace ShadowsMcp.Tools
                 // A decision may have popped mid-processing even though the turn advanced; stop and surface it.
                 if (!payload["pendingDecision"].IsNull) { pending = payload["pendingDecision"]; stopReason = "decision"; break; }
 
-                // Threat-escalation early stop: a hero started hunting an agent, or an agent's odds worsened.
-                JsonValue alert = Summaries.ThreatAlert(ctx, map, before);
-                if (!alert.IsNull) { threatAlert = alert; stopReason = "threatEscalation"; break; }
+                // Threat early-stop: meaningful danger (agent becomes huntable / an in-range hunter it is
+                // not favoured against / worse odds), plus the opt-in rising-motivation tripwire.
+                JsonValue alert; string reason;
+                Summaries.EvaluateThreatStop(ctx, map, before, motivationStopPct, out alert, out reason);
+                if (reason != null) { threatAlert = alert; stopReason = reason; break; }
             }
 
             JsonValue result = JsonValue.NewObject()
@@ -703,12 +754,27 @@ namespace ShadowsMcp.Tools
                     .Set("detail", rr != null ? rr.Text : null);
             }
 
+            // Pending agent combat must NEVER be auto-resolved — even under force=true. Unlike idle agents /
+            // unspent skill points / informational popups (which the game's force path legitimately pushes
+            // through), a battle is a real tactical choice, and World.bEndTurn(force) would silently fight it via
+            // BattleAgents.automatic(). So while combat is pending we DENY force to bEndTurn: bEndTurn(false) pops
+            // the battle (or just stops on whatever popup is on top) instead of automatic()-ing it, and the turn
+            // cannot advance. Detect it directly — an agent still engaged this turn, or an already-open battle
+            // popup — so a message/death popup sitting on top can't mask the engagement and let force slip through.
+            bool combatEngaged = AnyAgentEngaged(map);
+            if (!combatEngaged)
+            {
+                JsonValue pdCombat = Decisions.DecisionRegistry.FullOrNull(ctx);
+                combatEngaged = !pdCombat.IsNull && pdCombat["kind"].AsString() == "combat";
+            }
+
             int before = map.turn;
             int after;
             JsonValue autoDismiss;
             try
             {
-                world.bEndTurn(force);
+                // Deny force while combat is pending so bEndTurn pops the battle instead of auto-resolving it.
+                world.bEndTurn(force && !combatEngaged);
                 after = map.turn;
 
                 // Capture this turn's status messages (idle agents, wars, seals, hero actions) into the
@@ -727,7 +793,9 @@ namespace ShadowsMcp.Tools
                 // (e.g. a civil-war resolution creates a new society while social groups are being
                 // enumerated). It is transient and self-healing; report cleanly and let the caller retry.
                 status = StepStatus.Error;
-                return JsonValue.NewObject().Set("error", "turn processing hit a transient state change (an " +
+                return JsonValue.NewObject()
+                    .Set("transient", true)
+                    .Set("error", "turn processing hit a transient state change (an " +
                     "event altered the world mid-turn). No stable result this call - re-check game_overview " +
                     "and call end_turn again.");
             }
@@ -761,7 +829,8 @@ namespace ShadowsMcp.Tools
                 status = StepStatus.Blocked;
                 JsonValue result = JsonValue.NewObject()
                     .Set("advanced", false)
-                    .Set("blockedBy", "decision")
+                    // Call combat out by name so the agent (and the batch stopReason) sees why force didn't skip it.
+                    .Set("blockedBy", pending["kind"].AsString() == "combat" ? "combat" : "decision")
                     .Set("pendingDecision", DecorateResolveHint(pending));
                 if (!resolved.IsNull) result.Set("resolved", resolved);
                 return result;
@@ -795,6 +864,22 @@ namespace ShadowsMcp.Tools
             return pending;
         }
 
+        /// <summary>True while any of your agents is still locked in an unresolved duel this turn (the fight-icon
+        /// condition: a commandable UA engaged by a live UA, turnLastEngaged == this turn). Used to deny force to
+        /// World.bEndTurn so a pending battle is never auto-resolved via BattleAgents.automatic() — the agent must
+        /// fight, flee, or retreat it. Detected directly (not via the current blocker) so a message/death popup on
+        /// top cannot mask the engagement.</summary>
+        private static bool AnyAgentEngaged(Map map)
+        {
+            if (map == null || map.automatic || map.units == null) return false;
+            foreach (Unit u in map.units)
+            {
+                if (u == null || u.isDead || !u.isCommandable()) continue;
+                if (u is UA && u.engagedBy is UA att && !att.isDead && u.turnLastEngaged == map.turn) return true;
+            }
+            return false;
+        }
+
         private static string DiagnoseEndTurnBlock(Map map, World world)
         {
             if (world.turnLock) return "turn processing is already underway";
@@ -806,8 +891,8 @@ namespace ShadowsMcp.Tools
             {
                 if (!u.isCommandable() || u.isDead) continue;
                 if (u.turnLastEngaged == map.turn && u.engagedBy != null && !u.engagedBy.isDead)
-                    return u.getName() + " is engaged in combat by " + u.engagedBy.getName() +
-                        " (force=true auto-resolves the battle)";
+                    return u.getName() + " is under attack by " + u.engagedBy.getName() +
+                        " - resolve the battle (get_pending_decision, then resolve_decision to fight, flee, or retreat)";
                 if (u is UA && u.person != null && u.person.skillPoints > 0 && !u.person.cachedOutOfTraits)
                     return u.getName() + " has unspent skill points (force=true auto-spends them)";
                 if (world.option_idleAlert && u.task == null && u.movesTaken == 0)

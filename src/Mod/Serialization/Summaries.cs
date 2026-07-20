@@ -21,7 +21,37 @@ namespace ShadowsMcp
         public static string PersonId(Person p) { return p == null ? null : "P" + p.index; }
         public static string SocialGroupId(SocialGroup sg) { return sg == null ? null : "SG" + sg.index; }
         public static string UnitId(GameContext ctx, Unit u) { return u == null ? null : ctx.Registry.IdFor(u, "U"); }
-        public static string ChallengeId(GameContext ctx, Challenge c) { return c == null ? null : ctx.Registry.IdFor(c, "C"); }
+
+        /// <summary>Deterministic, stable challenge id (unlike the old weak-registry "C8"): a pure function
+        /// of the challenge's runtime type, its stable native <c>locationIndex</c>, and a hash of its display
+        /// name (which embeds the target, disambiguating the per-hero duplicates at one settlement). Because
+        /// it re-derives from persistent data it survives turns AND save/load, so a cached id keeps resolving
+        /// via <see cref="ResolveChallengeForUnit"/>. Rituals key off the owning unit instead of a location
+        /// ("Cr-..."). Still "C"-prefixed for compatibility. ctx is unused, kept for call symmetry.</summary>
+        public static string ChallengeId(GameContext ctx, Challenge c)
+        {
+            if (c == null) return null;
+            string type = c.GetType().Name;
+            string name = SafeName(() => c.getName()) ?? "";
+            string h = StableHash8(type + "|" + name);
+            if (c is Ritual) return "Cr-" + type + "-" + h;
+            int loc;
+            try { loc = c.locationIndex; } catch { loc = -1; }
+            return "C" + loc + "-" + type + "-" + h;
+        }
+
+        /// <summary>Public name reader for a challenge (used in the stale-id error listing).</summary>
+        public static string ChallengeName(Challenge c) { return c == null ? null : SafeName(() => c.getName()); }
+
+        /// <summary>FNV-1a 32-bit as 8 hex chars. Deterministic across processes/reloads, unlike
+        /// <c>string.GetHashCode()</c> (which .NET randomizes per run) - required for a stable id.</summary>
+        private static string StableHash8(string s)
+        {
+            uint hash = 2166136261u;
+            if (s != null)
+                foreach (char ch in s) { hash ^= ch; hash *= 16777619u; }
+            return hash.ToString("x8");
+        }
 
         /// <summary>Resolve any entity id. Returns null when unknown, stale, or no game loaded.</summary>
         public static object ResolveId(GameContext ctx, string id)
@@ -257,6 +287,13 @@ namespace ShadowsMcp
             // isn't a live commandable UM with an order available on its tile.
             JsonValue orders = UnitOrders(ctx, u);
             if (!orders.IsNull) o.Set("orders", orders);
+            // Active combat, surfaced in list views so an under-attack agent / in-battle army is visible without
+            // a get_unit round-trip (agents were reaching combat via no other signal). engagedThisTurn is the
+            // fight-icon condition (UIE_AgentRoster.bFight): a battle is pending — resolve it via
+            // get_pending_decision. inBattle is an army fighting a multi-turn BattleArmy.
+            if (!dead && u.engagedBy != null && u.map != null && u.turnLastEngaged == u.map.turn)
+                o.Set("engagedThisTurn", true).Set("underAttackBy", UnitRef(ctx, u.engagedBy));
+            if (!dead && u.task is Task_InBattle) o.Set("inBattle", true);
             if (dead) o.Set("isDead", true);
             return o;
         }
@@ -392,6 +429,12 @@ namespace ShadowsMcp
                 o.Set("items", items);
             }
 
+            // Army in a multi-turn field battle (Task_InBattle → BattleArmy): the read-only "See Battle" view -
+            // who is fighting, the command advantage, effects, and this cycle's combat log. Army battles
+            // auto-resolve one cycle per turn; you influence them via command_army or by commanding as a hero.
+            if (u.task is Task_InBattle inBattle && inBattle.battle != null)
+                o.Set("battle", ArmyBattleJson(ctx, inBattle.battle));
+
             // The detection picture for this unit: which heroes are building a case against it.
             if (!u.isDead && u.map != null)
             {
@@ -410,6 +453,67 @@ namespace ShadowsMcp
                 o.Set("investigation", investigation);
             }
             return o;
+        }
+
+        /// <summary>Read-only summary of an army field battle (<see cref="BattleArmy"/>) — the data
+        /// <c>PopupBattleArmy</c> renders: the two sides (armies + hero commanders with hp), the command
+        /// advantage (positive favours the attackers), any battle effects, and this cycle's combat log. Army
+        /// battles auto-resolve one cycle per turn; the player influences them only via command_army orders or
+        /// by commanding as a hero (challenges), so this is view-only.</summary>
+        public static JsonValue ArmyBattleJson(GameContext ctx, BattleArmy b)
+        {
+            if (b == null) return JsonValue.Null;
+            double adv = Safe(() => b.computeAdvantage(), 0.0); // engine range -2..2
+            JsonValue o = JsonValue.NewObject()
+                .Set("done", b.done)
+                // Signed percent the human sees on PopupBattleArmy (computeAdvantage * 100); sign = who leads.
+                .Set("commandAdvantagePct", Round2(adv * 100.0))
+                .Set("advantageFavours", adv > 0 ? "attackers" : (adv < 0 ? "defenders" : "neither"))
+                .Set("attackers", ArmyList(ctx, b.attackers))
+                .Set("defenders", ArmyList(ctx, b.defenders))
+                .Set("attackerCommanders", CommanderList(ctx, b.attComs))
+                .Set("defenderCommanders", CommanderList(ctx, b.defComs));
+            if (b.attEffect != null) o.Set("attackerEffect", SafeName(() => b.attEffect.getName()));
+            if (b.defEffect != null) o.Set("defenderEffect", SafeName(() => b.defEffect.getName()));
+            if (b.messages != null && b.messages.Count > 0)
+            {
+                JsonValue log = JsonValue.NewArray();
+                foreach (string m in b.messages) log.Add(JsonValue.Of(StripRichText(m)));
+                o.Set("log", log);
+            }
+            return o;
+        }
+
+        private static JsonValue ArmyList(GameContext ctx, List<UM> units)
+        {
+            JsonValue arr = JsonValue.NewArray();
+            if (units != null)
+                foreach (UM um in units)
+                {
+                    if (um == null) continue;
+                    arr.Add(JsonValue.NewObject()
+                        .Set("id", UnitId(ctx, um))
+                        .Set("name", SafeName(() => um.getName()))
+                        .Set("hp", um.hp)
+                        .Set("maxHp", um.maxHp));
+                }
+            return arr;
+        }
+
+        private static JsonValue CommanderList(GameContext ctx, List<UA> coms)
+        {
+            JsonValue arr = JsonValue.NewArray();
+            if (coms != null)
+                foreach (UA ua in coms)
+                    if (ua != null) arr.Add(UnitRef(ctx, ua));
+            return arr;
+        }
+
+        /// <summary>Strip Unity rich-text tags (e.g. &lt;color=#aaaaaaff&gt;…&lt;/color&gt;) from a battle log line.</summary>
+        private static string StripRichText(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return s;
+            return System.Text.RegularExpressions.Regex.Replace(s, "<[^>]+>", "");
         }
 
         private static JsonValue TaskBrief(Task t)
@@ -753,6 +857,85 @@ namespace ShadowsMcp
         }
 
         // ---------- challenges ----------
+
+        /// <summary>Resolve a (deterministic) challenge id for a specific commandable unit. Recomputes the
+        /// canonical id over the unit's reachable challenges (the id's encoded location, plus the unit's own
+        /// tile) and its rituals, matching by string; falls back to the legacy weak-ref registry for any old
+        /// "C{n}" id still in flight. Returns null only when the challenge is genuinely gone. Lives here (not
+        /// in the generic ResolveId) because rituals need the performing unit as context.</summary>
+        public static Challenge ResolveChallengeForUnit(GameContext ctx, Unit unit, string id)
+        {
+            if (string.IsNullOrEmpty(id)) return null;
+
+            // Legacy registry id ("C8" from before deterministic ids) - still honour it if present.
+            Challenge legacy = ResolveId(ctx, id) as Challenge;
+            if (legacy != null) return legacy;
+
+            Map map = ctx != null ? ctx.Map : null;
+            if (map == null) return null;
+
+            if (id.StartsWith("Cr-", StringComparison.OrdinalIgnoreCase))
+            {
+                // Ritual id: only the performing unit owns it.
+                Challenge r = FindByCanonicalId(ctx, unit != null ? unit.rituals : null, id);
+                if (r != null) return r;
+            }
+            else
+            {
+                // Location id "C{idx}-...": scan that location's freshly-populated challenge list.
+                int dash = id.IndexOf('-');
+                int idx;
+                if (dash > 1 && (id[0] == 'C' || id[0] == 'c') &&
+                    int.TryParse(id.Substring(1, dash - 1), out idx))
+                {
+                    Location loc = LocationByIndex(map, idx);
+                    if (loc != null)
+                    {
+                        try { loc.populateStandardChallenges(); } catch { }
+                        Challenge hit = FindByCanonicalId(ctx, SafeChallenges(loc), id);
+                        if (hit != null) return hit;
+                    }
+                }
+            }
+
+            // Last resort: the unit's own tile + rituals (covers an id whose encoded location changed).
+            if (unit != null)
+            {
+                Location ul = unit.location;
+                if (ul != null)
+                {
+                    try { ul.populateStandardChallenges(); } catch { }
+                    Challenge hit = FindByCanonicalId(ctx, SafeChallenges(ul), id);
+                    if (hit != null) return hit;
+                }
+                Challenge rit = FindByCanonicalId(ctx, unit.rituals, id);
+                if (rit != null) return rit;
+            }
+            return null;
+        }
+
+        private static Challenge FindByCanonicalId(GameContext ctx, IEnumerable<Challenge> challenges, string id)
+        {
+            if (challenges == null) return null;
+            foreach (Challenge c in challenges)
+            {
+                if (c == null) continue;
+                if (string.Equals(ChallengeId(ctx, c), id, StringComparison.OrdinalIgnoreCase)) return c;
+            }
+            return null;
+        }
+
+        private static Location LocationByIndex(Map map, int idx)
+        {
+            if (map == null || map.locations == null) return null;
+            foreach (Location l in map.locations) if (l != null && l.index == idx) return l;
+            return null;
+        }
+
+        private static IEnumerable<Challenge> SafeChallenges(Location loc)
+        {
+            try { return loc.GetChallenges(); } catch { return null; }
+        }
 
         public static JsonValue ChallengeSummary(GameContext ctx, Challenge c, Unit forUnit, bool includeDescription = true)
         {
@@ -1136,30 +1319,56 @@ namespace ShadowsMcp
             }
         }
 
-        /// <summary>Compare a before-snapshot to the live state; return an array of agents that just gained a
-        /// hunter or whose odds worsened (null if none). Drives end_turn.threatAlert / early-stop.</summary>
-        public static JsonValue ThreatAlert(GameContext ctx, Map map, List<AgentSafetyInfo> before)
+        /// <summary>Compare a batch-start snapshot to the live state and decide whether a batched end_turn
+        /// should stop for threats. Retuned to fire only on *meaningful* danger by default (an agent becomes
+        /// huntable, gains a hunter it is NOT favoured against, or its odds worsen) - a merely-in-range,
+        /// favoured, non-huntable hunter no longer stops the batch (that was the "fires constantly at low
+        /// motivation" noise). When <paramref name="motivationStopPct"/> &gt; 0 (opt-in), it ALSO flags the
+        /// first turn a hunter's motivation toward an agent rises to &gt;= that %, catching threat build-up
+        /// before the agent is exposed. <paramref name="alert"/> gets the per-agent detail (each entry tagged
+        /// with a <c>trigger</c>), or null if nothing; <paramref name="reason"/> is the stopReason
+        /// ("threatEscalation" for danger, "threatMotivation" for the opt-in tripwire, else null).</summary>
+        public static void EvaluateThreatStop(GameContext ctx, Map map, List<AgentSafetyInfo> before,
+            int motivationStopPct, out JsonValue alert, out string reason)
         {
             var now = ComputeAgentSafety(ctx, map);
             var byAgent = new Dictionary<UA, AgentSafetyInfo>();
             if (before != null) foreach (var b in before) byAgent[b.Agent] = b;
 
             JsonValue alerts = JsonValue.NewArray();
+            bool danger = false, motivation = false;
             foreach (var s in now)
             {
                 AgentSafetyInfo b;
                 bool had = byAgent.TryGetValue(s.Agent, out b);
-                bool gainedHunter = s.TopHunter != null && (!had || b.TopHunter == null);
+
+                bool becameHuntable = s.IsHuntable && (!had || !b.IsHuntable);
+                bool gainedHunter = s.TopHunter != null && (!had || b.TopHunter == null) && s.InDanger();
                 bool worsened = s.TopHunter != null && had && b.TopHunter != null &&
                                 VerdictRank(s.Verdict()) > VerdictRank(b.Verdict());
-                if (gainedHunter || worsened)
+                bool meaningful = becameHuntable || gainedHunter || worsened;
+
+                int nowPct = s.TopHunter != null ? (int)Math.Round(s.TopMotivation * 100.0) : 0;
+                int wasPct = (had && b.TopHunter != null) ? (int)Math.Round(b.TopMotivation * 100.0) : 0;
+                bool roseToThreshold = motivationStopPct > 0 && s.TopHunter != null &&
+                                       nowPct >= motivationStopPct && wasPct < motivationStopPct;
+
+                if (meaningful || roseToThreshold)
                 {
                     JsonValue a = AgentSafetyJson(ctx, s);
                     a.Set("message", AgentSafetyLine(ctx, s));
+                    a.Set("trigger", becameHuntable ? "becameHuntable"
+                        : worsened ? "worsened"
+                        : gainedHunter ? "gainedHunter"
+                        : "motivation");
                     alerts.Add(a);
+                    if (meaningful) danger = true;
+                    if (roseToThreshold) motivation = true;
                 }
             }
-            return alerts.Count > 0 ? alerts : JsonValue.Null;
+
+            alert = alerts.Count > 0 ? alerts : JsonValue.Null;
+            reason = danger ? "threatEscalation" : (motivation ? "threatMotivation" : null);
         }
 
         // ---------- world summary ----------

@@ -23,10 +23,11 @@ namespace ShadowsMcp.Tools.Decisions
         // popupType names whose main interaction a button-sweep can't fully drive.
         private static readonly HashSet<string> HardTypes = new HashSet<string>
         {
-            "PopupItemTrading", "PopupModConfig", "PopupScrollSet", "PopupXScroll",
+            "PopupModConfig", "PopupScrollSet", "PopupXScroll",
             "PopupXBoxGodSelectMsg", "PopupBoxText", "PopupBoxMod", "PopupBoxPerson", "PopupBoxAgent",
             "PopupSaveDialog", "PopupSaveMap", "PopupMsgRenameAgent", "PopupGameOptions",
-            "PopupIOOptions", "PopupBattleAgent", "PopupHolyOrder",
+            "PopupIOOptions", "PopupHolyOrder",
+            // PopupBattleAgent is handled bespoke by PopupBattleAgentHandler (registered before this fallback).
         };
 
         // Pure-notification popups: every button just closes the popup (possibly panning the camera),
@@ -38,6 +39,9 @@ namespace ShadowsMcp.Tools.Decisions
             "PopupMsg", "PopupMsgHint", "PopupMsgSeal", "PopupMsgAchievement", "PopupImgMsg",
             "PopupMsgUnified", "PopupTutorialMsg", "PopupMsgAgents", "PopupMsgAgentsDeath",
             "PopupAutosaveDialog",
+            // Army-battle result window: view-only (single dismiss button), auto-resolves regardless. It only
+            // ever opens via a manual "See Battle" click, so this is defensive — force-dismiss is lossless.
+            "PopupBattleArmy",
         };
 
         public bool CanHandle(GameObject blocker) { return blocker != null; }
@@ -51,7 +55,7 @@ namespace ShadowsMcp.Tools.Decisions
 
         public string Headline(GameContext ctx, GameObject blocker)
         {
-            int n = Buttons(blocker).Count;
+            int n = PopupButtons.Enumerate(blocker).Count;
             string title = Title(blocker);
             string what = string.IsNullOrEmpty(title) ? PopupType(blocker) : "\"" + title + "\"";
             return "popup " + what + " with " + n + (n == 1 ? " option" : " options");
@@ -59,13 +63,13 @@ namespace ShadowsMcp.Tools.Decisions
 
         public JsonValue Describe(GameContext ctx, GameObject blocker)
         {
-            List<Button> buttons = Buttons(blocker);
+            List<Button> buttons = PopupButtons.Enumerate(blocker);
             JsonValue options = JsonValue.NewArray();
             for (int i = 0; i < buttons.Count; i++)
             {
                 options.Add(JsonValue.NewObject()
                     .Set("index", i)
-                    .Set("label", LabelFor(buttons[i]))
+                    .Set("label", PopupButtons.LabelFor(buttons[i]))
                     .Set("enabled", true));
             }
 
@@ -107,13 +111,13 @@ namespace ShadowsMcp.Tools.Decisions
                     .Set("dismissed", dismissed));
             }
 
-            List<Button> buttons = Buttons(blocker);
+            List<Button> buttons = PopupButtons.Enumerate(blocker);
             int wanted = args["optionIndex"].AsInt(-1);
             if (wanted < 0 || wanted >= buttons.Count)
                 return ToolResult.Error("optionIndex " + wanted + " is out of range (there are " +
                     buttons.Count + (buttons.Count == 1 ? " option)." : " options)."));
 
-            string label = LabelFor(buttons[wanted]);
+            string label = PopupButtons.LabelFor(buttons[wanted]);
             buttons[wanted].onClick.Invoke();
 
             // `blocker == null` (Unity treats a destroyed object as == null) reports a genuine close when
@@ -131,44 +135,6 @@ namespace ShadowsMcp.Tools.Decisions
                 o.Set("openedSelector", true)
                  .Set("hint", "this opened a targeting selector - cast/target via use_power or the relevant action tool");
             return ToolResult.Ok(o);
-        }
-
-        // ---------- button enumeration & labels ----------
-
-        private static List<Button> Buttons(GameObject blocker)
-        {
-            var result = new List<Button>();
-            try
-            {
-                foreach (Button b in blocker.GetComponentsInChildren<Button>(false))
-                {
-                    if (b != null && b.IsActive() && b.IsInteractable()) result.Add(b);
-                }
-            }
-            catch { }
-            return result;
-        }
-
-        private static string LabelFor(Button b)
-        {
-            try
-            {
-                Text t = b.GetComponentInChildren<Text>();
-                if (t != null && !string.IsNullOrEmpty(t.text)) return t.text.Trim();
-                TMP_Text tmp = b.GetComponentInChildren<TMP_Text>();
-                if (tmp != null && !string.IsNullOrEmpty(tmp.text)) return tmp.text.Trim();
-
-                // Data-object widgets carry the meaningful name.
-                UIE_Trait tr = b.GetComponentInParent<UIE_Trait>();
-                if (tr != null && tr.trait != null) return tr.trait.getName();
-                UIE_GodPower gp = b.GetComponentInParent<UIE_GodPower>();
-                if (gp != null && gp.power != null) return gp.power.getName();
-                UIE_AgentSelect ag = b.GetComponentInParent<UIE_AgentSelect>();
-                if (ag != null && ag.abstraction != null) return ag.abstraction.getName();
-
-                return b.gameObject.name;
-            }
-            catch { return "?"; }
         }
 
         // ---------- popup text ----------

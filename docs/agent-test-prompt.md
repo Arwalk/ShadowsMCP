@@ -39,9 +39,10 @@ recruit_agent, command_army, get_pending_decision, resolve_decision, end_turn.
 
 ### Rules of engagement — READ CAREFULLY
 - **Discover ids dynamically; never hardcode.** Unit ids (`U*`) come from `list_units`, locations (`L*`)
-  from `list_locations`/`get_location`, challenges (`C*`) from `list_challenges`, archetype codes from
-  `list_recruitable_agents`, social groups (`SG*`) from `list_social_groups`. Ids are session-scoped — if a
-  tool says "stale id", re-query.
+  from `list_locations`/`get_location`, challenges (`C*`, now deterministic — `C{loc}-{Type}-{hash}`, or
+  `Cr-…` for rituals) from `list_challenges`, archetype codes from `list_recruitable_agents`, social groups
+  (`SG*`) from `list_social_groups`. Unit ids are session-scoped — if a tool says "stale id", re-query;
+  challenge ids are now stable across turns and save/load (no need to re-list before `perform_challenge`).
 - **Verify by state-diff.** For every action, call the relevant query tool BEFORE, perform the action, then
   query AFTER, and assert the specific field changed as expected. Record the before value, the action, and
   the after value as evidence. Example: for `use_power`, snapshot `get_player_state.power`, cast, then
@@ -113,6 +114,13 @@ recruit_agent, command_army, get_pending_decision, resolve_decision, end_turn.
 - D6 (error names the reason): find a listed challenge with `valid:false` and `perform_challenge` it; assert
   the error message includes the `restriction` text, not just "requirements … are not met". If none is
   invalid, SKIP.
+- D7 (stable ids): `list_challenges` for one of your agents and cache a valid challenge's `id`. `end_turn` a
+  few turns (no `force` needed), then `perform_challenge {"unitId":"U...","challengeId":"<cached>"}` WITHOUT
+  re-listing — assert it is accepted (a perform/travel task appears via `get_unit`), proving the id survived
+  the turns. Assert the id has the deterministic shape (`C{loc}-{Type}-{hash}` or `Cr-…`), not `C8`.
+- D8 (stale-id error lists alternatives): `perform_challenge {"unitId":"U...","challengeId":"C-nope"}`
+  returns a clean error that BOTH says the id is unknown/stale AND lists that unit's currently-available
+  challenge ids+names to retry with.
 
 **E. Powers**
 - E1: `list_powers` returns powers with `cost` and a castable flag.
@@ -168,6 +176,15 @@ recruit_agent, command_army, get_pending_decision, resolve_decision, end_turn.
 - G5 (opportunistic, agent death): if an agent dies (an `end_turn` result or `game_overview` shows a death
   decision), assert the turn still advanced and `end_turn {"force":true}` auto-dismisses it
   (`autoDismissed.count > 0`). Else SKIP.
+- G6 (opportunistic, item trading): if an item-trade popup ever blocks (`game_overview.pendingDecision` /
+  `get_pending_decision` shows `kind:"itemTrading"`, `popupType:"PopupItemTrading"`), assert it exposes a
+  `sides` array of two `{side, name, gold, items:[{name, top?}]}` objects and `options` whose labels are
+  readable (e.g. "Take ALL…", "Done…", "Rotate side A…", "Move … gold to side B") — NOT raw
+  "Button (Previous)". Resolve a non-closing option (a rotate) via `resolve_decision {"optionIndex":N}` and
+  assert the returned `sides` reflect the change. Item trades aren't forcible → SKIP if none appears.
+- G7 (permanent-silence warning): if any popup ever offers a "No longer show message of type…" option (e.g.
+  a `PopupMsgUnified`), assert that option's label carries the explicit WARNING that it PERMANENTLY hides the
+  type for the whole game (persists across reload) — so an agent won't blind itself. SKIP if none appears.
 
 **H. End turn & game-over**
 - H1: snapshot `game_overview.turn`; `end_turn` (no force); assert the returned/`game_overview` turn
@@ -180,16 +197,23 @@ recruit_agent, command_army, get_pending_decision, resolve_decision, end_turn.
 - H5 (multi-turn): snapshot `game_overview.turn`; `end_turn {"count":3,"force":true}`; assert the result has
   `advancedBy` (1–3), `requestedCount:3` and a `stoppedEarly` bool, and that `turn` rose by exactly
   `advancedBy`. If `stoppedEarly` is true, assert a `stopReason` is present
-  (decision / gameOver / threatEscalation / notAdvanced).
+  (decision / gameOver / threatEscalation / threatMotivation / notAdvanced).
 - H6 (opportunistic, threatAlert): if any `end_turn` (single or batched) returns a `threatAlert`, assert it
-  is an array whose entries each name an `agent` and a hunter with a `motivationPct`, and that the same
-  agent appears in `get_threats.agentSafety`. Else SKIP.
+  is an array whose entries each name an `agent`, a `trigger`
+  (becameHuntable / gainedHunter / worsened / motivation), and — when a hunter is present — a hunter with a
+  `motivationPct`, and that the same agent appears in `get_threats.agentSafety`. Note the retuned stop no
+  longer fires for a merely-in-range, favoured, non-huntable hunter. Else SKIP.
+- H7 (opportunistic, motivation stop): read a top hunter's `motivationPct` = M (>0) from `get_threats`; call
+  `end_turn {"count":3,"stopOnThreatMotivation":<a value ≤ M>}`. If motivation rises to/above the threshold
+  during the batch, assert it stops with `stopReason:"threatMotivation"` and a `threatAlert` entry whose
+  `trigger` is `motivation`. If no hunter/motivation exists to cross the threshold, SKIP (not forcible).
 
 **I. Robustness / soak**
 - I1: run `end_turn {"force":true}` for ~5–10 turns in a row; assert it never stalls (each call returns,
   advancing or clearly reporting a preserved real decision) and `turn` keeps climbing.
-- I2 (error): a malformed call (e.g. `perform_challenge {"unitId":"U1"}` with no challengeId, or a stale id
-  after several turns) returns a clean error, not a hang.
+- I2 (error): a malformed call (e.g. `perform_challenge {"unitId":"U1"}` with no challengeId, or a bogus
+  challengeId like `C-nope`) returns a clean error, not a hang. (Challenge ids no longer go stale over
+  turns, so a genuinely-invalid id is the way to exercise this.)
 
 **J. Threats & enemy intent**
 - J1: `get_threats` returns a `count` and a `threats` array. Each entry has `message` (string),
@@ -258,8 +282,10 @@ recruit_agent, command_army, get_pending_decision, resolve_decision, end_turn.
   `sealProgress` and (unless all seals are already broken) `nextSealAt` and `turnsToNextSeal`. Assert
   `turnsToNextSeal == nextSealAt - sealProgress`. Advance a few turns and assert `sealProgress` increased
   and `turnsToNextSeal` shrank by the same amount.
-- K13 (danger breadcrumb + inventory): `game_overview.threats` has numeric `agentsInField` and
-  `agentsInDanger`, plus a `mostUrgent` string whenever `agentsInDanger > 0` — assert present. `get_unit` on
+- K13 (danger breadcrumb + inventory): `game_overview.threats` has numeric `agentsInField`,
+  `agentsInDanger` and `agentsHuntable` (agents with profile>=50 & menace>25, exposed to assassination),
+  plus a `mostUrgent` string whenever `agentsInDanger > 0` OR `agentsHuntable > 0` — assert all present.
+  `get_unit` on
   one of your agents now includes a `combat` block ({dangerEstimate, hp, defence, attack, menace, profile,
   menaceFloor, profileFloor, huntRadius, isHuntable, inHiding}) and an `items` array (possibly empty) — assert
   both keys present, that `combat.huntRadius == floor(combat.profile / 5)`, and that `menaceFloor`/`profileFloor`
@@ -304,6 +330,33 @@ recruit_agent, command_army, get_pending_decision, resolve_decision, end_turn.
   {"unitId":"U...","order":"attack"}` with no `targetUnitId` (or a `targetUnitId` for a unit not on its tile)
   returns a clean error asking for an on-tile target. Else SKIP.
 
+**M. Agent combat (`get_pending_decision` / `resolve_decision`)** — combat requires a hostile hero to reach
+one of your agents, which is **not forcible** on a short run. Watch `game_overview.threats.agentsUnderAttack`
+and `get_unit.engagedThisTurn` across your `end_turn`s; if no agent is ever attacked, mark M1–M4 **SKIP** with
+a note.
+- M1 (opportunistic, signal agreement): the first turn an agent is under attack, assert the signal is
+  consistent across surfaces — `game_overview.threats.agentsUnderAttack ≥ 1` with an `underAttack` list; the
+  same unit shows `engagedThisTurn:true` (+ `underAttackBy`) in both `list_units {"scope":"mine"}` and
+  `get_unit`; and a `pendingDecision` of `kind:"combat"` appears (also as the ⚠ banner prefixing tool
+  results). Else SKIP.
+- M2 (opportunistic, force is blocked — the core guarantee): while an agent is under attack, call `end_turn
+  {"force":true}` and assert it does NOT advance `turn` and returns `blockedBy:"combat"` with a
+  `pendingDecision` of `kind:"combat"`. Battles are never auto-resolved. Else SKIP.
+- M3 (opportunistic, open the battle): with a `kind:"combat"` decision pending (the engaged-agent list; read
+  `battles` + per-battle `verdict` via `get_pending_decision`), `resolve_decision {"optionIndex":0}`. Assert
+  the result reports the battle opened, and a follow-up `get_pending_decision` now returns
+  `popupType:"PopupBattleAgent"` with `attacker`/`defender` blocks (name, hp, attack, minions), `round`/
+  `state`, and an `options` list containing "fight to the end" and "step" (plus flee/retreat only from round
+  2). Else SKIP.
+- M4 (opportunistic, resolve the battle): from the open battle menu, `resolve_decision` with the fight-to-the-
+  end option (or `{"force":true}`); assert it closes with an `outcome` and, on a win, a `victor`/`defeated`
+  (and possibly a chained "Loot the Fallen Foe" `PopupItemTrading` as the next `pendingDecision`). Confirm the
+  battle no longer blocks `end_turn`. (Choosing flee/retreat instead is equally a PASS, as long as the battle
+  resolves.) Else SKIP.
+- M5 (opportunistic, army field battle): if any of your military units shows `inBattle:true` in `list_units`,
+  assert `get_unit` on it has a `battle` block with `attackers`/`defenders`, `commandAdvantagePct`, and
+  `advantageFavours`. Army battles auto-resolve and do NOT block `end_turn`. Else SKIP.
+
 ### Reporting (required output)
 1. Print a table with columns: `id | area | result (PASS/FAIL/SKIP/BLOCKED) | expected | observed (tool +
    before→after) | notes`. One row per check above.
@@ -313,7 +366,7 @@ recruit_agent, command_army, get_pending_decision, resolve_decision, end_turn.
    directory (use the starting turn number from preflight so the name is stable). Confirm the file path in
    your final message.
 
-Work through A→L in order. Be concise in intermediate narration; the value is in the evidence and the final
+Work through A→M in order. Be concise in intermediate narration; the value is in the evidence and the final
 report.
 ````
 

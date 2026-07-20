@@ -20,16 +20,33 @@ namespace ShadowsMcp.Tools
                 "game_overview",
                 "High-level state of the current game: turn, your god, resources, world counts, seal countdown " +
                 "and a threats breadcrumb. victoryProgress is your weighted score toward victory (score / " +
-                "pointsToWin ~200), not average enshadowment or panic. threats.agentsInDanger flags agents a " +
-                "hero is closing on - open get_threats when it is non-zero. A 'tips' array may appear here to " +
+                "pointsToWin ~200), not average enshadowment or panic. threats.agentsUnderAttack flags agents " +
+                "attacked THIS turn - a battle is pending (resolve via get_pending_decision; it blocks end_turn); " +
+                "threats.agentsInDanger flags agents a hero is closing on; threats.agentsHuntable flags agents " +
+                "exposed to assassination (profile>=50 & menace>25) - open get_threats when a danger signal is " +
+                "non-zero. A 'tips' array may appear here to " +
                 "explain a mechanic the moment it becomes relevant (get_tips is the full reference).",
                 Schema.Object(),
                 a => WithMap(ctx, map =>
                 {
                     int commandable = 0;
+                    int agentsUnderAttack = 0, armiesInBattle = 0;
+                    JsonValue underAttack = JsonValue.NewArray();
                     foreach (Unit u in map.units)
                     {
                         if (u.isCommandable()) commandable++;
+                        if (u.isDead || !u.isCommandable()) continue;
+                        // Active combat (distinct from the predictive danger below): an agent attacked THIS turn
+                        // has a battle pending; an army may be mid field-battle. Surfaced so an agent reading only
+                        // game_overview cannot miss a fight it must resolve before the turn can end.
+                        // Match the actual end_turn block condition (UA engaged by a live UA this turn) so this
+                        // "battle pending / end_turn blocked" signal can never contradict end_turn's behaviour.
+                        if (u is UA && u.engagedBy is UA atk && !atk.isDead && u.turnLastEngaged == map.turn)
+                        {
+                            agentsUnderAttack++;
+                            underAttack.Add(Summaries.UnitRef(ctx, u));
+                        }
+                        if (u.task is Task_InBattle) armiesInBattle++;
                     }
                     Overmind om = map.overmind;
                     om.calculateAgentsUsed();
@@ -40,19 +57,37 @@ namespace ShadowsMcp.Tools
                     // Combat-danger breadcrumb: an agent that only ever reads game_overview should still
                     // notice heroes closing on its agents. agentsInDanger > 0 => open get_threats.
                     var safety = Summaries.ComputeAgentSafety(ctx, map);
-                    int agentsInDanger = 0;
+                    int agentsInDanger = 0, agentsHuntable = 0;
                     Summaries.AgentSafetyInfo worstThreat = null;
                     foreach (var s in safety)
                     {
+                        if (s.IsHuntable) agentsHuntable++;
                         if (!s.InDanger()) continue;
                         agentsInDanger++;
                         if (worstThreat == null || s.TopMotivation > worstThreat.TopMotivation) worstThreat = s;
                     }
                     JsonValue threatsBlock = JsonValue.NewObject()
                         .Set("agentsInField", safety.Count)
-                        .Set("agentsInDanger", agentsInDanger);
-                    if (worstThreat != null) threatsBlock.Set("mostUrgent", Summaries.AgentSafetyLine(ctx, worstThreat));
-                    if (agentsInDanger > 0) threatsBlock.Set("hint", "call get_threats for per-agent odds and the full threats panel");
+                        .Set("agentsInDanger", agentsInDanger)
+                        // Huntable = profile>=50 AND menace>25: exposed to a ruler's assassination even before
+                        // a hunter is in range. The signal that most predicts losing an agent (surfaced here so
+                        // an agent reading only game_overview sees it, not just get_threats.agentSafety).
+                        .Set("agentsHuntable", agentsHuntable);
+                    if (worstThreat != null)
+                        threatsBlock.Set("mostUrgent", Summaries.AgentSafetyLine(ctx, worstThreat));
+                    else if (agentsHuntable > 0)
+                        threatsBlock.Set("mostUrgent", agentsHuntable + " agent(s) huntable (profile>=50 & menace>25) - " +
+                            "exposed to assassination; get_threats shows which and how to hide");
+                    if (agentsInDanger > 0 || agentsHuntable > 0)
+                        threatsBlock.Set("hint", "call get_threats for per-agent odds (isHuntable, verdict, top hunter)");
+                    // Active combat takes priority over predictive danger: a pending battle blocks end_turn.
+                    if (agentsUnderAttack > 0)
+                        threatsBlock.Set("agentsUnderAttack", agentsUnderAttack)
+                                    .Set("underAttack", underAttack)
+                                    .Set("combatHint", "a battle is pending - resolve it with get_pending_decision / " +
+                                        "resolve_decision (fight, flee, or retreat); end_turn is blocked until you do");
+                    if (armiesInBattle > 0)
+                        threatsBlock.Set("armiesInBattle", armiesInBattle);
 
                     JsonValue o = JsonValue.NewObject()
                         .Set("modVersion", ModCore.ModVersion)
