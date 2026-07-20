@@ -56,6 +56,8 @@ See `docs/manual-test-checklist.md` for a full end-to-end test script.
 | `perform_challenge` | Have an agent start a challenge |
 | `use_power` | Cast one of your god's powers |
 | `recruit_agent` | Spend a recruitment point to enthrall a new agent (archetype onto a location, or corrupt an eligible hero in place) |
+| `command_army` | A commandable military unit's special orders: raze the settlement it stands on, drive back an enemy hero, or attack an enemy army on its tile |
+| `command_agent` | An agent's actions against another agent on its tile: **attack** a hostile hero (starting the duel cancels their ritual for good, even if you flee), **rob** a weaker one, **trade** items with one of your own, or **follow** a merchant. Available orders are listed under `orders` in `get_unit`/`list_units` |
 | `influence_holy_order_tenet` | Spend a religion's banked Elder influence to shift one of its tenets (`toward_elder` / `toward_human`) — the holy-order screen's doctrine lever |
 | `oppose_divinity` | Undermine (−1 power, −10 strength) or exile the divine entity behind a religion |
 | `get_pending_decision` / `resolve_decision` | Read and answer a pending decision popup (level-up trait pick, event choice, agent-death notice) |

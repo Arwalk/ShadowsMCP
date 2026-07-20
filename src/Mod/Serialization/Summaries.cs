@@ -300,9 +300,9 @@ namespace ShadowsMcp
                 .Set("movesTaken", u.movesTaken)
                 .Set("maxMoves", u.getMaxMoves())
                 .Set("task", dead ? JsonValue.Null : TaskBrief(u.task));
-            // Commandable-military "special orders" (raze / drive back / attack) - a third action category
-            // the game surfaces on a selected UM, invoked via command_army. Omitted (null) for anything that
-            // isn't a live commandable UM with an order available on its tile.
+            // Special orders the game surfaces on a selected unit and that are neither challenges nor powers:
+            // a UM's raze / drive back / attack (command_army) and an agent's on-tile attack / rob / trade /
+            // follow (command_agent). Omitted (null) when no such order applies right now.
             JsonValue orders = UnitOrders(ctx, u);
             if (!orders.IsNull) o.Set("orders", orders);
             // Active combat, surfaced in list views so an under-attack agent / in-battle army is visible without
@@ -316,13 +316,16 @@ namespace ShadowsMcp
             return o;
         }
 
-        /// <summary>The commandable-military special orders available to <paramref name="u"/> on its current
-        /// tile - the game's own Raze / Drive Back / Attack buttons (UIScroll_Unit), which are neither god
-        /// powers nor challenges and so surface nowhere else. Each entry is {order, target, hint}; the hint
-        /// spells out the exact command_army call. Returns <see cref="JsonValue.Null"/> unless this is a live,
-        /// commandable, not-in-battle UM with at least one order applicable right now.</summary>
+        /// <summary>The special orders available to <paramref name="u"/> on its current tile - the game's own
+        /// action boxes (UIScroll_Unit), which are neither god powers nor challenges and so surface nowhere
+        /// else: a military unit's Raze / Drive Back / Attack (command_army) and an agent's Attack / Rob /
+        /// Trade / Follow against another agent standing on the same tile (command_agent). Each entry is
+        /// {order, target, hint}; the hint spells out the exact call to make. Returns
+        /// <see cref="JsonValue.Null"/> unless this is a live commandable unit with at least one order
+        /// applicable right now.</summary>
         public static JsonValue UnitOrders(GameContext ctx, Unit u)
         {
+            if (u is UA) return AgentOrders(ctx, u as UA);
             UM um = u as UM;
             if (um == null || um.isDead || !um.isCommandable()) return JsonValue.Null;
             // In battle every order pops "... while in battle" - offer none (mirrors UM.playerCommands*).
@@ -369,6 +372,86 @@ namespace ShadowsMcp
                                 UnitId(ctx, enemyArmy) + "} starts a battle with this army"));
                         any = true;
                     }
+                }
+            }
+
+            return any ? arr : JsonValue.Null;
+        }
+
+        /// <summary>The agent-vs-agent actions available to <paramref name="ua"/> right now - one entry per
+        /// other agent on its tile, mirroring the action boxes UIScroll_Unit builds by walking
+        /// <c>ua.location.units</c> (Attack an enemy hero, Rob a weaker merchant/adventurer, Trade with one of
+        /// your own agents, Follow a merchant as a Harvester). Surfacing them here is what makes the offensive
+        /// half of the agent layer discoverable: it rides along in list_units and get_unit, each hint carrying
+        /// the literal command_agent call. Null when nothing applies.</summary>
+        private static JsonValue AgentOrders(GameContext ctx, UA ua)
+        {
+            if (ua == null || ua.isDead || !ua.isCommandable()) return JsonValue.Null;
+            if (ua.location == null || ua.location.units == null) return JsonValue.Null;
+            // Same suppressions as the command_agent guards: a pending duel or disruption blocks every order.
+            if (ua.engagedBy != null && ua.map != null && ua.turnLastEngaged == ua.map.turn) return JsonValue.Null;
+            if (ua.task is Task_Disrupted) return JsonValue.Null;
+
+            string me = UnitId(ctx, ua);
+            JsonValue arr = JsonValue.NewArray();
+            bool any = false;
+
+            foreach (Unit other in ua.location.units)
+            {
+                if (other == null || other.isDead || other == ua) continue;
+                UA target = other as UA;
+                if (target == null) continue;
+                string tid = UnitId(ctx, target);
+
+                if (!target.isCommandable())
+                {
+                    bool busy = target.engagedBy != null && ua.map != null && target.turnLastEngaged == ua.map.turn;
+                    if (!busy)
+                    {
+                        string breaks = target.task is Task_PerformChallenge
+                            ? " and cancels their '" + SafeName(() => target.task.getShort()) + "' for good (even if you flee)"
+                            : "";
+                        arr.Add(JsonValue.NewObject()
+                            .Set("order", "attack")
+                            .Set("target", UnitRef(ctx, target))
+                            .Set("theirDangerEstimate", Safe(() => target.getDangerEstimate(), 0))
+                            .Set("yourDangerEstimate", Safe(() => ua.getDangerEstimate(), 0))
+                            .Set("hint", "command_agent {unitId:" + me + ", order:\"attack\", targetUnitId:" + tid +
+                                "} starts a duel with this hero" + breaks + " - compare the two dangerEstimates first"));
+                        any = true;
+                    }
+
+                    // Rob: merchant/adventurer, and you must outrank them (UA.playerTriesToRob).
+                    if ((target is UAG || target is UAA) && target.person != null && ua.person != null &&
+                        target.person.level < ua.person.level &&
+                        (ua.map == null || ua.turnLastDidRobbery == 0 || ua.map.turn - ua.turnLastDidRobbery >= 5))
+                    {
+                        arr.Add(JsonValue.NewObject()
+                            .Set("order", "rob")
+                            .Set("target", UnitRef(ctx, target))
+                            .Set("hint", "command_agent {unitId:" + me + ", order:\"rob\", targetUnitId:" + tid +
+                                "} steals their items (raises your profile and menace; once per 5 turns)"));
+                        any = true;
+                    }
+
+                    if (ua is UAE_Harvester && target is UAG)
+                    {
+                        arr.Add(JsonValue.NewObject()
+                            .Set("order", "follow")
+                            .Set("target", UnitRef(ctx, target))
+                            .Set("hint", "command_agent {unitId:" + me + ", order:\"follow\", targetUnitId:" + tid +
+                                "} shadows this merchant wherever they go"));
+                        any = true;
+                    }
+                }
+                else
+                {
+                    arr.Add(JsonValue.NewObject()
+                        .Set("order", "trade")
+                        .Set("target", UnitRef(ctx, target))
+                        .Set("hint", "command_agent {unitId:" + me + ", order:\"trade\", targetUnitId:" + tid +
+                            "} moves items and gold between these two agents of yours"));
+                    any = true;
                 }
             }
 
@@ -1460,7 +1543,37 @@ namespace ShadowsMcp
                     .Set("unit", UnitRef(ctx, s.TopHunter))
                     .Set("motivationPct", (int)Math.Round(s.TopMotivation * 100.0))
                     .Set("dangerEstimate", s.HunterDanger));
+            // A hero standing on your agent's tile is not only a threat - it is a target. Without this, a
+            // closing hunter reads as danger only, and the pre-emptive strike (command_agent order:"attack",
+            // which also destroys whatever ritual they are performing) never comes to mind.
+            JsonValue onTile = HostilesOnTile(ctx, s.Agent);
+            if (!onTile.IsNull)
+                o.Set("hostilesOnTile", onTile)
+                 .Set("attackHint", "these heroes share your agent's tile - you can strike first with " +
+                     "command_agent {unitId:" + UnitId(ctx, s.Agent) + ", order:\"attack\", targetUnitId:…} " +
+                     "(see get_unit.orders); it cancels their ritual even if you then flee");
             return o;
+        }
+
+        /// <summary>Hostile heroes standing on this agent's tile - i.e. the ones it could attack right now
+        /// (same set AgentOrders builds its attack entries from). Null when there are none.</summary>
+        private static JsonValue HostilesOnTile(GameContext ctx, UA ua)
+        {
+            if (ua == null || ua.isDead || ua.location == null || ua.location.units == null) return JsonValue.Null;
+            JsonValue arr = JsonValue.NewArray();
+            bool any = false;
+            foreach (Unit other in ua.location.units)
+            {
+                if (other == null || other.isDead || other == ua) continue;
+                UA hero = other as UA;
+                if (hero == null || hero.isCommandable()) continue;
+                arr.Add(JsonValue.NewObject()
+                    .Set("unit", UnitRef(ctx, hero))
+                    .Set("dangerEstimate", Safe(() => hero.getDangerEstimate(), 0))
+                    .Set("task", hero.task != null ? SafeName(() => hero.task.getShort()) : null));
+                any = true;
+            }
+            return any ? arr : JsonValue.Null;
         }
 
         /// <summary>Compact one-line danger summary for game_overview.threats.mostUrgent / threatAlert.</summary>

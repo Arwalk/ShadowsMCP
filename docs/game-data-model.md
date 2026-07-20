@@ -265,6 +265,12 @@ A commandable **military** unit (`UM`) also has three special orders the game UI
 These are neither challenges nor powers (see `ground-truth-notes.md`); the mod exposes them via the
 `command_army` tool and lists the available ones under `orders` in get_unit/list_units.
 
+A commandable **agent** (`UA`) likewise has four direct actions against another `UA` standing on its own
+tile, which the UI hand-builds by walking `ua.location.units` — `playerTriesToAttack(UA)` (duel a hostile
+hero; also nulls both sides' `Task_PerformChallenge` via `BattleAgents.setupBattle`, so it breaks the
+target's ritual for good), `playerTriesToRob(UA)`, `playerTriesToTrade(UA)` and `playerTriesToFollow(Unit)`.
+The mod exposes them via the `command_agent` tool and lists them under the same `orders` key.
+
 ## 7. The player: `Overmind`, `God`, `Power`
 
 ### `Overmind`

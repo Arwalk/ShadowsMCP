@@ -95,6 +95,28 @@ namespace ShadowsMcp.Tools
                     Schema.Prop("targetUnitId", Schema.String("For drive_back/attack: the enemy unit sharing your unit's tile, e.g. U9 (ignored for raze)"))),
                 a => QueryTools.WithMap(ctx, map => CommandArmy(ctx, map, a))));
 
+            host.Register(new ToolDefinition(
+                "command_agent",
+                "Act on ANOTHER agent standing on the same tile as one of your agents - the offensive/social " +
+                "half of the agent action list, beside challenges and powers. order=attack starts a duel with " +
+                "an enemy hero: this is how you strike first instead of waiting to be hunted, and it CANCELS " +
+                "the target's in-progress challenge or ritual outright - even if you then flee or retreat, and " +
+                "even if you lose - which is the standard way to break the Chosen One's ritual (it also cancels " +
+                "your own agent's challenge, so compare get_unit combat.dangerEstimate on both first). " +
+                "order=rob steals items from a weaker enemy hero or merchant (you must be a HIGHER level than " +
+                "them, once per 5 turns, and it raises your profile and menace). order=trade moves items and " +
+                "gold between two of YOUR OWN agents. order=follow makes a Harvester shadow a merchant. " +
+                "attack/rob/trade open a menu that is returned inline as pendingDecision - drive it with " +
+                "resolve_decision. Targets must share your agent's tile: move_unit there first. A unit's " +
+                "currently-available orders (with the exact call) appear under 'orders' in get_unit / list_units.",
+                Schema.Object(
+                    Schema.Prop("unitId", Schema.String("Your agent's id, e.g. U17"), required: true),
+                    Schema.Prop("order", Schema.StringEnum("Which action to take against the target agent",
+                        "attack", "rob", "trade", "follow"), required: true),
+                    Schema.Prop("targetUnitId", Schema.String("The other agent sharing your agent's tile, e.g. U9 (an enemy hero for attack/rob, one of your own agents for trade)"), required: true),
+                    Schema.Prop("force", Schema.Boolean("Abandon your agent's own in-progress challenge without confirmation"))),
+                a => QueryTools.WithMap(ctx, map => CommandAgent(ctx, map, a))));
+
             // Registered as a server-thread tool: end-turn processing can exceed the normal
             // per-tool timeout, so it dispatches its own job with the longer budget.
             host.RegisterServerThread(new ToolDefinition(
@@ -628,6 +650,228 @@ namespace ShadowsMcp.Tools
                 return ToolResult.Error(target.getName() + " is not on " + um.getName() + "'s tile; these orders only " +
                     "apply to a unit sharing your unit's location (move onto its tile first).");
             return null;
+        }
+
+        // ---------- agent-vs-agent actions (attack / rob / trade / follow) ----------
+
+        /// <summary>Act on another agent sharing your agent's tile - the four action boxes
+        /// <c>UIScroll_Unit</c> builds by walking <c>ua.location.units</c> (Attack / Rob / Trade / Follow),
+        /// each wired to a <c>UA.playerTriesTo*</c> method. Without this an agent could only ever be attacked,
+        /// never attack: the whole offensive half of the agent layer had no verb. Every branch mirrors the
+        /// exact guard + commit of its <c>UA.playerTriesTo*</c> method, returning a clean error where the game
+        /// pops a message. <c>UA.playerTriesToDisrupt</c> is deliberately NOT exposed - it exists on UA but no
+        /// UI path reaches it, and this layer only replicates actions a human player can take.</summary>
+        private static ToolResult CommandAgent(GameContext ctx, Map map, JsonValue a)
+        {
+            Unit u;
+            ToolResult err = ResolveCommandable(ctx, a["unitId"].AsString(), out u);
+            if (err != null) return err;
+
+            UA ua = u as UA;
+            if (ua == null)
+                return ToolResult.Error(u.getName() + " is not an agent; these actions belong to your agents " +
+                    "(a UA). For a military unit's orders use command_army.");
+
+            string order = a["order"].AsString();
+            if (string.IsNullOrEmpty(order))
+                return ToolResult.Error("missing 'order' - one of attack, rob, trade, follow.");
+            order = order.ToLowerInvariant();
+
+            UA target;
+            ToolResult terr = ResolveAgentTarget(ctx, ua, a["targetUnitId"].AsString(), out target);
+            if (terr != null) return terr;
+
+            // Shared guard, first in every playerTriesTo* method: an agent under attack must fight first.
+            if (ua.engagedBy != null && ua.turnLastEngaged == map.turn)
+                return ToolResult.Error(ua.getName() + " is under attack by " + ua.engagedBy.getName() +
+                    " and must resolve this combat before taking action (get_pending_decision, then " +
+                    "resolve_decision to fight, flee, or retreat).");
+            // Disruption blocks attack/rob/follow. playerTriesToTrade does NOT check it - neither do we.
+            if (order != "trade" && ua.task is Task_Disrupted)
+                return ToolResult.Error(ua.getName() + " is disrupted and cannot act this turn.");
+
+            switch (order)
+            {
+                case "attack":
+                {
+                    if (target.isCommandable())
+                        return ToolResult.Error(target.getName() + " is one of your own agents; you cannot attack " +
+                            "it (use order=\"trade\" to swap items with it).");
+                    if (target.engagedBy != null && target.turnLastEngaged == map.turn)
+                        return ToolResult.Error(target.getName() + " is already being attacked by " +
+                            target.engagedBy.getName() + "; that combat must be resolved before you can fight them.");
+                    // A bodyguard on the target's tile must be beaten first (the guard's own duel).
+                    foreach (Unit other in target.location.units)
+                    {
+                        UA guard = other as UA;
+                        Task_Bodyguard bg = guard != null ? guard.task as Task_Bodyguard : null;
+                        if (bg != null && bg.target == target)
+                            return ToolResult.Error(target.getName() + " is guarded by " + guard.getName() +
+                                ". Defeat the guard first: command_agent {unitId:" + Summaries.UnitId(ctx, ua) +
+                                ", order:\"attack\", targetUnitId:" + Summaries.UnitId(ctx, guard) + "}.");
+                    }
+                    // The UI's popConfirmOrder branch: your own challenge progress is destroyed too
+                    // (BattleAgents.setupBattle nulls a Task_PerformChallenge on BOTH sides).
+                    string warning = AbandonWarning(ua);
+                    if (warning != null && !a["force"].AsBool()) return ToolResult.Error(warning);
+
+                    string targetTask = TaskShort(target.task);
+                    try
+                    {
+                        // Exactly UA.playerTriesToAttack's commit.
+                        target.task = null;
+                        BattleAgents battle = new BattleAgents(ua, target);
+                        map.world.prefabStore.popBattle(battle);
+                    }
+                    catch (Exception e)
+                    {
+                        return ToolResult.Error("could not start the battle: " + e.Message);
+                    }
+                    CheckUiData(map);
+
+                    JsonValue res = JsonValue.NewObject()
+                        .Set("unit", Summaries.UnitRef(ctx, ua))
+                        .Set("order", "attack")
+                        .Set("target", Summaries.UnitRef(ctx, target))
+                        .Set("cancelledTargetTask", targetTask)
+                        .Set("status", "battle opened against " + target.getName() +
+                            (targetTask != null
+                                ? " - their task '" + targetTask + "' is cancelled, and stays cancelled even if you flee or lose"
+                                : ""));
+                    return ToolResult.Ok(AttachPending(ctx, res,
+                        "the combat menu is open - see pendingDecision, then resolve_decision (fight to the " +
+                        "end, step one exchange, or flee/retreat from round 2)."));
+                }
+                case "rob":
+                {
+                    if (target.isCommandable())
+                        return ToolResult.Error(target.getName() + " is one of your own agents; use order=\"trade\" " +
+                            "to move items between your agents.");
+                    if (!(target is UAG) && !(target is UAA))
+                        return ToolResult.Error(target.getName() + " cannot be robbed - only a merchant (UAG) or " +
+                            "an adventurer/agent (UAA) carries items you can steal.");
+                    if (target.person.level >= ua.person.level)
+                        return ToolResult.Error(ua.getName() + " (level " + ua.person.level + ") must be a HIGHER " +
+                            "level than " + target.getName() + " (level " + target.person.level + ") to steal from them.");
+                    if (map.turn - ua.turnLastDidRobbery < 5 && ua.turnLastDidRobbery != 0)
+                        return ToolResult.Error(ua.getName() + " robbed someone on turn " + ua.turnLastDidRobbery +
+                            "; robberies are 5 turns apart - " + (5 - (map.turn - ua.turnLastDidRobbery)) +
+                            " turn(s) to wait.");
+
+                    try
+                    {
+                        // Exactly UA.playerTriesToRob's commit, in the same order.
+                        ua.addProfile(map.param.ua_robProfileGain);
+                        ua.addMenace(map.param.ua_robMenaceGain);
+                        ua.turnLastDidRobbery = map.turn;
+                        map.world.prefabStore.popItemTrade(ua.person, target.person, "Stealing Items");
+                    }
+                    catch (Exception e)
+                    {
+                        return ToolResult.Error("could not open the robbery: " + e.Message);
+                    }
+                    CheckUiData(map);
+
+                    JsonValue res = JsonValue.NewObject()
+                        .Set("unit", Summaries.UnitRef(ctx, ua))
+                        .Set("order", "rob")
+                        .Set("target", Summaries.UnitRef(ctx, target))
+                        .Set("profileGained", map.param.ua_robProfileGain)
+                        .Set("menaceGained", map.param.ua_robMenaceGain)
+                        .Set("status", "robbing " + target.getName() + " - the cost is already paid (+" +
+                            map.param.ua_robProfileGain + " profile, +" + map.param.ua_robMenaceGain +
+                            " menace), so take the items");
+                    return ToolResult.Ok(AttachPending(ctx, res,
+                        "the steal window is open - see pendingDecision, then resolve_decision (\"Take all\" " +
+                        "pulls everything across, then Done)."));
+                }
+                case "trade":
+                {
+                    if (!target.isCommandable())
+                        return ToolResult.Error(target.getName() + " is not one of your agents; trading moves items " +
+                            "between two of YOUR OWN agents (use order=\"rob\" to steal from an enemy).");
+                    try
+                    {
+                        map.world.prefabStore.popItemTrade(ua.person, target.person);
+                    }
+                    catch (Exception e)
+                    {
+                        return ToolResult.Error("could not open the trade: " + e.Message);
+                    }
+                    CheckUiData(map);
+
+                    JsonValue res = JsonValue.NewObject()
+                        .Set("unit", Summaries.UnitRef(ctx, ua))
+                        .Set("order", "trade")
+                        .Set("target", Summaries.UnitRef(ctx, target))
+                        .Set("status", "trading items between " + ua.getName() + " and " + target.getName());
+                    return ToolResult.Ok(AttachPending(ctx, res,
+                        "the trade window is open - see pendingDecision, then resolve_decision (rotate a side " +
+                        "until the item you want is on top, swap, then Done)."));
+                }
+                case "follow":
+                {
+                    if (!(ua is UAE_Harvester))
+                        return ToolResult.Error(ua.getName() + " cannot follow another agent - only a Harvester " +
+                            "may shadow a merchant.");
+                    if (!(target is UAG))
+                        return ToolResult.Error(target.getName() + " is not a merchant (UAG); a Harvester can only " +
+                            "follow a merchant.");
+                    // The game also pops a confirmation message here; we skip it - a blocker the MCP would
+                    // only have to dismiss again (unlike attack/rob/trade, whose popup IS the interaction).
+                    ua.task = new Task_Follow(ua, target);
+                    CheckUiData(map);
+                    return ToolResult.Ok(JsonValue.NewObject()
+                        .Set("unit", Summaries.UnitRef(ctx, ua))
+                        .Set("order", "follow")
+                        .Set("target", Summaries.UnitRef(ctx, target))
+                        .Set("task", TaskShort(ua.task))
+                        .Set("status", ua.getName() + " now follows " + target.getName() +
+                            ", moving to their location each time they move"));
+                }
+                default:
+                    return ToolResult.Error("unknown order '" + order + "' - one of attack, rob, trade, follow.");
+            }
+        }
+
+        /// <summary>Resolve a command_agent target and enforce that it is another live agent sharing the
+        /// commander's tile (the game only builds these action boxes for units in <c>ua.location.units</c>).</summary>
+        private static ToolResult ResolveAgentTarget(GameContext ctx, UA ua, string id, out UA target)
+        {
+            target = null;
+            Unit t = Summaries.ResolveId(ctx, id) as Unit;
+            if (t == null)
+                return ToolResult.Error(string.IsNullOrEmpty(id)
+                    ? "this order needs a targetUnitId (the other agent sharing your agent's tile) - see get_unit.orders."
+                    : "unknown or stale unit id: " + id + " - re-run list_units.");
+            if (t.isDead)
+                return ToolResult.Error(t.getName() + " is dead.");
+            if (t == ua)
+                return ToolResult.Error("an agent cannot act on itself; targetUnitId must be another agent.");
+            UA other = t as UA;
+            if (other == null)
+                return ToolResult.Error(t.getName() + " is not an agent; these actions only apply to another " +
+                    "hero/agent (for an enemy army use command_army on a military unit of yours).");
+            if (other.location != ua.location)
+                return ToolResult.Error(other.getName() + " is not on " + ua.getName() + "'s tile (they are at " +
+                    (other.location != null ? other.location.getName() : "?") + "). Move there first: move_unit " +
+                    "{unitId:" + Summaries.UnitId(ctx, ua) + ", locationId:" +
+                    (other.location != null ? Summaries.LocationId(other.location) : "L?") + "}.");
+            return null;
+        }
+
+        /// <summary>Attach the popup a command_agent order just opened, so the combat/trade menu comes back in
+        /// the SAME call instead of needing a get_pending_decision round-trip (which may not be loaded).</summary>
+        private static JsonValue AttachPending(GameContext ctx, JsonValue result, string hint)
+        {
+            JsonValue pending = Decisions.DecisionRegistry.FullOrNull(ctx);
+            if (pending.IsNull)
+            {
+                Decisions.DecisionRegistry.PumpQueue(ctx);
+                pending = Decisions.DecisionRegistry.FullOrNull(ctx);
+            }
+            if (!pending.IsNull) result.Set("pendingDecision", pending).Set("hint", hint);
+            return result;
         }
 
         private static string TaskShort(Task t)

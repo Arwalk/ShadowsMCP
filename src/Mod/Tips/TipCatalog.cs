@@ -93,7 +93,11 @@ namespace ShadowsMcp.Tips
                 "are sticky: a floor ratchets up as the agent acts and neither can drop below it, so don't build " +
                 "exposure you don't need. Lower them by running the Lay Low challenge or leaving the agent In " +
                 "Hiding (combat.inHiding), or by enshadowing the local ruler, who then ignores the menace. See " +
-                "get_tips id=menace and id=profile for the exact thresholds."),
+                "get_tips id=menace and id=profile for the exact thresholds. Challenges are not an agent's only " +
+                "move: an agent sharing a tile with another agent can act on them directly with command_agent " +
+                "(attack a hostile hero, rob a weaker one, trade items with your own) - see 'orders' in " +
+                "get_unit/list_units. Attacking is the offensive half of combat and cancels the target's " +
+                "in-progress ritual permanently, even if you flee; get_tips id=agent_can_attack has the details."),
 
             Core("recruitment", "Recruiting agents", "basics",
                 "Need a roster slot (cap grows with seals) + a recruitment point; losing all agents is not a loss.",
@@ -174,6 +178,20 @@ namespace ShadowsMcp.Tips
                 "from round 2 - at round 2 you escape but lose ALL your minions; from round 3 the retreat is safe. " +
                 "Winning lets you loot the loser. end_turn is blocked (even with force=true) until every pending " +
                 "battle is resolved, so an agent can never sleepwalk into a fight it should have fled."),
+
+            Ctx("agent_can_attack", "You can strike first - attacking breaks rituals", "tactics", HostileHeroOnAgentTile,
+                "A hostile hero shares one of your agents' tiles: command_agent order=attack duels them, and cancels their ritual even if you flee.",
+                "One of your agents is standing on the same tile as a hostile hero, which means you can attack " +
+                "rather than wait to be attacked - see 'orders' in get_unit/list_units, and issue it with " +
+                "command_agent order=\"attack\". The key mechanic: starting the battle cancels the target's " +
+                "in-progress challenge or ritual OUTRIGHT, and it stays cancelled whether you win, flee, retreat, " +
+                "or lose. That makes a deliberately-lost duel a legitimate way to break a ritual you cannot stop " +
+                "any other way - most notably the Chosen One's. Two costs: your own agent's in-progress challenge " +
+                "is cancelled too (pass force=true to accept losing its progress), and a hero being guarded " +
+                "(Task_Bodyguard) cannot be touched until the guard is beaten. Compare get_unit combat." +
+                "dangerEstimate on both sides before committing, and remember flee only unlocks from round 2. " +
+                "The same tool covers the other on-tile agent actions: rob a weaker merchant or adventurer, and " +
+                "trade items between two of your own agents."),
 
             Ctx("army_orders", "Commandable armies: raze, drive back, attack", "tactics", HasCommandableArmy,
                 "A commandable military unit has special orders (command_army): raze cities, drive back heroes, attack armies.",
@@ -457,6 +475,28 @@ namespace ShadowsMcp.Tips
             foreach (Unit u in m.units)
                 if (u is UA && !u.isDead && u.isCommandable() && u.engagedBy != null && u.turnLastEngaged == m.turn)
                     return true;
+            return false;
+        }
+
+        // Fires when one of your agents shares a tile with a hostile hero - i.e. the attack action box the game
+        // would draw (UIScroll_Unit walks ua.location.units for non-commandable UAs). The pre-emptive strike is
+        // available right now, and with it the break-their-ritual trick.
+        private static bool HostileHeroOnAgentTile(GameContext c)
+        {
+            Map m = c != null ? c.Map : null;
+            if (m == null || m.units == null) return false;
+            foreach (Unit u in m.units)
+            {
+                UA ua = u as UA;
+                if (ua == null || ua.isDead || !ua.isCommandable()) continue;
+                if (ua.location == null || ua.location.units == null) continue;
+                if (ua.engagedBy != null && ua.turnLastEngaged == m.turn) continue; // already the combat tip's case
+                foreach (Unit other in ua.location.units)
+                {
+                    UA hero = other as UA;
+                    if (hero != null && hero != ua && !hero.isDead && !hero.isCommandable()) return true;
+                }
+            }
             return false;
         }
 

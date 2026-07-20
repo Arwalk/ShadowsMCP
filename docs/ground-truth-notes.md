@@ -166,6 +166,43 @@ All three end with `map.world.ui.checkData()`. The UI only offers drive-back/att
 the commander's tile** (it iterates `um.location.units`), so `command_army` enforces `target.location ==
 um.location`.
 
+## Agent-vs-agent actions — Attack / Rob / Trade / Follow (UA.cs:950-1105, UIScroll_Unit.cs:331-380)
+
+The same shape one level down: `UIScroll_Unit` walks `ua.location.units` for the selected agent and adds a
+cosmetic `UIE_Challenge` box per other `UA` on the tile, wired to a `UA.playerTriesTo*` method. Not
+`Challenge`s, not `Power`s. Replicated by `command_agent`, advertised by `Summaries.UnitOrders` →
+`AgentOrders`. Every one of them first refuses if `engagedBy != null && turnLastEngaged == map.turn`
+("must resolve this combat before taking action").
+
+- **Attack** — `playerTriesToAttack(UA other)` (UA.cs:950). Offered when `!other.isCommandable()`. Further
+  gates: `other` not itself engaged this turn; no `UA` on the tile whose `Task_Bodyguard.target == other`;
+  `task is Task_Disrupted` blocks. A `Task_PerformChallenge` with >4 turns of progress pops
+  `popConfirmOrder` first (the mod's `force` flag). Commit: `other.task = null;
+  new BattleAgents(this, other)` + `prefabStore.popBattle(battle)` → the `PopupBattleAgent` the mod already
+  drives. **`BattleAgents.setupBattle()` (BattleAgents.cs:69) nulls a `Task_PerformChallenge` on BOTH sides**
+  before round 1, so starting the fight destroys the target's ritual permanently — win, lose, flee, or
+  retreat. That is the sanctioned counter to the Chosen One's ritual, and it costs the attacker its own
+  in-progress challenge.
+- **Rob** — `playerTriesToRob(UA other)` (UA.cs:1039). Offered for a non-commandable `UAG`/`UAA`, disabled
+  unless `other.person.level < person.level`. Also gated on `map.turn - turnLastDidRobbery >= 5` (unless
+  `turnLastDidRobbery == 0`) and `!(task is Task_Disrupted)`. Commit order:
+  `addProfile(param.ua_robProfileGain)` (5), `addMenace(param.ua_robMenaceGain)` (15),
+  `turnLastDidRobbery = map.turn`, `popItemTrade(person, other.person, "Stealing Items")` — **the cost is
+  paid before the window opens**, so closing it empty-handed still costs profile and menace.
+- **Trade** — `playerTriesToTrade(UA other)` (UA.cs:1004). Offered when `other.isCommandable()`. Only the
+  engagement gate — notably it does **not** check `Task_Disrupted`. Commit: `popItemTrade(person,
+  other.person)`.
+- **Follow** — `playerTriesToFollow(Unit other)` (UA.cs:1019). Offered only when `this is UAE_Harvester` and
+  `other is UAG`. Commit: `task = new Task_Follow(this, other)`, then a `popMsg(..., force:true)`
+  confirmation the mod deliberately skips (a blocker with nothing to decide).
+- **Disrupt** — `playerTriesToDisrupt(UA)` (UA.cs:1069) exists and `UIE_Challenge.setToDisrupt` exists, but
+  **nothing wires them**: no UI path reaches it, so `command_agent` does not expose it.
+
+Player-initiated attacks are always **same-tile and immediate**. The AI's travel-then-attack `Task_AttackUnit`
+is not a player verb, and on a commandable attacker it resolves the duel through `BattleAgents.automatic()`
+(Task_AttackUnit.cs:114) — fought to the death with no flee/retreat menu — which is why `command_agent` has
+no "pursue" mode.
+
 ## Powers (Power.cs, God.cs, Overmind.cs, UIE_GodPower.cs, Sel_CastPower.cs)
 
 - `overmind.power: double` is the resource; `overmind.god.getPowers(): List<Power>`;

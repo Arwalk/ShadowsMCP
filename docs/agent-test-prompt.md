@@ -25,12 +25,12 @@ return. Do not use any tools other than the `shadows` server's.
 The game: you play a dark god corrupting the world through agents (your commandable units). You are
 authorized to freely mutate THIS game (it is expendable). Actions are irreversible — there is no save/undo.
 
-### Tools available (33)
+### Tools available (34)
 game_overview, get_threats, world_summary, list_locations, get_location, list_units, get_unit,
 list_persons, get_person, list_social_groups, get_social_group, list_wars, list_investigations,
 list_holy_orders, get_recent_events, get_player_state, get_victory_breakdown, list_recruitable_agents,
 list_powers, list_challenges, get_tips, inspect, move_unit, cancel_task, perform_challenge, use_power,
-recruit_agent, command_army, influence_holy_order_tenet, oppose_divinity, get_pending_decision,
+recruit_agent, command_army, command_agent, influence_holy_order_tenet, oppose_divinity, get_pending_decision,
 resolve_decision, end_turn.
 
 ### Preflight (if this fails, stop and report BLOCKED)
@@ -364,8 +364,9 @@ resolve_decision, end_turn.
 - L1 (error, wrong unit type): pick one of your agents (a `UA`, `kind:"agent"` from `list_units
   {"scope":"mine"}`) and call `command_army {"unitId":"U...","order":"raze"}`; assert a clean error saying it
   is not a military unit (agents can't raze). (Always testable.)
-- L2 (orders are military-only): `get_unit` on that same agent does NOT include an `orders` array (the key is
-  omitted for non-military units). Assert absence.
+- L2 (orders are per-unit-kind): `get_unit` on that same agent never lists a *military* order — if it has an
+  `orders` array at all, every `order` is one of {attack, rob, trade, follow} (the agent verbs, see M0), and
+  none is raze/drive_back/attack-an-army. An agent alone on its tile has no `orders` key at all. Assert.
 - L3 (error, bad order value): if you have any commandable **military** unit (`kind:"military"` AND
   `commandable:true` — from `list_units {"scope":"military"}`), call `command_army
   {"unitId":"U...","order":"nope"}` and assert a clean "unknown order" error. If you have no commandable
@@ -382,10 +383,18 @@ resolve_decision, end_turn.
   {"unitId":"U...","order":"attack"}` with no `targetUnitId` (or a `targetUnitId` for a unit not on its tile)
   returns a clean error asking for an on-tile target. Else SKIP.
 
-**M. Agent combat (`get_pending_decision` / `resolve_decision`)** — combat requires a hostile hero to reach
-one of your agents, which is **not forcible** on a short run. Watch `game_overview.threats.agentsUnderAttack`
-and `get_unit.engagedThisTurn` across your `end_turn`s; if no agent is ever attacked, mark M1–M4 **SKIP** with
-a note.
+**M. Agent combat (`command_agent`, `get_pending_decision` / `resolve_decision`)** — being *attacked* requires
+a hostile hero to reach one of your agents, which is **not forcible** on a short run, so M1–M5 are
+opportunistic: watch `game_overview.threats.agentsUnderAttack` and `get_unit.engagedThisTurn` across your
+`end_turn`s, and if no agent is ever attacked mark M1–M4 **SKIP** with a note. *Attacking* is under your own
+control (M0, M6–M9): move an agent onto a tile that holds a hostile hero — heroes cluster in settlements, so
+`list_units {"scope":"agents"}` (or `get_threats`) plus a `move_unit` usually arranges it within a few turns.
+- M0 (the attack is discoverable): with one of your agents sharing a tile with a hostile hero, assert the
+  option surfaces on the always-read tools without being asked for — `get_unit` (and `list_units
+  {"scope":"mine"}`) on that agent has an `orders` entry `{order:"attack", target, yourDangerEstimate,
+  theirDangerEstimate, hint}` whose `hint` is a literal `command_agent {...}` call, and
+  `get_threats.agentSafety` for that agent has a `hostilesOnTile` array naming the same hero (with its
+  `dangerEstimate` and `task`) plus an `attackHint`. Else SKIP (no co-located hero).
 - M1 (opportunistic, signal agreement): the first turn an agent is under attack, assert the signal is
   consistent across surfaces — `game_overview.threats.agentsUnderAttack ≥ 1` with an `underAttack` list; the
   same unit shows `engagedThisTurn:true` (+ `underAttackBy`) in both `list_units {"scope":"mine"}` and
@@ -408,6 +417,28 @@ a note.
 - M5 (opportunistic, army field battle): if any of your military units shows `inBattle:true` in `list_units`,
   assert `get_unit` on it has a `battle` block with `attackers`/`defenders`, `commandAdvantagePct`, and
   `advantageFavours`. Army battles auto-resolve and do NOT block `end_turn`. Else SKIP.
+- M6 (strike first — the core new verb): from the M0 setup, note the target hero's `task` via `get_unit`, then
+  issue the exact call the `hint` gave (`command_agent {"unitId":"U...","order":"attack","targetUnitId":"U..."}`).
+  Assert the result carries a `pendingDecision` **inline** with `popupType:"PopupBattleAgent"` (no separate
+  `get_pending_decision` needed) and reports `cancelledTargetTask`; then assert `get_unit` on the target shows
+  `task: null` — the target's challenge/ritual is broken. Resolve the duel via `resolve_decision` (fight, or
+  step then flee) and assert that the target's task is **still** null afterwards even if you fled or lost —
+  that is the "even if you retreat, the ritual is ruined" mechanic. If your agent had >4 turns of its own
+  challenge progress the first call returns a `force=true` prompt instead; retry with `"force":true`.
+- M7 (errors): assert each returns a clean error (isError, no state change) — `order:"attack"` with a
+  `targetUnitId` for a hero **not** on your agent's tile names the `move_unit` call to fix it;
+  `order:"attack"` at one of your own agents points you at `order:"trade"`; `order:"rob"` at a target whose
+  level is ≥ your agent's states both levels; `command_agent` on one of your **military** units says it is
+  not an agent and points at `command_army`; `order:"nope"` is a clean "unknown order".
+- M8 (opportunistic, trade between your agents): move two of your agents onto one tile; assert `get_unit` on
+  each lists an `order:"trade"` entry for the other, then `command_agent {"order":"trade",...}` returns an
+  inline `pendingDecision` with `popupType:"PopupItemTrading"` and both sides' items. Close it with
+  `resolve_decision` (the "Done" option). Else SKIP.
+- M9 (opportunistic, rob): if any agent's `orders` includes `order:"rob"` (a lower-level merchant/adventurer
+  on its tile, no robbery in the last 5 turns), snapshot the agent's `combat.profile`/`combat.menace`, issue
+  the call, and assert the result reports `profileGained`/`menaceGained`, that the two stats rose by those
+  amounts, and that a `PopupItemTrading` decision is returned inline. A second `rob` in the same 5 turns must
+  then fail with the cooldown error. Else SKIP.
 
 **N. Holy-order doctrine (`influence_holy_order_tenet`, `oppose_divinity`)** — if `list_holy_orders` is
 empty, mark N1–N8 SKIP. Spending influence is irreversible; that is fine on this expendable game.

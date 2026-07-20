@@ -73,6 +73,29 @@ mcp move_unit '{"unitId":"U1","locationId":"L12"}'
 - [ ] `mcp list_powers` → `mcp use_power` with a castable power and a valid target → visible effect
 - [ ] Invalid moves fail cleanly: moving an enemy unit, a bad location id, a stale id after reload
 
+## 6e. Agent-vs-agent actions (`command_agent`)
+
+Move one of your agents onto a tile that holds a hostile hero (settlements are the easy place to find one).
+
+```bash
+mcp get_unit '{"unitId":"U1"}'                  # 'orders' now lists attack/rob (+ dangerEstimates) with exact calls
+mcp command_agent '{"unitId":"U1","order":"attack","targetUnitId":"U9"}'
+```
+- [ ] In-game: the agent-duel window opens, exactly as clicking the hero's "Attack" box would
+- [ ] The tool result carries the battle **inline** as `pendingDecision.popupType == "PopupBattleAgent"`,
+      and names the target's cancelled task in `cancelledTargetTask`
+- [ ] `mcp get_unit '{"unitId":"U9"}'` → the target's `task` is now `null`. Then `resolve_decision` to
+      **flee/retreat** (from round 2) and confirm the task is **still** null — attacking breaks a ritual
+      permanently, win or lose. This is the counter to the Chosen One's ritual
+- [ ] If your agent had >4 turns of challenge progress, the first call refuses with a `force=true` hint
+      (attacking cancels *your* challenge too); `'{"force":true}'` goes through
+- [ ] While that battle is open, `mcp end_turn '{"force":true}'` does not advance (`blockedBy:"combat"`)
+- [ ] Errors are clean: an off-tile target names the `move_unit` call to reach it; your own agent as the
+      target points at `order:"trade"`; a guarded hero (`Task_Bodyguard`) names the guard to beat first
+- [ ] With two of your agents on one tile: `command_agent '{"order":"trade",...}'` opens the item window
+      in-game (`popupType:"PopupItemTrading"`), and items really move between them
+- [ ] `get_threats` → the agent's `agentSafety` entry lists `hostilesOnTile` with an `attackHint`
+
 ## 6c. Recruitment (enthralling new agents)
 
 ```bash
