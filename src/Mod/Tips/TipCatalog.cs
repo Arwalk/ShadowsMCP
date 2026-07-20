@@ -94,8 +94,12 @@ namespace ShadowsMcp.Tips
                 "Need a roster slot (cap grows with seals) + a recruitment point; losing all agents is not a loss.",
                 "To bring on a new agent you need two things: a free roster slot (your agent cap, which rises as " +
                 "you break seals) and a recruitment point (gained over time). See list_recruitable_agents and " +
-                "recruit_agent. Losing all your agents is NOT a loss - you are the god and your points regenerate; " +
-                "just recruit again. The game only truly ends when endOfGameAchieved is set."),
+                "recruit_agent. Archetypes are not interchangeable - they specialise by their stats (intrigue for " +
+                "infiltration and steering rulers, might/command for leading armies and combat, lore for rituals " +
+                "and knowledge), so pick the one that fits your current plan rather than always the first on the " +
+                "list; each archetype's placement.eligible and exampleTargets show where it can actually be " +
+                "enthralled right now. Losing all your agents is NOT a loss - you are the god and your points " +
+                "regenerate; just recruit again. The game only truly ends when endOfGameAchieved is set."),
 
             Core("panic_vs_awareness", "Panic vs. awareness", "world",
                 "worldPanic = vague dread from your actions; awareness = people who know the truth and fight you.",

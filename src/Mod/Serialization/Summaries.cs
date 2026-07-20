@@ -142,10 +142,12 @@ namespace ShadowsMcp
 
         // ---------- recruitment / end-of-game ----------
 
-        /// <summary>An agent archetype you can enthrall (from overmind.agentsGeneric/agentsUnique).</summary>
-        public static JsonValue AbstractionSummary(UAE_Abstraction abstr, string category)
+        /// <summary>An agent archetype you can enthrall (from overmind.agentsGeneric/agentsUnique).
+        /// When <paramref name="placement"/> is supplied it is attached as a "placement" object saying
+        /// where this archetype can actually be enthralled right now (see <see cref="PlacementSummary"/>).</summary>
+        public static JsonValue AbstractionSummary(UAE_Abstraction abstr, string category, JsonValue placement = null)
         {
-            return JsonValue.NewObject()
+            JsonValue o = JsonValue.NewObject()
                 .Set("code", abstr.code)
                 .Set("name", SafeName(() => abstr.getName()))
                 .Set("category", category)
@@ -156,6 +158,44 @@ namespace ShadowsMcp
                     .Set("command", abstr.getStatCommand()))
                 .Set("restrictions", SafeName(() => abstr.getRestrictions()))
                 .Set("desc", SafeName(() => abstr.getDesc()));
+            if (placement != null) o.Set("placement", placement);
+            return o;
+        }
+
+        /// <summary>
+        /// Up to <paramref name="max"/> locations where <paramref name="abstr"/> can be enthralled
+        /// right now, per the game's own UAE_Abstraction.validTarget. Early-stops at max; a throwing
+        /// validTarget is treated as "not a valid target" so one odd location can't break the scan.
+        /// Note: validTarget also returns false for every archetype once the roster is at its agent
+        /// cap, so results are only meaningful while capacity.canRecruit is true.
+        /// </summary>
+        public static List<Location> ValidTargets(Map map, UAE_Abstraction abstr, int max)
+        {
+            var hits = new List<Location>();
+            if (map == null || abstr == null) return hits;
+            foreach (Location l in map.locations)
+            {
+                bool ok;
+                try { ok = abstr.validTarget(l); }
+                catch { ok = false; }
+                if (!ok) continue;
+                hits.Add(l);
+                if (hits.Count >= max) break;
+            }
+            return hits;
+        }
+
+        /// <summary>Where an archetype can actually be enthralled right now: an "eligible" flag plus a
+        /// few example target locations. Turns the free-text restrictions into something an agent can
+        /// act on instead of guessing. See <see cref="ValidTargets"/> for the agent-cap caveat.</summary>
+        public static JsonValue PlacementSummary(Map map, UAE_Abstraction abstr, int maxExamples)
+        {
+            List<Location> targets = ValidTargets(map, abstr, maxExamples);
+            JsonValue examples = JsonValue.NewArray();
+            foreach (Location l in targets) examples.Add(LocationRef(l));
+            return JsonValue.NewObject()
+                .Set("eligible", targets.Count > 0)
+                .Set("exampleTargets", examples);
         }
 
         /// <summary>

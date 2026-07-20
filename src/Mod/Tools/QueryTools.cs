@@ -431,7 +431,11 @@ namespace ShadowsMcp.Tools
                 "What you can recruit right now: your recruitment capacity, the agent archetypes you can " +
                 "enthrall onto a location (pass an archetype's code to recruit_agent with a target locationId), " +
                 "and any existing heroes corrupted enough to turn to your side in place (pass their unit id " +
-                "as recruit_agent's heroUnitId). Recruiting spends one recruitment point.",
+                "as recruit_agent's heroUnitId). Recruiting spends one recruitment point. Archetypes specialise " +
+                "by their stats - intrigue for infiltration and steering rulers, might/command for leading armies " +
+                "and combat, lore for rituals and knowledge - and each carries a placement object with " +
+                "eligible + exampleTargets showing where it can actually go right now (meaningful while " +
+                "capacity.canRecruit is true). Match the pick to your current need instead of always taking the first one.",
                 Schema.Object(),
                 a => WithMap(ctx, map =>
                 {
@@ -441,8 +445,8 @@ namespace ShadowsMcp.Tools
                     int cap = om.getAgentCap();
 
                     JsonValue archetypes = JsonValue.NewArray();
-                    foreach (UAE_Abstraction ab in om.agentsGeneric) archetypes.Add(Summaries.AbstractionSummary(ab, "generic"));
-                    foreach (UAE_Abstraction ab in om.agentsUnique) archetypes.Add(Summaries.AbstractionSummary(ab, "unique"));
+                    foreach (UAE_Abstraction ab in om.agentsGeneric) archetypes.Add(Summaries.AbstractionSummary(ab, "generic", Summaries.PlacementSummary(map, ab, 4)));
+                    foreach (UAE_Abstraction ab in om.agentsUnique) archetypes.Add(Summaries.AbstractionSummary(ab, "unique", Summaries.PlacementSummary(map, ab, 4)));
 
                     JsonValue heroes = JsonValue.NewArray();
                     foreach (Unit u in map.units)

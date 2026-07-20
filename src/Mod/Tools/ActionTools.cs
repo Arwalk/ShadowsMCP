@@ -405,8 +405,30 @@ namespace ShadowsMcp.Tools
 
             // validTarget also enforces the agent cap; getRestrictions explains a placement failure.
             if (!abstr.validTarget(target))
-                return ToolResult.Error("cannot place " + abstr.getName() + " at " + target.getName() +
-                    ": " + abstr.getRestrictions());
+            {
+                string msg = "cannot place " + abstr.getName() + " at " + target.getName() +
+                    ": " + abstr.getRestrictions();
+                // Point the agent at where this archetype CAN go, so a bad placement teaches
+                // "here is a valid target" rather than "non-Hierophant recruits just fail".
+                List<Location> suggestions = Summaries.ValidTargets(map, abstr, 4);
+                if (suggestions.Count > 0)
+                {
+                    var parts = new List<string>();
+                    foreach (Location l in suggestions)
+                    {
+                        string nm; try { nm = l.getName(); } catch { nm = "?"; }
+                        parts.Add(Summaries.LocationId(l) + " (" + nm + ")");
+                    }
+                    msg += " - valid targets right now include: " + string.Join(", ", parts) +
+                        " (see list_recruitable_agents -> placement.exampleTargets).";
+                }
+                else
+                {
+                    msg += " - no location currently satisfies this archetype; pick a different agentCode " +
+                        "(see list_recruitable_agents).";
+                }
+                return ToolResult.Error(msg);
+            }
 
             // Commit, mirroring Sel_CreateAgent.onClick: createAgent then fire the onAgentCreated mod hook.
             int beforeUnits = map.units.Count;

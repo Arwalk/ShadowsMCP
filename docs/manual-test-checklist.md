@@ -81,14 +81,15 @@ mcp list_recruitable_agents
 ```
 - [ ] `list_recruitable_agents.capacity` shows `availableEnthrallments`, `nEnthralled`, `agentCap`,
       `canRecruit`; `archetypes` lists agents (e.g. a Hierophant — "Can be placed anywhere") with codes,
-      stats and restrictions
+      stats, restrictions, and a `placement` object (`eligible` + up to 4 `exampleTargets`)
 - [ ] Recruit an archetype onto a valid location (Hierophant works almost anywhere):
       `mcp recruit_agent '{"agentCode":-1,"locationId":"L12"}'` → a new agent appears in-game and in
       `list_units` (scope mine); `availableEnthrallments` dropped by 1; result may flag `levelUpPending`
 - [ ] The new agent's level-up (if `map.automatic` is off) surfaces as a pending decision — resolve it
       via `resolve_decision` or `end_turn '{"resolveOptionIndex":0}'`
 - [ ] Error paths return clean messages, not crashes: with 0 points ("no recruitment points"), at the
-      agent cap ("agent cap reached (n/cap)"), a bad target (returns the archetype's restriction text),
+      agent cap ("agent cap reached (n/cap)"), a bad target (returns the archetype's restriction text
+      plus suggested valid targets, or a "no location satisfies" note),
       both/neither of agentCode+heroUnitId, an archetype code with no locationId
 - [ ] **Hero corruption:** with a hero at ≥98% shadow or insane listed under
       `list_recruitable_agents.corruptibleHeroes`, `mcp recruit_agent '{"heroUnitId":"U9"}'` corrupts it

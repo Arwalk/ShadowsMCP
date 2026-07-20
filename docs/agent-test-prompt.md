@@ -124,9 +124,17 @@ recruit_agent, command_army, get_pending_decision, resolve_decision, end_turn.
 
 **F. Recruitment**
 - F1: `list_recruitable_agents` returns `capacity` (availableEnthrallments, nEnthralled, agentCap,
-  canRecruit), `archetypes` (each with code, stats, restrictions), and `corruptibleHeroes`.
+  canRecruit), `archetypes` (each with code, stats, restrictions, and a `placement` object with
+  `eligible` + `exampleTargets`), and `corruptibleHeroes`.
+- F1b (placement data): every archetype carries `placement.eligible` (bool) and `placement.exampleTargets`
+  (up to 4 location refs where it can be enthralled right now). For a **gated** archetype (restriction is
+  not "can be placed anywhere") with `eligible:true`, each example plausibly matches the restriction (e.g.
+  a Warlock's examples are library-cities); if nothing qualifies, `eligible:false` and `exampleTargets` is
+  empty. The Hierophant (`code -1`) is always `eligible:true` with several examples. (Only meaningful while
+  `capacity.canRecruit` is true — at the agent cap every archetype reports `eligible:false`.)
 - F2: if `capacity.canRecruit` is true, pick an archetype with a permissive restriction (e.g. one whose
-  restriction says "can be placed anywhere", typically the Hierophant, code -1) and a valid `locationId`;
+  restriction says "can be placed anywhere", typically the Hierophant, code -1) and a valid `locationId`
+  (any id from that archetype's `placement.exampleTargets` is guaranteed to work);
   snapshot `availableEnthrallments` and `list_units {"scope":"mine"}` count; `recruit_agent
   {"agentCode":<code>,"locationId":"L..."}`; assert a new agent appears (mine count +1),
   `availableEnthrallments` −1, and the result may include `levelUpPending`. If `canRecruit` is false, SKIP
@@ -135,7 +143,9 @@ recruit_agent, command_army, get_pending_decision, resolve_decision, end_turn.
 - F4 (error): `recruit_agent {"agentCode":<code>,"heroUnitId":"U1"}` (both) errors.
 - F5 (error): `recruit_agent {"agentCode":<code>}` (no locationId) errors asking for a location.
 - F6 (error): recruit an archetype with a **restrictive** placement onto an invalid location (e.g. a
-  location that clearly doesn't meet its restriction) — errors with the archetype's restriction text.
+  location that clearly doesn't meet its restriction) — errors with the archetype's restriction text, and
+  the message also lists suggested valid targets ("valid targets right now include: L…") or, when none
+  exist, says no location currently satisfies the archetype.
 - F7 (opportunistic): if `corruptibleHeroes` is non-empty, `recruit_agent {"heroUnitId":"U..."}` corrupts it
   in place — that unit becomes commandable (`get_unit.commandable` true) and `availableEnthrallments` drops.
   Else SKIP.
