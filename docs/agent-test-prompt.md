@@ -185,7 +185,8 @@ resolve_decision, end_turn.
 - G5 (opportunistic, agent death): if an agent dies, the popup kind decides the expectation — the turn
   always still advances. A non-combat death surfaces as a `kind:"death"` NOTICE (`PopupMsgAgentsDeath`):
   assert `end_turn {"force":true}` auto-dismisses it (`autoDismissed.count > 0`, `dismissed` includes
-  `"death"`). A lost **battle** instead raises a `kind:"event"` "Defeat" popup (`PopupEvent`): assert
+  `"death"`) and NAMES it: `digest.dismissed` contains an entry with `kind:"death"`, a `turn`, and a
+  non-empty `title` mentioning the agent. A lost **battle** instead raises a `kind:"event"` "Defeat" popup (`PopupEvent`): assert
   `force` does NOT auto-dismiss it (narrative events are never auto-answered, so no `autoDismissed` entry
   for it) yet `turn` still advances, and it clears via `resolve_decision {"optionIndex":0}` /
   `end_turn {"resolveOptionIndex":0}`. Test whichever path occurs; SKIP the rest.
@@ -211,8 +212,27 @@ resolve_decision, end_turn.
   (`passIdleAgents` so an idle agent doesn't legitimately stop the batch at `advancedBy:0`); assert the result
   has `advancedBy` (1–3), `requestedCount:3` and a `stoppedEarly` bool, and that `turn` rose by exactly
   `advancedBy`. If `stoppedEarly` is true, assert a `stopReason` is present
-  (decision / gameOver / threatEscalation / threatMotivation / notAdvanced). (Without `passIdleAgents`, an
-  idle agent is expected to stop the batch early with `advancedBy:0`, `stopReason:"decision"` — see G4.)
+  (decision / gameOver / unitLost / threatEscalation / threatMotivation / notAdvanced). (Without
+  `passIdleAgents`, an idle agent is expected to stop the batch early with `advancedBy:0`,
+  `stopReason:"decision"` — see G4.)
+- H5b (digest spans the whole batch — the anti-blackout guarantee): run
+  `end_turn {"count":5,"force":true,"passIdleAgents":true}` and inspect `digest`. Assert (a) every
+  `digest.dismissed` entry carries a `turn` and, unless the popup genuinely has no text, a non-empty
+  `title` — a bare kind list is a regression; (b) if `advancedBy > 1` and entries exist across turns,
+  their `turn` values are NOT all equal to the final turn (the batch used to report only the last turn);
+  (c) no `digest.dismissed` entry has `popupType:"PopupMsgUnified"` (those are reported once, in
+  `digest.events`); (d) `autoDismissed.count` is the total over the whole batch, i.e. ≥ the number of
+  `digest.dismissed` entries. If nothing was dismissed in those 5 turns, SKIP (a)–(d) and retry later.
+- H5c (digest.events is a filtered view of the event log): after H5b, call
+  `get_recent_events {"limit":40}` and assert every `digest.events` entry has a matching entry there
+  (same `turn` + `title`) — the digest must never invent news. Assert entries about your own units carry
+  `mine:true`. SKIP if `digest.events` is absent.
+- H5d (opportunistic, unit loss stops the batch — the case that lost a real game): if one of your
+  commandable units (agent OR army) dies during a `count>1` batch, assert the result has
+  `stopReason:"unitLost"`, `advancedBy < requestedCount`, and `digest.lost` naming the unit
+  (`unit` id, `name`, and a `lastLocation` when it had one). Assert the batch did NOT keep advancing
+  past the death. To provoke it, `command_army` a weak army onto a stronger enemy, or let a hunted,
+  outmatched agent stay in the open. SKIP if you never lose a unit.
 - H6 (opportunistic, threatAlert): if any `end_turn` (single or batched) returns a `threatAlert`, assert it
   is an array whose entries each name an `agent`, a `trigger`
   (becameHuntable / gainedHunter / worsened / motivation), and — when a hunter is present — a hunter with a

@@ -124,11 +124,18 @@ namespace ShadowsMcp.Tools
                 + "the affected agents (each tagged with what triggered it). Set stopOnThreatMotivation to also "
                 + "halt when a hunter's motivation toward an agent is at or above that percent - it fires "
                 + "whether motivation rose to it mid-batch OR was already there at the start, and can exceed "
-                + "100 for a strongly-inclined hunter. A 'tips' array may also appear, "
+                + "100 for a strongly-inclined hunter. EVERY call returns a 'digest' of what actually "
+                + "happened, covering every turn of the batch (not just the last): digest.dismissed names "
+                + "each popup force cleared, digest.events lists the turn's notable news (razing, battles, "
+                + "deaths, wars, seal/prophecy progress - entries touching your own units are tagged "
+                + "mine:true), and digest.lost names any of YOUR units that died. Losing a unit also stops a "
+                + "batch immediately with stopReason:\"unitLost\", so a dead army is never followed by turns "
+                + "played blind. Read the digest - it is the only place a batch's news appears in full "
+                + "(get_recent_events has the unabridged log). A 'tips' array may also appear, "
                 + "explaining a mechanic that just became relevant.",
                 Schema.Object(
-                    Schema.Prop("count", Schema.Integer("Advance up to this many turns (default 1, max 10). Stops early on any decision, game over, or a meaningful threat escalation (an agent becomes huntable, a hero it is not favoured against starts hunting it, or its odds worsen).")),
-                    Schema.Prop("force", Schema.Boolean("Auto-resolve level-up/skill-point interruptions and dismiss purely-informational popups (the death NOTICE, message boxes). Does NOT skip a pending battle OR the idle-agent alert (both always block, like combat) or a narrative event (kind:event, including a lost battle's Defeat popup) - resolve those explicitly (order the idle agents, or pass them with resolveOptionIndex 0). In a count>1 batch, idle blocks the first idle turn (advancedBy may be 0) unless agents hold standing orders or you pass passIdleAgents:true.")),
+                    Schema.Prop("count", Schema.Integer("Advance up to this many turns (default 1, max 10). Stops early on any decision, game over, the loss of one of your units (stopReason:\"unitLost\", with digest.lost naming it), or a meaningful threat escalation (an agent becomes huntable, a hero it is not favoured against starts hunting it, or its odds worsen). The returned digest covers every turn advanced, not just the last.")),
+                    Schema.Prop("force", Schema.Boolean("Auto-resolve level-up/skill-point interruptions and dismiss purely-informational popups (the death NOTICE, message boxes). Nothing is lost by doing so: every dismissal is named in digest.dismissed and the turn's news in digest.events. Does NOT skip a pending battle OR the idle-agent alert (both always block, like combat) or a narrative event (kind:event, including a lost battle's Defeat popup) - resolve those explicitly (order the idle agents, or pass them with resolveOptionIndex 0). In a count>1 batch, idle blocks the first idle turn (advancedBy may be 0) unless agents hold standing orders or you pass passIdleAgents:true.")),
                     Schema.Prop("passIdleAgents", Schema.Boolean("Deliberate fast-forward opt-in: bulk-pass every idle agent (a visible 'Passing Turn') each turn so a multi-turn advance doesn't stop on the recurring idle-agent alert. Unlike force this is a conscious choice to waste those agents' turns - prefer giving them standing orders instead. Only affects idle; combat and narrative events still block.")),
                     Schema.Prop("resolveOptionIndex", Schema.Integer("If a decision popup is blocking the turn, choose this option (index from the pendingDecision options) to resolve it, then continue ending the turn")),
                     Schema.Prop("stopOnThreatMotivation", Schema.Integer("Opt-in caution: stop the batch on the first turn a hunter's motivation toward one of your agents is AT OR ABOVE this percent, even while the agent is still favoured - catches threat building up before an agent becomes huntable. Level-triggered: fires whether the hunter rose to it mid-batch OR was already there at batch start. Motivation can exceed 100 for a strongly-inclined hunter, so a threshold above 100 is valid (e.g. 150 = only when strongly inclined). Omit or 0 to disable (default)."))),
@@ -635,6 +642,62 @@ namespace ShadowsMcp.Tools
 
         private enum StepStatus { Advanced, GameOver, Blocked, NotAdvanced, Error }
 
+        /// <summary>
+        /// Accumulates "what actually happened" across EVERY turn of one end_turn call, so a batched
+        /// advance can no longer swallow the news. Three streams, each entry tagged with its turn:
+        /// <c>dismissed</c> (the named popups force cleared - see
+        /// <c>DecisionRegistry.AutoDismissInformational</c>'s <c>items</c>), <c>events</c> (the turn's
+        /// notable unified messages - see <c>Summaries.NotableTurnEvents</c>), and <c>lost</c> (your units
+        /// that died - see <c>Summaries.EvaluateUnitLoss</c>).
+        ///
+        /// Capped per stream to keep a 10-turn batch's response affordable; anything dropped is counted in
+        /// <c>truncated</c> rather than silently discarded (the full history is always in
+        /// <c>get_recent_events</c>). Losses are never capped - they are the whole point.
+        /// </summary>
+        private sealed class TurnDigest
+        {
+            private const int MaxDismissed = 20;
+            private const int MaxEvents = 20;
+
+            private readonly JsonValue _dismissed = JsonValue.NewArray();
+            private readonly JsonValue _events = JsonValue.NewArray();
+            private JsonValue _lost = JsonValue.Null;
+            private int _truncated;
+
+            /// <summary>Take one turn's named dismissals (<c>autoDismissed.items</c>) and notable events.</summary>
+            public void Absorb(JsonValue dismissedItems, JsonValue events)
+            {
+                Append(_dismissed, dismissedItems, MaxDismissed);
+                Append(_events, events, MaxEvents);
+            }
+
+            public void SetLost(JsonValue lost) { _lost = lost; }
+
+            private void Append(JsonValue into, JsonValue from, int cap)
+            {
+                if (from.IsNull) return;
+                for (int i = 0; i < from.Count; i++)
+                {
+                    if (into.Count >= cap) { _truncated++; continue; }
+                    into.Add(from[i]);
+                }
+            }
+
+            /// <summary>The digest object, or null when the call had nothing to report.</summary>
+            public JsonValue ToJson()
+            {
+                if (_dismissed.Count == 0 && _events.Count == 0 && _lost.IsNull) return JsonValue.Null;
+                JsonValue o = JsonValue.NewObject();
+                if (_dismissed.Count > 0) o.Set("dismissed", _dismissed);
+                if (_events.Count > 0) o.Set("events", _events);
+                if (!_lost.IsNull) o.Set("lost", _lost);
+                if (_truncated > 0)
+                    o.Set("truncated", _truncated)
+                     .Set("truncatedHint", "older entries were dropped - call get_recent_events for the full log.");
+                return o;
+            }
+        }
+
         private static ToolResult EndTurn(GameContext ctx, Map map, bool force, JsonValue args)
         {
             World world = map.world;
@@ -650,15 +713,21 @@ namespace ShadowsMcp.Tools
             if (count == 1)
             {
                 var before1 = Summaries.ComputeAgentSafety(ctx, map);
+                var roster1 = Summaries.ComputeOwnedRoster(ctx, map);
+                var digest1 = new TurnDigest();
                 StepStatus st1;
-                JsonValue payload1 = AdvanceOneTurn(ctx, map, world, force, applyResolve: true, args, out st1);
+                JsonValue payload1 = AdvanceOneTurn(ctx, map, world, force, applyResolve: true, args, digest1, out st1);
                 if (st1 == StepStatus.Error) return ToolResult.Error(payload1["error"].AsString());
                 if (st1 == StepStatus.Advanced)
                 {
+                    // Losses first: a unit you no longer have outranks any warning about one you still do.
+                    digest1.SetLost(Summaries.EvaluateUnitLoss(ctx, map, roster1));
                     JsonValue alert1; string reason1;
                     Summaries.EvaluateThreatStop(ctx, map, before1, args["stopOnThreatMotivation"].AsInt(0), out alert1, out reason1);
                     if (!alert1.IsNull) payload1.Set("threatAlert", alert1);
                 }
+                JsonValue d1 = digest1.ToJson();
+                if (!d1.IsNull) payload1.Set("digest", d1);
                 JsonValue tips1 = TipEngine.CollectContextual(ctx);
                 if (!tips1.IsNull) payload1.Set("tips", tips1);
                 return ToolResult.Ok(payload1);
@@ -667,10 +736,17 @@ namespace ShadowsMcp.Tools
             // Multi-turn batch: advance up to count turns, stopping early on a decision, game over, or a
             // threat escalation so a batched advance never blows past an agent walking into danger.
             var before = Summaries.ComputeAgentSafety(ctx, map);
+            var roster = Summaries.ComputeOwnedRoster(ctx, map);
+            var digest = new TurnDigest();
             int advancedBy = 0;
             string stopReason = null;
             JsonValue firstResolved = JsonValue.Null;
-            JsonValue lastAutoDismiss = JsonValue.Null;
+            // Dismissals accumulate over the WHOLE batch (this used to keep only the last turn's object,
+            // so a 10-turn force batch reported turn 10 and silently dropped turns 1-9).
+            int dismissTotal = 0;
+            JsonValue dismissKinds = JsonValue.NewArray();
+            JsonValue dismissRemaining = JsonValue.Null;
+            bool dismissCappedOut = false;
             JsonValue pending = JsonValue.Null;
             JsonValue threatAlert = JsonValue.Null;
             JsonValue gameOverPayload = JsonValue.Null;
@@ -678,12 +754,12 @@ namespace ShadowsMcp.Tools
             for (int i = 0; i < count; i++)
             {
                 StepStatus st;
-                JsonValue payload = AdvanceOneTurn(ctx, map, world, force, applyResolve: i == 0, args, out st);
+                JsonValue payload = AdvanceOneTurn(ctx, map, world, force, applyResolve: i == 0, args, digest, out st);
                 if (st == StepStatus.Error && payload["transient"].AsBool())
                 {
                     // Benign mid-tick collision (an event mutated a world collection): retry this turn once
                     // before giving up. Any resolveOptionIndex was already applied on the first attempt.
-                    payload = AdvanceOneTurn(ctx, map, world, force, applyResolve: false, args, out st);
+                    payload = AdvanceOneTurn(ctx, map, world, force, applyResolve: false, args, digest, out st);
                 }
 
                 if (st == StepStatus.Error)
@@ -698,7 +774,22 @@ namespace ShadowsMcp.Tools
                 // Advanced.
                 advancedBy++;
                 if (i == 0 && !payload["resolved"].IsNull) firstResolved = payload["resolved"];
-                if (!payload["autoDismissed"].IsNull) lastAutoDismiss = payload["autoDismissed"];
+                JsonValue ad = payload["autoDismissed"];
+                if (!ad.IsNull)
+                {
+                    dismissTotal += ad["count"].AsInt(0);
+                    foreach (JsonValue k in ad["dismissed"].Items) dismissKinds.Add(k);
+                    dismissRemaining = ad["remaining"];
+                    if (ad["cappedOut"].AsBool()) dismissCappedOut = true;
+                }
+
+                // Losing a unit stops the batch, like a threat escalation - checked BEFORE the threat scan so
+                // a death is never masked by a warning about an agent that is merely in danger. This is the
+                // gap that let an army (a UM, which the UA-only threat scan never sees) die on turn 2 of a
+                // ten-turn batch with the remaining eight played blind.
+                JsonValue lost = Summaries.EvaluateUnitLoss(ctx, map, roster);
+                if (!lost.IsNull) { digest.SetLost(lost); stopReason = "unitLost"; break; }
+
                 // A decision may have popped mid-processing even though the turn advanced; stop and surface it.
                 if (!payload["pendingDecision"].IsNull) { pending = payload["pendingDecision"]; stopReason = "decision"; break; }
 
@@ -716,7 +807,15 @@ namespace ShadowsMcp.Tools
                 .Set("stoppedEarly", advancedBy < count);
             if (advancedBy < count && stopReason != null) result.Set("stopReason", stopReason);
             if (!firstResolved.IsNull) result.Set("resolved", firstResolved);
-            if (!lastAutoDismiss.IsNull && lastAutoDismiss["count"].AsInt(0) > 0) result.Set("autoDismissed", lastAutoDismiss);
+            if (dismissTotal > 0)
+            {
+                JsonValue ad = JsonValue.NewObject()
+                    .Set("count", dismissTotal)          // whole batch, not just the final turn
+                    .Set("dismissed", dismissKinds);
+                if (!dismissRemaining.IsNull) ad.Set("remaining", dismissRemaining);
+                if (dismissCappedOut) ad.Set("cappedOut", true);
+                result.Set("autoDismissed", ad);
+            }
             if (!pending.IsNull) result.Set("pendingDecision", pending); // already decorated by AdvanceOneTurn
             if (!threatAlert.IsNull) result.Set("threatAlert", threatAlert);
             if (!gameOverPayload.IsNull)
@@ -725,6 +824,8 @@ namespace ShadowsMcp.Tools
                       .Set("outcome", gameOverPayload["outcome"])
                       .Set("victoryMode", gameOverPayload["victoryMode"]);
             }
+            JsonValue dig = digest.ToJson();
+            if (!dig.IsNull) result.Set("digest", dig);
             JsonValue tips = TipEngine.CollectContextual(ctx);
             if (!tips.IsNull) result.Set("tips", tips);
             return ToolResult.Ok(result);
@@ -732,8 +833,10 @@ namespace ShadowsMcp.Tools
 
         /// <summary>Advance exactly one turn. Returns the per-turn payload and sets <paramref name="status"/>
         /// so the caller (single call or batch loop) knows whether it advanced, hit game over, is blocked by
-        /// a decision, made partial progress, or errored. Mirrors the game's own end-turn guard sequence.</summary>
-        private static JsonValue AdvanceOneTurn(GameContext ctx, Map map, World world, bool force, bool applyResolve, JsonValue args, out StepStatus status)
+        /// a decision, made partial progress, or errored. Mirrors the game's own end-turn guard sequence.
+        /// Feeds this turn's named dismissals and notable events straight into <paramref name="digest"/>, so
+        /// they survive a batch instead of being overwritten by the next turn.</summary>
+        private static JsonValue AdvanceOneTurn(GameContext ctx, Map map, World world, bool force, bool applyResolve, JsonValue args, TurnDigest digest, out StepStatus status)
         {
             // The game is over: stop advancing and say so unmistakably. Losing your agents is NOT this -
             // only Overmind.endOfGameAchieved (heroes reforged the seals / fulfilled the prophecy, or you won).
@@ -833,15 +936,23 @@ namespace ShadowsMcp.Tools
                     "and call end_turn again.");
             }
 
+            // Name every popup force just cleared into the digest, whether or not the turn advanced.
+            if (digest != null) digest.Absorb(autoDismiss["items"], JsonValue.Null);
+
             if (after > before)
             {
                 status = StepStatus.Advanced;
+                // The turn's notable unified messages (razing, battles, deaths, wars). Read here, while
+                // map.turnUnifiedMessages still holds this turn's batch - the next turnTick wipes it. Guarded
+                // by the advance so a non-advancing call cannot re-report the previous turn's messages.
+                if (digest != null) digest.Absorb(JsonValue.Null, Summaries.NotableTurnEvents(ctx, map, after));
+
                 JsonValue result = JsonValue.NewObject()
                     .Set("turn", after)
                     .Set("advancedBy", after - before);
                 if (!resolved.IsNull) result.Set("resolved", resolved);
                 if (!autoDismiss.IsNull && autoDismiss["count"].AsInt(0) > 0)
-                    result.Set("autoDismissed", autoDismiss);
+                    result.Set("autoDismissed", CompactDismiss(autoDismiss));
                 // A fresh decision may have popped during processing (e.g. an event's follow-up). When the
                 // caller opted into passIdleAgents, don't surface the idle alert they'll re-raise next turn
                 // (Task_PassTurn clears each turnTick) — else a passIdleAgents batch would stop on it every turn.
@@ -891,6 +1002,16 @@ namespace ShadowsMcp.Tools
             status = StepStatus.Error;
             string diag = DiagnoseEndTurnBlock(map, world);
             return JsonValue.NewObject().Set("error", "the turn did not advance: " + diag);
+        }
+
+        /// <summary>The auto-dismiss summary minus its <c>items</c> array — the counts stay on
+        /// <c>autoDismissed</c>, the named entries live once, in <c>digest.dismissed</c>.</summary>
+        private static JsonValue CompactDismiss(JsonValue autoDismiss)
+        {
+            JsonValue o = JsonValue.NewObject();
+            foreach (var kv in autoDismiss.Members)
+                if (kv.Key != "items") o.Set(kv.Key, kv.Value);
+            return o;
         }
 
         /// <summary>Tag a pending-decision object with how to answer it through end_turn.</summary>

@@ -1540,6 +1540,171 @@ namespace ShadowsMcp
             reason = danger ? "threatEscalation" : (motivation ? "threatMotivation" : null);
         }
 
+        // ---------- end_turn digest ----------
+
+        /// <summary>
+        /// Message types that always make end_turn's digest, whoever they are about: the things a player
+        /// who looked away for ten turns MUST be told happened. Everything else only qualifies when it
+        /// touches one of your own units (see <see cref="NotableTurnEvents"/>).
+        /// </summary>
+        private static readonly HashSet<UnifiedMessage.messageType> NotableMessageTypes =
+            new HashSet<UnifiedMessage.messageType>
+            {
+                // deaths
+                UnifiedMessage.messageType.DEATH, UnifiedMessage.messageType.AGENT_DIES,
+                UnifiedMessage.messageType.HERO_DIES, UnifiedMessage.messageType.PROPHET_DIES,
+                UnifiedMessage.messageType.KILLED_BY_DANGER, UnifiedMessage.messageType.DEATH_EXPLORING_RUINS,
+                // battle / armies
+                UnifiedMessage.messageType.BATTLE, UnifiedMessage.messageType.ARMY_ORDERED_TO_ATTACK_ARMY,
+                UnifiedMessage.messageType.ARMY_BLOCKS, UnifiedMessage.messageType.ARMY_DRIVES_BACK,
+                // razing / territory
+                UnifiedMessage.messageType.RAZED_DURING_WAR, UnifiedMessage.messageType.RAZE_ORDER_ISSUED,
+                UnifiedMessage.messageType.OPHANIM_RAZE_ORDERS, UnifiedMessage.messageType.ALLIANCE_OUTPOST,
+                // war
+                UnifiedMessage.messageType.WAR, UnifiedMessage.messageType.CRUSADE,
+                UnifiedMessage.messageType.CIVIL_WAR,
+                // the loss clock
+                UnifiedMessage.messageType.SEALS_REFORGING, UnifiedMessage.messageType.PROPHECY_FULFILLING,
+                UnifiedMessage.messageType.CHOSEN_ONE_FUNDED, UnifiedMessage.messageType.CHOSEN_ONE_MENACE,
+                // exposure
+                UnifiedMessage.messageType.CULTISTS_EXPOSED, UnifiedMessage.messageType.CULTISTS_ARRESTED,
+                UnifiedMessage.messageType.SHADOW_MARKET_RAIDED, UnifiedMessage.messageType.SHADOW_DRIVEN_BACK,
+                UnifiedMessage.messageType.AGENT_SABOTAGED, UnifiedMessage.messageType.EVIDENCE_REPORTED,
+                // being hunted
+                UnifiedMessage.messageType.HERO_ATTACKING, UnifiedMessage.messageType.HERO_WITH_ESCORT_ATTACKING,
+                UnifiedMessage.messageType.NEMESIS_GAINED, UnifiedMessage.messageType.VENDETTA,
+            };
+
+        /// <summary>Types suppressed from the digest even when they concern one of your units, because the
+        /// agent already learns them through a dedicated channel or they are pure chatter.</summary>
+        private static readonly HashSet<UnifiedMessage.messageType> DigestNoiseTypes =
+            new HashSet<UnifiedMessage.messageType>
+            {
+                UnifiedMessage.messageType.AGENT_IDLE,    // surfaces as the idleAgents decision
+                UnifiedMessage.messageType.TUTORIAL,
+                UnifiedMessage.messageType.UNIT_ARRIVES,
+                UnifiedMessage.messageType.TASK_CANCELLED,
+            };
+
+        /// <summary>
+        /// The turn's <c>Map.turnUnifiedMessages</c>, filtered to what an unattended player needs to hear:
+        /// anything touching one of your own units (tagged <c>mine</c>) plus a fixed high-severity whitelist
+        /// (razing, battles, deaths, wars, the seal/prophecy clock). This is the same stream
+        /// <c>RecentEventLog.SnapshotTurn</c> archives — the digest is a filtered *view* of it, so anything
+        /// here also appears in <c>get_recent_events</c>.
+        ///
+        /// Must be called in the same window as the snapshot (right after <c>bEndTurn</c>), before the next
+        /// <c>turnTick</c> wipes the list. Returns <c>JsonValue.Null</c> when nothing qualifies.
+        /// </summary>
+        public static JsonValue NotableTurnEvents(GameContext ctx, Map map, int turn)
+        {
+            if (map == null || map.turnUnifiedMessages == null) return JsonValue.Null;
+
+            // Locations one of your commandable units currently stands on — the cheap, crisp "mine" test
+            // for a message whose subject is a place rather than a unit.
+            var myLocations = new HashSet<Location>();
+            if (map.units != null)
+                foreach (Unit u in map.units)
+                {
+                    if (u == null || u.isDead) continue;
+                    bool mine; try { mine = u.isCommandable(); } catch { continue; }
+                    if (mine && u.location != null) myLocations.Add(u.location);
+                }
+
+            JsonValue arr = JsonValue.NewArray();
+            foreach (UnifiedMessage m in map.turnUnifiedMessages)
+            {
+                if (m == null) continue;
+                if (m.customMsgType == null && DigestNoiseTypes.Contains(m.msgType)) continue;
+
+                bool mine = TouchesMine(m.objA, myLocations) || TouchesMine(m.objB, myLocations);
+                bool severe = m.customMsgType == null && NotableMessageTypes.Contains(m.msgType);
+                if (!mine && !severe) continue;
+
+                JsonValue o = JsonValue.NewObject()
+                    .Set("turn", turn)
+                    .Set("type", !string.IsNullOrEmpty(m.customMsgType) ? m.customMsgType : m.msgType.ToString())
+                    .Set("title", StripRichText(m.title));
+                string body = StripRichText(m.message);
+                if (!string.IsNullOrEmpty(body)) o.Set("message", body);
+                if (mine) o.Set("mine", true);
+                arr.Add(o);
+            }
+            return arr.Count > 0 ? arr : JsonValue.Null;
+        }
+
+        /// <summary>True when a unified message's subject is one of your commandable units, or a location
+        /// one of them is standing on.</summary>
+        private static bool TouchesMine(object obj, HashSet<Location> myLocations)
+        {
+            Unit u = obj as Unit;
+            if (u != null)
+            {
+                try { return u.isCommandable(); } catch { return false; }
+            }
+            Location l = obj as Location;
+            return l != null && myLocations.Contains(l);
+        }
+
+        /// <summary>One of your commandable units as it stood at snapshot time — enough to name it after it
+        /// dies, when <c>getName()</c> and <c>location</c> are no longer trustworthy.</summary>
+        public sealed class OwnedUnitInfo
+        {
+            public Unit Unit;
+            public string Name;
+            public Location Location;
+        }
+
+        /// <summary>
+        /// Snapshot every unit you command. Unlike <see cref="ComputeAgentSafety"/> (which walks only
+        /// <c>UA</c> agents) this includes <c>UM</c> military units, so losing an army — the case that is
+        /// invisible to the threat early-stop — can be detected.
+        /// </summary>
+        public static List<OwnedUnitInfo> ComputeOwnedRoster(GameContext ctx, Map map)
+        {
+            var result = new List<OwnedUnitInfo>();
+            if (map == null || map.units == null) return result;
+            foreach (Unit u in map.units)
+            {
+                if (u == null || u.isDead) continue;
+                bool mine; try { mine = u.isCommandable(); } catch { continue; }
+                if (!mine) continue;
+                result.Add(new OwnedUnitInfo
+                {
+                    Unit = u,
+                    Name = SafeName(() => u.getName()),
+                    Location = u.location
+                });
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Compare a roster snapshot to the live map and list the units that died or vanished, as
+        /// <c>[{unit,name,lastLocation}]</c>. Only removals count, so recruiting mid-batch is a no-op.
+        /// Returns <c>JsonValue.Null</c> when nothing was lost.
+        /// </summary>
+        public static JsonValue EvaluateUnitLoss(GameContext ctx, Map map, List<OwnedUnitInfo> before)
+        {
+            if (before == null || before.Count == 0 || map == null) return JsonValue.Null;
+            var alive = new HashSet<Unit>();
+            if (map.units != null)
+                foreach (Unit u in map.units)
+                    if (u != null && !u.isDead) alive.Add(u);
+
+            JsonValue arr = JsonValue.NewArray();
+            foreach (OwnedUnitInfo b in before)
+            {
+                if (b == null || b.Unit == null || alive.Contains(b.Unit)) continue;
+                JsonValue o = JsonValue.NewObject()
+                    .Set("unit", UnitId(ctx, b.Unit))
+                    .Set("name", b.Name);
+                if (b.Location != null) o.Set("lastLocation", LocationRef(b.Location));
+                arr.Add(o);
+            }
+            return arr.Count > 0 ? arr : JsonValue.Null;
+        }
+
         // ---------- world summary ----------
 
         /// <summary>One terse strategic row per location for world_summary: coords, owner, and settlement

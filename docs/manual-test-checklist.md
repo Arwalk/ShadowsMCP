@@ -162,6 +162,20 @@ mcp list_recruitable_agents
       shows the turn advanced **and** `autoDismissed:{count:…,dismissed:["death", …]}`; the banner is
       already clear afterward. Repeating `end_turn '{"force":true}'` across many turns never stalls on
       a death/message popup
+- [ ] **Nothing dismissed is lost:** that same result also carries `digest.dismissed` with a
+      `{turn, kind:"death", title:…}` entry NAMING the dead agent — not just a count. No entry has
+      `popupType:"PopupMsgUnified"` (those are reported once, under `digest.events`)
+- [ ] **The digest spans a whole batch:** `mcp end_turn '{"count":5,"force":true,"passIdleAgents":true}'`
+      → `digest.dismissed`/`digest.events` entries carry `turn` values from more than just the final
+      turn, and `autoDismissed.count` is the batch total. (Regression: the batch used to report only the
+      last turn's dismissals and drop the rest.)
+- [ ] **The turn's news is in the response:** `digest.events` lists notable happenings (razing,
+      battles, deaths, wars, seal/prophecy progress), entries about your own units tagged `mine:true`,
+      and each one also appears in `mcp get_recent_events`
+- [ ] **Losing a unit stops the batch:** send an outmatched army/agent to its death during
+      `end_turn '{"count":10,"force":true,"passIdleAgents":true}'` → the batch stops with
+      `stopReason:"unitLost"`, `advancedBy < 10`, and `digest.lost` naming the unit and its
+      `lastLocation`. Works for `UM` army units too, not only agents
 - [ ] **Real choices are preserved:** when a narrative event (`kind:"event"`) is the pending popup,
       `end_turn '{"force":true}'` does **not** auto-dismiss it — the result/`pendingDecision` still flags
       it for `get_pending_decision` / `resolve_decision`

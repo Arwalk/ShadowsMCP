@@ -176,17 +176,24 @@ namespace ShadowsMcp.Tools.Decisions
             try { return h.Kind(blocker); } catch { return null; }
         }
 
-        /// <summary>The popup's title via its <c>Describe</c>, falling back to the banner headline;
-        /// null on error. Must be read before Resolve, which destroys the blocker.</summary>
-        private static string LogTitle(GameContext ctx, IDecisionHandler h, GameObject blocker)
+        /// <summary>The popup's title (falling back to the banner headline) and its <c>Popup*</c> type
+        /// name, both from ONE <c>Describe</c> call. Must be read before Resolve, which destroys the
+        /// blocker. Both outputs are null on error — never throws.</summary>
+        private static void DescribeForLog(GameContext ctx, IDecisionHandler h, GameObject blocker,
+            out string title, out string popupType)
         {
+            title = null; popupType = null;
             try
             {
-                string t = h.Describe(ctx, blocker)["title"].AsString();
-                if (!string.IsNullOrEmpty(t)) return t;
-                return h.Headline(ctx, blocker);
+                JsonValue d = h.Describe(ctx, blocker);
+                title = d["title"].AsString();
+                popupType = d["popupType"].AsString();
             }
-            catch { return null; }
+            catch { }
+            if (string.IsNullOrEmpty(title))
+            {
+                try { title = h.Headline(ctx, blocker); } catch { title = null; }
+            }
         }
 
         /// <summary>Answer a modal decision and, for the popup kinds the game persists nowhere (narrative
@@ -226,6 +233,10 @@ namespace ShadowsMcp.Tools.Decisions
         /// <c>PopupAutosaveDialog.Update()</c>, which never ticks in this same-job create+destroy — see
         /// <c>GenericButtonHandler.FlushPendingAutosave</c>), so a forced batch still autosaves every 15 turns.
         ///
+        /// Returns <c>{count, dismissed:[kind…], items:[{turn,kind,popupType?,title?}], remaining?, cappedOut?}</c>.
+        /// <c>items</c> names each dismissal so end_turn's digest can report WHAT was cleared, not just how
+        /// many; <c>count</c>/<c>dismissed</c> keep their original shape.
+        ///
         /// Runs on the main thread (called from within end_turn's dispatcher job). Death popups queue on
         /// the immediate <c>blockerQueue</c>, which <c>removeBlocker</c> promotes synchronously; we also
         /// pump <c>checkBlockerQueue</c> when the blocker clears, to drain the delayed queue in-job.
@@ -233,6 +244,7 @@ namespace ShadowsMcp.Tools.Decisions
         public static JsonValue AutoDismissInformational(GameContext ctx, int cap = 25)
         {
             var dismissed = new List<string>();
+            JsonValue items = JsonValue.NewArray();
             string remaining = null;
             bool cappedOut = false;
 
@@ -259,9 +271,12 @@ namespace ShadowsMcp.Tools.Decisions
                 }
 
                 string type = h.Kind(blocker);
-                // Capture the title before Resolve destroys the blocker; among informational popups only
-                // death is worth logging (persisted nowhere else, and it appears in no turn snapshot).
-                string logTitle = IsLoggableKind(type) ? LogTitle(ctx, h, blocker) : null;
+                // Identify the popup before Resolve destroys the blocker. Every dismissal is named in the
+                // returned `items` (end_turn's digest) — a bare count is what let a razing and a lost
+                // battle vanish into "3 popups dismissed". Only the loggable kinds also reach the
+                // recent-events feed, keeping that feed disjoint from the turn snapshot (see LoggableKinds).
+                string logTitle, popupType;
+                DescribeForLog(ctx, h, blocker, out logTitle, out popupType);
                 ToolResult r = h.Resolve(ctx, blocker, ForceArgs);
                 if (r == null || r.IsError)
                 {
@@ -271,6 +286,16 @@ namespace ShadowsMcp.Tools.Decisions
                     break;
                 }
                 dismissed.Add(type);
+                // PopupMsgUnified is skipped: Map.addUnifiedMessage appends every one of them to
+                // turnUnifiedMessages BEFORE popping it, so the digest's `events` (built from that same
+                // stream) already carries its title, body and type. Listing it here too would duplicate.
+                if (popupType != "PopupMsgUnified")
+                {
+                    JsonValue it = JsonValue.NewObject().Set("turn", TurnOf(ctx)).Set("kind", type);
+                    if (!string.IsNullOrEmpty(popupType) && popupType != type) it.Set("popupType", popupType);
+                    if (!string.IsNullOrEmpty(logTitle)) it.Set("title", logTitle);
+                    items.Add(it);
+                }
                 if (IsLoggableKind(type)) ctx.Events.RecordPopup(TurnOf(ctx), type, logTitle, "dismissed");
             }
 
@@ -283,6 +308,7 @@ namespace ShadowsMcp.Tools.Decisions
             JsonValue o = JsonValue.NewObject()
                 .Set("count", dismissed.Count)
                 .Set("dismissed", types);
+            if (items.Count > 0) o.Set("items", items);
             if (remaining != null) o.Set("remaining", remaining);
             if (cappedOut) o.Set("cappedOut", true);
             return o;

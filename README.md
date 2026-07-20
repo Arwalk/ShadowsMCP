@@ -59,7 +59,7 @@ See `docs/manual-test-checklist.md` for a full end-to-end test script.
 | `influence_holy_order_tenet` | Spend a religion's banked Elder influence to shift one of its tenets (`toward_elder` / `toward_human`) — the holy-order screen's doctrine lever |
 | `oppose_divinity` | Undermine (−1 power, −10 strength) or exile the divine entity behind a religion |
 | `get_pending_decision` / `resolve_decision` | Read and answer a pending decision popup (level-up trait pick, event choice, agent-death notice) |
-| `end_turn` | Advance the turn; if a decision popup blocks it, returns the options and accepts `resolveOptionIndex` to answer them (so decisions can be resolved without the two tools above). Once the game is over (`endOfGameAchieved`), returns `gameOver` with the outcome and does not advance |
+| `end_turn` | Advance the turn; if a decision popup blocks it, returns the options and accepts `resolveOptionIndex` to answer them (so decisions can be resolved without the two tools above). Always returns a **`digest`** of what happened across every turn advanced — popups force-dismissed (named, not just counted), the turn's notable news (razing, battles, deaths, wars), and **`lost`**: your own units that died, which also stops a batch with `stopReason:"unitLost"`. Once the game is over (`endOfGameAchieved`), returns `gameOver` with the outcome and does not advance |
 
 ### Entity ids
 

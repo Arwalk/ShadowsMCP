@@ -314,6 +314,34 @@ The game is single-threaded UI: it "waits for the player" whenever a **modal blo
   nulls `ui.blocker` and `DestroyImmediate`s the popup, `ui.blocker != blocker` reads **false**
   (Unity's `==` treats a destroyed object as equal to null), so success is checked as
   `blocker == null || ui.blocker != blocker`.
+- **The `end_turn` digest** (why auto-dismiss is safe to leave on): a bare count of dismissed popups
+  is an information blackout — a real session lost a game because a razing and an army battle that
+  killed a key unit were reported only as "N popups dismissed", and a `count>1` batch used to keep
+  just the **last** turn's `autoDismissed` object, silently dropping every earlier turn. So
+  `end_turn` now returns a `digest` accumulated over the whole call, from three sources:
+  - `digest.dismissed` — `AutoDismissInformational`'s `items`: `{turn, kind, popupType?, title?}` per
+    popup, titled via one `IDecisionHandler.Describe` call taken **before** `Resolve` destroys the
+    blocker (`DecisionRegistry.DescribeForLog`). `PopupMsgUnified` is deliberately **excluded**:
+    `Map.addUnifiedMessage` appends to `turnUnifiedMessages` *before* calling `popMsgUnified`
+    (`Map.cs:3898`/`:3923`), so every such popup is already in `digest.events` — listing it in both
+    would duplicate. It still counts toward `autoDismissed.count`.
+  - `digest.events` — `Summaries.NotableTurnEvents`, a filtered view of the same
+    `map.turnUnifiedMessages` that `RecentEventLog.SnapshotTurn` archives, so anything here also
+    appears in `get_recent_events`. Kept: messages touching one of your commandable units or a
+    location one stands on (tagged `mine:true`), plus a fixed high-severity type whitelist (deaths,
+    battles/armies, razing, war, the seal/prophecy clock, exposure, being hunted). Dropped as noise:
+    `AGENT_IDLE` (already the `idleAgents` decision), `TUTORIAL`, `UNIT_ARRIVES`, `TASK_CANCELLED`.
+    Read only when the turn actually advanced, so a non-advancing call cannot re-report it.
+  - `digest.lost` — `Summaries.ComputeOwnedRoster` / `EvaluateUnitLoss`, a before/after diff of every
+    `isCommandable()` unit. This deliberately covers **`UM` military units**, which
+    `ComputeAgentSafety` (UA-only) never sees, so a dying army is finally visible. A loss also stops
+    a batch (`stopReason:"unitLost"`), checked *before* the threat scan so a death is never masked by
+    a warning about an agent that is merely in danger.
+
+  Each stream is capped (20 entries) with a `truncated` count rather than a silent cut;
+  `get_recent_events` always holds the unabridged log. `autoDismissed` keeps its original shape
+  (`count`/`dismissed` kinds/`remaining`/`cappedOut`) but in a batch its `count` is now the total
+  over every turn advanced, not the final turn's.
 - **Non-modal blocks (no `ui.blocker`)**: some things stop `end_turn` without any popup. The
   **idle-agent alert** (`bEndTurn`, `World.cs:699`): with `option_idleAlert` on (default), a
   commandable `UA` whose `task == null && movesTaken == 0` makes `bEndTurn` just select the unit and
