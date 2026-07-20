@@ -260,19 +260,24 @@ recruit_agent, command_army, get_pending_decision, resolve_decision, end_turn.
   and `turnsToNextSeal` shrank by the same amount.
 - K13 (danger breadcrumb + inventory): `game_overview.threats` has numeric `agentsInField` and
   `agentsInDanger`, plus a `mostUrgent` string whenever `agentsInDanger > 0` — assert present. `get_unit` on
-  one of your agents now includes a `combat` block ({dangerEstimate, hp, defence, attack, isHuntable,
-  inHiding}) and an `items` array (possibly empty) — assert both keys present.
+  one of your agents now includes a `combat` block ({dangerEstimate, hp, defence, attack, menace, profile,
+  menaceFloor, profileFloor, huntRadius, isHuntable, inHiding}) and an `items` array (possibly empty) — assert
+  both keys present, that `combat.huntRadius == floor(combat.profile / 5)`, and that `menaceFloor`/`profileFloor`
+  are numeric.
 - K14 (infiltration detail): `get_location` on a settled human location includes `settlement.infiltration`
   (0..1) and a `subsettlements` array whose entries are `{name, infiltrated}` objects (not bare strings).
   Assert the object shape. If no settled location is handy, SKIP.
 - K15 (mechanics tips): `get_tips` with no arguments returns a `tips` array whose entries are `{id, title,
-  category, summary, core}` plus a `hint` string — assert non-empty and that an entry carries `id` and
-  `summary`. Then `get_tips {"id":"infiltration"}` returns one tip with a `body` string; `get_tips
+  category, summary, core}` plus a `hint` string — assert non-empty, that an entry carries `id` and
+  `summary`, and that the index includes the ids `menace`, `profile` and `enshadow_home`. Then `get_tips
+  {"id":"infiltration"}` returns one tip with a `body` string, and `get_tips {"id":"menace"}` and `get_tips
+  {"id":"profile"}` each return a `body` that names the huntable thresholds (50 / 25); `get_tips
   {"category":"god"}` returns a `tips` array (all in that topic); `get_tips {"id":"nope"}` returns a clean
-  "unknown tip id" error (isError). Assert all four.
+  "unknown tip id" error (isError). Assert all.
 - K16 (contextual tips, opportunistic): a `tips` array may appear on `game_overview` and/or `end_turn` when a
-  mechanic first becomes relevant (world panic crossing a threshold, a war starting, a god- or
-  faction-specific rule). If one appears, assert each entry is `{id, title, body}` and that its `id` resolves
+  mechanic first becomes relevant (world panic crossing a threshold, a war starting, an agent entering the
+  menace/profile danger band → the `agent_exposed` tip, a god- or faction-specific rule). If one appears,
+  assert each entry is `{id, title, body}` and that its `id` resolves
   via `get_tips {"id":...}`, and that the same tip does NOT reappear on the next same-tool call (one-shot per
   game). If none appears within the run, SKIP with a note. (The core-mechanics primer also ships in the
   server's `initialize` instructions, which this checklist does not read directly.)

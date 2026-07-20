@@ -368,6 +368,12 @@ namespace ShadowsMcp
                     .Set("attack", Safe(() => ua.getStatAttack(), 0))
                     .Set("menace", Round2(u.menace))
                     .Set("profile", Round2(u.profile))
+                    // menace/profile ratchet up a floor they can never fall below (Unit.addMenace/addProfile):
+                    // a high floor means the exposure is permanent - retire or store the agent rather than clean it.
+                    .Set("menaceFloor", Round2(u.inner_menaceMin))
+                    .Set("profileFloor", Round2(u.inner_profileMin))
+                    // hexes within which hostile heroes can detect & hunt this agent (Overmind.getThreats: dist <= profile/5)
+                    .Set("huntRadius", (int)(u.profile / 5.0))
                     .Set("isHuntable", u.profile >= 50.0 && u.menace > 25.0)
                     .Set("inHiding", ua.task is Task_InHiding));
 
@@ -1097,6 +1103,7 @@ namespace ShadowsMcp
                 .Set("dangerEstimate", s.DangerEstimate)
                 .Set("profile", Round2(s.Profile))
                 .Set("menace", Round2(s.Menace))
+                .Set("huntRadius", (int)(s.Profile / 5.0))
                 .Set("isHuntable", s.IsHuntable)
                 .Set("inHiding", s.InHiding)
                 .Set("verdict", s.Verdict());

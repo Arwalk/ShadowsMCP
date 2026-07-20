@@ -87,8 +87,13 @@ namespace ShadowsMcp.Tips
                 "Agents mainly act by performing challenges (list_challenges on a unit, then perform_challenge). " +
                 "Each takes several turns depending on the agent's skill and the challenge's complexity, and " +
                 "building it up grants the agent profile and menace. Profile is how far away heroes can detect " +
-                "the agent; menace is how threatening heroes consider it. High profile plus high menace makes " +
-                "heroes hunt that agent - watch get_threats and retreat or lie low before an agent is killed."),
+                "the agent - hostile heroes within about profile/5 hexes can find and hunt it; menace is how " +
+                "threatening heroes consider it. An agent becomes huntable at profile >= 50 and menace > 25 " +
+                "(get_unit's combat.isHuntable), and human rulers then send assassins - watch get_threats. Both " +
+                "are sticky: a floor ratchets up as the agent acts and neither can drop below it, so don't build " +
+                "exposure you don't need. Lower them by running the Lay Low challenge or leaving the agent In " +
+                "Hiding (combat.inHiding), or by enshadowing the local ruler, who then ignores the menace. See " +
+                "get_tips id=menace and id=profile for the exact thresholds."),
 
             Core("recruitment", "Recruiting agents", "basics",
                 "Need a roster slot (cap grows with seals) + a recruitment point; losing all agents is not a loss.",
@@ -123,8 +128,10 @@ namespace ShadowsMcp.Tips
                 "One of your agents is infiltrating a high-security settlement (security above 5). The higher the " +
                 "security, the slower the infiltration - cities and especially capitals start very high. Speed it " +
                 "up by reducing security first: start a famine by raiding the surrounding farmland and villages to " +
-                "cut its food, infiltrate the surrounding locations, or enshadow its ruler. Preparing the ground " +
-                "first is usually faster than grinding a raw high-security infiltration."),
+                "cut its food - when food drops below the population the city starves, and hunger becomes famine, " +
+                "then unrest, which drags security and prosperity down - or infiltrate the surrounding locations, " +
+                "or enshadow its ruler. Preparing the ground first is usually faster than grinding a raw " +
+                "high-security infiltration."),
 
             Ctx("world_panic", "World panic is rising", "world", PanicRising,
                 "Panic passed 0.1: your actions are becoming visible; awareness and hero funding start to grow.",
@@ -146,6 +153,17 @@ namespace ShadowsMcp.Tips
                 "interrupts the challenge and the agent must deal with it to continue. These surface as decisions - " +
                 "resolve them via game_overview's pendingDecision (or get_pending_decision / resolve_decision). " +
                 "Expect challenges to run longer than the raw turn estimate because of these events."),
+
+            Ctx("agent_exposed", "An agent is becoming huntable", "tactics", AgentBecomingExposed,
+                "An agent's profile & menace have entered the danger band - heroes can hunt it and rulers may send assassins.",
+                "One of your agents has built up profile and menace into the danger band (profile >= 40 and " +
+                "menace >= 20; at profile >= 50 and menace > 25 it is outright huntable - see get_unit's " +
+                "combat.isHuntable and get_threats). Hostile heroes within about profile/5 hexes can now find and " +
+                "attack it, and human rulers may send assassins. Options: pull it out of hunter range; run the Lay " +
+                "Low challenge or leave it In Hiding (combat.inHiding) to bleed profile and menace toward their " +
+                "floors (a floor ratchets up permanently, so it will never return to zero); enshadow the local " +
+                "ruler, who then ignores the menace; or store the agent, which halves both and clears the floors. " +
+                "Acting before it is fully huntable is far cheaper than reviving a hunted agent."),
 
             Ctx("army_orders", "Commandable armies: raze, drive back, attack", "tactics", HasCommandableArmy,
                 "A commandable military unit has special orders (command_army): raze cities, drive back heroes, attack armies.",
@@ -218,12 +236,50 @@ namespace ShadowsMcp.Tips
                 "Tags are likes/dislikes that add or subtract motivation for a task - the lever hierophants pull.",
                 TagsBody),
 
+            Ref("profile", "Profile (detection)", "infiltration",
+                "Profile is detection range: hostile heroes within about profile/5 hexes can find and hunt the agent.",
+                "Profile is how visible an agent is. Hostile heroes within about profile/5 hexes can detect it and " +
+                "weigh attacking it (get_threats runs exactly this scan, and get_unit reports the radius as " +
+                "combat.huntRadius), so a high-profile agent is reachable from far away. (A separate, smaller " +
+                "radius - profile/10 from its home - is how far the agent itself can reach out to find challenges " +
+                "to perform.) Profile is built by performing challenges; channelled spells apply their whole " +
+                "profile cost up front when casting begins, so interrupting one early does not spare the agent " +
+                "(see get_tips id=magical_mastery). It is sticky: every gain also raises a minimum - at least a " +
+                "third of the current value - that profile can never drop below (get_unit combat.profileFloor). " +
+                "Reduce profile by lying low - the Lay Low challenge, or leaving the agent In Hiding; storing an " +
+                "agent halves it and clears the floor. An agent is huntable only at profile >= 50 AND menace > 25."),
+
+            Ref("menace", "Menace (threat)", "tactics",
+                "Menace is how much heroes, armies and nations want to attack - it crosses fixed thresholds.",
+                "Menace is how threatening a target is considered, and it is the main term that makes something " +
+                "worth attacking. For an agent it raises how strongly heroes that can detect it (see profile) want " +
+                "to attack, crossing fixed thresholds: menace >= 20 with profile >= 20 gives the Infamous trait; " +
+                "menace > 25 with profile >= 50 makes it huntable, so rulers send assassins (get_unit's " +
+                "combat.isHuntable); menace >= 40 with profile >= 30 lets a human army block and attack it " +
+                "mid-challenge. You can only Redress Crimes (pay gold to cut menace) while menace is under 20. " +
+                "Enshadowed rulers are blind to menace - their urge to attack is scaled by (1 - their shadow) - so " +
+                "enshadowing the local ruler shields a menacing agent. Menace is sticky: a floor ratchets up with " +
+                "every gain and it can never drop below it (get_unit combat.menaceFloor); lower it by lying low " +
+                "(Lay Low or In Hiding) or storing the agent (halves it, clears the floor). Nations and cults " +
+                "carry their own menace too: a society's menace draws crusades and wars against it, and a " +
+                "subsettlement's menace draws raids and razing armies - watch it on get_social_group and location detail."),
+
+            Ref("enshadow_home", "Corrupting heroes via their home", "infiltration",
+                "Heroes gain shadow resting in enshadowed locations - enshadow a hero's home to corrupt it slowly.",
+                "Heroes recover by resting in their home location, and while they rest somewhere enshadowed they " +
+                "take on shadow. So enshadowing a hero's home settlement is a slow, hands-off way to corrupt that " +
+                "hero - useful against ones too strong or too distant to attack directly. A fully shadowed hero " +
+                "can then be enthralled as your agent (see list_recruitable_agents' corruptible heroes)."),
+
             Ref("disrupting_skirmish", "Disrupting heroes by attacking", "tactics",
                 "Attacking a hero interrupts it - use hit-and-run to pull heroes off agents or stall quests.",
                 "Attacking a hero interrupts it: a hero that is attacked stops what it is doing and often goes to " +
                 "heal before starting anything new. Exploit this - attack and retreat to pull a hero off one of " +
                 "your agents or to stall a quest that threatens your plans. Agents who reduce the damage a hero " +
-                "deals in combat (such as the Cursed) can do this repeatedly, surviving long enough to slip away."),
+                "deals in combat (such as the Cursed) can do this repeatedly, surviving long enough to slip away. " +
+                "Combat resolves in a fixed order - attacker, then defender, then the attacker's minions, then the " +
+                "defender's minions - and each deals its stated attack as unrandomised damage, so you can predict " +
+                "a skirmish before committing (compare the two sides' dangerEstimate on get_unit)."),
 
             Ref("low_magic", "Death magic scales with Death", "magic",
                 "'Release from Death' is weak at low-Death locations; create death first, then exploit it.",
@@ -337,6 +393,19 @@ namespace ShadowsMcp.Tips
             if (m == null || m.units == null) return false;
             foreach (Unit u in m.units)
                 if (u is UM && !u.isDead && u.isCommandable()) return true;
+            return false;
+        }
+
+        // Fires when one of your agents has built profile/menace into the danger band - approaching the
+        // profile>=50 & menace>25 huntable threshold that ComputeAgentSafety and human rulers use. 40/20 is an
+        // early-warning choice (like AwarenessRising's 0.1) so it fires before the agent is fully huntable.
+        private static bool AgentBecomingExposed(GameContext c)
+        {
+            Map m = c != null ? c.Map : null;
+            if (m == null || m.units == null) return false;
+            foreach (Unit u in m.units)
+                if (u is UA && !u.isDead && u.isCommandable() && u.profile >= 40.0 && u.menace >= 20.0)
+                    return true;
             return false;
         }
 

@@ -323,7 +323,12 @@ map.world.ui.checkData();
 ## 9. Menace, profile, awareness, panic (the detection economy)
 
 - Each unit accumulates `menace` (how dangerous it seems) and `profile` (how visible it
-  is); challenges add per-turn and on-completion amounts.
+  is); challenges add per-turn and on-completion amounts. Both are **sticky**: `addMenace`/
+  `addProfile` ratchet up a floor (`inner_menaceMin`/`inner_profileMin`, always ≥ value/3)
+  that they can never fall below. An agent is **huntable** at `profile >= 50 && menace > 25`,
+  and hostile heroes within `profile/5` hexes can reach it. The mod re-exports these on
+  `get_unit`'s `combat` block (`menace`, `profile`, `menaceFloor`, `profileFloor`,
+  `huntRadius`, `isHuntable`) and, in prose, via `get_tips id=menace` / `id=profile`.
 - People have `awareness` (they know something is wrong) and `shadow` (they belong to you).
 - `map.worldPanic` aggregates humanity's alarm; `ManagerAwareness` runs discovery;
   `map.awarenessOfUnderground` gates the underground layer's exposure.
