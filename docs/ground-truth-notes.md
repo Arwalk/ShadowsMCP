@@ -304,9 +304,61 @@ Native indices exist for **locations, persons, social groups** → ids `L<index>
 `SG<index>` resolved by scanning the map lists for a matching `index` field. Units and
 challenges have no stable native id → session-scoped registry ids `U<n>`, `C<n>` (weak refs).
 
+## Extended detail views & analysis tools (game members touched)
+
+On top of the base surface, the enriched `*Detail` serializers and the four analysis tools
+(`list_wars`, `list_investigations`, `list_holy_orders`, `get_recent_events`) read these members —
+all verified public in v2.0. Field access stays confined to `Summaries.cs` (builders) and the tool
+bodies in `QueryTools.cs`.
+
+- **Settlement economy** — `SettlementHuman`: `population`, `prosperity`, `growingPop`,
+  `foodLastTurn`/`foodLocal`/`foodImported`, `heir` (prop over `heirIndex`), `supportedMilitary`
+  (`UM_HumanArmy`), `order` (`HolyOrder`), `shadowPolicy` (`shadowResponse` enum). Base `Settlement`:
+  `actionUnderway` (`Action.getName()`), `actionProgress`. `Property.influences` (`List<ReasonMsg>`,
+  each `msg`/`value`) alongside `charge`.
+- **Person sheet** — `Person`: `XP`, `XPForNextLevel`, `statistic_kills`, `targetPrestige`,
+  `watched`, `species` (`Species.name()`), `house` (`House.name`, `House.curses` → `Curse.getName()`),
+  `alert_maxShadow`/`alert_halfShadow`/`alert_aware`, relationships `likes`/`hates`/`extremeLikes`/
+  `extremeHates` (`List<int>` person indices, resolved via new `Summaries.FindPerson`).
+  `Trait.getDesc()` / `Item.getShortDesc()` back the `{name,desc}` trait/item objects (was name-only).
+- **Agent internals** — `UA`: `corrupted`, `getStatAttack()`, `challengesSinceRest`, `turnsIdle`,
+  `disruptionExhaustion`, `minions` (`Minion[3]`; `Minion.hp`/`defence`/`isDead`).
+- **Detection economy** — `Location.evidence` (`List<Evidence>`): `Evidence.pointsTo`/`pointsToPerson`/
+  `assignedInvestigator`/`weight`/`rumourCounter`/`turnDropped`/`locationFound`/`reportedToSociety`.
+  "Against my interests" mirrors get_threats: `pointsTo.isCommandable() || pointsTo is UAE`.
+- **Diplomacy / NPC intent** — `Society`: `offensiveTarget`/`defensiveTarget`,
+  `data_highestInternationalTension`, `actionUnderway` (`AN.getName()`/`getShortDesc()`/
+  `getTurnsRequired()`), `actionProgress`. `DipRel.war` / `Map.wars` (`War`): `att`/`def`/`startTurn`/
+  `attackerObjective` (`warType`)/`canTimeOut`/`turnOfEnd()`.
+- **Religion** — `HolyOrder` (a `SocialGroup`): `enshadowment`, `nAcolytes`/`nTemples`/`nWorshippers`/
+  `nWorshippingRulers`, `reserves`, `influenceElder`/`influenceHuman`, `worshipsThePlayer`, `prophet`
+  (`UA`), `divinity` (`DivineEntity.getName()`), `tenets` (`List<HolyTenet>` → `getName()`).
+- **God win-condition sheet** — `God`: `getMaxTurns()`, `getMaxPower()`, `getSealLevels()`,
+  `getAgentCaps()`, `powerLevelReqs`, `getDetailedMechanics()`, `getSealDesc()`, `powerIncreaseText()`,
+  and `getVictoryMessage(mode)`. `Map.opt_endless` gates `turnsRemaining`. `Overmind.victoryMode` is `-1`
+  until a win is recorded (set 0–5 in `victory()`), so both it and the mode-keyed victory message are
+  surfaced **only** once `endOfGameAchieved`.
+- **Panic breakdown** — `Overmind`: `panicFromPowerUse`, `panicFromCluesDiscovered`, `panicHeroesFallen`,
+  `panicTemporaryChange` (surfaced in `game_overview.panic` / `get_player_state.panic`).
+- **Recent events** — `get_recent_events` reads the mod-owned `RecentEventLog` (held on `GameContext`, so
+  it never touches saves), **not** `Map.turnUnifiedMessages` directly. That collection is wiped at the top
+  of every `turnTick()` and only carries `addUnifiedMessage` output, so read on its own it yields an empty,
+  single-turn feed — the death/level-up/narrative popups go through separate `PrefabStore.pop*` blockers
+  that append to no list. Instead `end_turn` snapshots each turn's `turnUnifiedMessages` (`title`,
+  `message`, `msgType`/`customMsgType`) into the log before the wipe (`RecentEventLog.SnapshotTurn`), and
+  the decision layer appends the agent-death, level-up and narrative-event popups it dismisses/resolves
+  (`DecisionRegistry`, kinds `death`/`levelUp`/`event` — which never call `addUnifiedMessage`, so they
+  duplicate nothing). Items are `{turn, type, title, message?, resolution?}`, newest-first; the log is
+  bounded and cleared on new game/load alongside the entity registry.
+
 ## Misc
 
 - The game ships `Newtonsoft.Json.dll` in Managed (unused by us; JsonUtility is what the
   game itself uses for mod files).
+- **Wire format (token efficiency):** tool JSON payloads are serialized compact (no indentation) and
+  **omit null-valued object keys** — `ToolResult.Ok(JsonValue)` → `JsonWriter.Write(payload,
+  pretty:false, omitNull:true)`. Absent ≡ null for a consumer. Array elements (including nulls) are
+  kept to preserve index alignment; only object members are pruned. `inspect` opts out
+  (`ToolResult.Ok(payload, omitNull:false)`) so reflection still shows a field that is null.
 - `ReasonMsg` has `msg`/`value` fields — used for utility breakdowns.
 - Player's faction: `map.soc_dark`; commandable check is `unit.isCommandable()`.

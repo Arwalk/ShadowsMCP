@@ -57,4 +57,18 @@
            Text="lib/Managed/Unity.TextMeshPro.dll not found. Copy the game's ShadowsOfForbiddenGods_Data/Managed/ folder to lib/Managed/ first." />
   </Target>
 
+  <!-- Auto-stage the deployable: a Release build always refreshes dist/ShadowsMCP/ (the folder the
+       user deploys), so there is no separate packaging step to forget. build.sh does this too, plus
+       the Debug build and the Workshop upload payload — but this guarantees even a bare
+       `dotnet build -c Release` leaves dist/ current. Release-only, since dist ships the Release DLL. -->
+  <Target Name="StageToDist" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
+    <PropertyGroup>
+      <DistDir>$(MSBuildProjectDirectory)/../../dist/ShadowsMCP</DistDir>
+    </PropertyGroup>
+    <MakeDir Directories="$(DistDir)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(DistDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="../../mod/mod_desc.json;../../mod/mod_config.json" DestinationFolder="$(DistDir)" SkipUnchangedFiles="true" />
+    <Message Importance="high" Text="StageToDist: refreshed dist/ShadowsMCP/ ($(TargetFileName), v$(Version))" />
+  </Target>
+
 </Project>

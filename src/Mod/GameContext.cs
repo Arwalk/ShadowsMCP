@@ -23,6 +23,12 @@ namespace ShadowsMcp
 
         public readonly EntityRegistry Registry = new EntityRegistry();
         public readonly ModConfig Config = new ModConfig();
+
+        /// <summary>Persistent, bounded "what happened recently" feed for get_recent_events, accumulated
+        /// across turns from end_turn snapshots and dismissed/resolved popups. Reset on new game / load
+        /// alongside <see cref="Registry"/> (see ModCore.OnMapSeen).</summary>
+        public readonly RecentEventLog Events = new RecentEventLog();
+
         public MainThreadDispatcher Dispatcher;
 
         public object ResolveEntity(string id)

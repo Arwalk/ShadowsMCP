@@ -35,17 +35,23 @@ See `docs/manual-test-checklist.md` for a full end-to-end test script.
 
 | Tool | What it does |
 |---|---|
-| `game_overview` | Turn, your god, world counts, threat summary |
-| `list_locations` / `get_location` | The world map: settlements, owners, properties, neighbours |
-| `list_units` / `get_unit` | Units (default scope: yours); kind, position, hp, current task |
-| `list_persons` / `get_person` | People: rulers, nobles, traits, relationships |
-| `list_social_groups` / `get_social_group` | Societies and factions, relations, wars |
-| `get_player_state` | Your god, power resource, agents, recruitment capacity, powers, end-of-game state |
+| `game_overview` | Turn & **time budget** (maxTurns / turnsRemaining), your god, victory mode & progress, **panic breakdown**, war & investigation counts, world counts, pending decision |
+| `get_threats` | The game's Threats panel: heroes hunting your agents, the Chosen One's prophecy, incoming wars, holy-order mood (sorted by severity) |
+| `list_locations` / `get_location` | The world map. Detail adds **settlement economy** (population, prosperity, food, ruler/heir, holy order, current action), property influences, and the **clues** heroes hold there |
+| `list_units` / `get_unit` | Units (default scope: yours); kind, position, hp, task. Detail adds menace/profile, **agent internals** (minions, combat, corruption/fatigue) and the **investigation** building against it |
+| `list_persons` / `get_person` | People: rulers, nobles. Detail is the full sheet — stats, XP, kills, traits/items (with descriptions), alerts, relationships, house curses |
+| `list_social_groups` / `get_social_group` | Societies and factions, military, wars. Detail adds diplomacy, the **national action** underway, and a **holy-order** block for religions |
+| `list_wars` | Every active war: attacker, defender, the attacker's objective, start & projected end |
+| `list_investigations` | Detection dashboard: every clue pointing at your agents, with investigators, weight and location |
+| `list_holy_orders` | Religions: enshadowment, prophet, tenets, temples, worshippers |
+| `get_recent_events` | The game's turn message log — what changed recently (newest first) |
+| `get_player_state` | Your god, power, agents, recruitment capacity, powers, and the **win-condition sheet** (seal thresholds, agent-cap curve, victory text) |
 | `list_recruitable_agents` | Recruitment capacity, enthrallable archetypes, and corruptible heroes |
 | `list_powers` | Your god's powers and whether each is castable now |
 | `list_challenges` | Challenges available to one of your agents where it stands |
 | `inspect` | **Query ANY element** by path, e.g. `map.locations[4].settlement` (read-only reflection) |
 | `move_unit` | Send one of your agents toward a location |
+| `cancel_task` | Clear an agent's current order |
 | `perform_challenge` | Have an agent start a challenge |
 | `use_power` | Cast one of your god's powers |
 | `recruit_agent` | Spend a recruitment point to enthrall a new agent (archetype onto a location, or corrupt an eligible hero in place) |
@@ -73,6 +79,22 @@ Options (port, LAN vs localhost-only) are exposed through the game's per-mod con
 > (and downgrades exclusive fullscreen to borderless, which would otherwise minimize and pause
 > on focus loss). This keeps MCP calls responsive while you work in another window, at the cost
 > of the game continuing to run/render when unfocused.
+
+## Capturing MCP traffic
+
+To analyse what a real session costs (response sizes / token usage), route the client through the
+logging proxy in `tools/` — MCP clients have no built-in way to capture request/response bodies over
+HTTP transport. On the machine running the client:
+
+```bash
+node tools/mcp-tee.mjs 9017 http://<game-pc-ip>:8017/mcp game-log.jsonl   # forward to the game + tee to JSONL
+claude mcp remove shadows && claude mcp add --transport http shadows http://localhost:9017/mcp
+# …play a session, then:
+tools/mcp-log-report.sh game-log.jsonl                                    # ranked per-tool byte/token cost (needs jq)
+```
+
+`mcp-tee.mjs` forwards every call unchanged and logs each exchange with `reqBytes`/`resBytes`;
+`mcp-log-report.sh` ranks response bytes per tool. Both are self-documented in their headers.
 
 ## Building from source
 

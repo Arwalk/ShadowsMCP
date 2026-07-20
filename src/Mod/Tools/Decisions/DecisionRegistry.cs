@@ -144,7 +144,7 @@ namespace ShadowsMcp.Tools.Decisions
             if (blocker != null)
             {
                 IDecisionHandler h = Find(blocker);
-                if (h != null) return h.Resolve(ctx, blocker, args);
+                if (h != null) return ResolveAndLog(ctx, h, blocker, args);
             }
             INonModalDecision nm = FirstNonModal(ctx);
             if (nm != null) return nm.Resolve(ctx, args);
@@ -152,6 +152,67 @@ namespace ShadowsMcp.Tools.Decisions
         }
 
         private static readonly JsonValue ForceArgs = JsonValue.NewObject().Set("force", true);
+
+        // ---------- recent-events capture ----------
+
+        /// <summary>Popup kinds worth logging to the recent-events feed: the ones that never call
+        /// <c>addUnifiedMessage</c>, so they appear in no end_turn snapshot and would otherwise vanish on
+        /// dismiss. Kept disjoint from the snapshot stream so the two feeds never double-count.</summary>
+        private static readonly HashSet<string> LoggableKinds = new HashSet<string> { "death", "event", "levelUp" };
+
+        private static bool IsLoggableKind(string kind) { return kind != null && LoggableKinds.Contains(kind); }
+
+        private static int TurnOf(GameContext ctx)
+        {
+            try { return ctx != null && ctx.Map != null ? ctx.Map.turn : 0; }
+            catch { return 0; }
+        }
+
+        private static string SafeKind(IDecisionHandler h, GameObject blocker)
+        {
+            try { return h.Kind(blocker); } catch { return null; }
+        }
+
+        /// <summary>The popup's title via its <c>Describe</c>, falling back to the banner headline;
+        /// null on error. Must be read before Resolve, which destroys the blocker.</summary>
+        private static string LogTitle(GameContext ctx, IDecisionHandler h, GameObject blocker)
+        {
+            try
+            {
+                string t = h.Describe(ctx, blocker)["title"].AsString();
+                if (!string.IsNullOrEmpty(t)) return t;
+                return h.Headline(ctx, blocker);
+            }
+            catch { return null; }
+        }
+
+        /// <summary>Answer a modal decision and, for the popup kinds the game persists nowhere (narrative
+        /// events, level-ups), record it in the recent-events feed. Title and chosen option come from the
+        /// handler's own <c>Describe</c> BEFORE resolving, because Resolve destroys the blocker.
+        /// Non-loggable kinds pass straight through unchanged.</summary>
+        private static ToolResult ResolveAndLog(GameContext ctx, IDecisionHandler h, GameObject blocker, JsonValue args)
+        {
+            string kind = SafeKind(h, blocker);
+            if (!IsLoggableKind(kind)) return h.Resolve(ctx, blocker, args);
+
+            string title = null, resolution = "resolved";
+            try
+            {
+                JsonValue d = h.Describe(ctx, blocker);
+                title = d["title"].AsString();
+                if (!args["optionIndex"].IsNull)
+                {
+                    string label = d["options"][args["optionIndex"].AsInt(-1)]["label"].AsString();
+                    if (!string.IsNullOrEmpty(label)) resolution = label;
+                }
+            }
+            catch { }
+
+            ToolResult rr = h.Resolve(ctx, blocker, args);
+            if (rr != null && !rr.IsError)
+                ctx.Events.RecordPopup(TurnOf(ctx), kind, title, resolution);
+            return rr;
+        }
 
         /// <summary>
         /// Force-dismiss every purely-informational popup currently blocking (agent deaths, message
@@ -192,6 +253,9 @@ namespace ShadowsMcp.Tools.Decisions
                 }
 
                 string type = h.Kind(blocker);
+                // Capture the title before Resolve destroys the blocker; among informational popups only
+                // death is worth logging (persisted nowhere else, and it appears in no turn snapshot).
+                string logTitle = IsLoggableKind(type) ? LogTitle(ctx, h, blocker) : null;
                 ToolResult r = h.Resolve(ctx, blocker, ForceArgs);
                 if (r == null || r.IsError)
                 {
@@ -201,6 +265,7 @@ namespace ShadowsMcp.Tools.Decisions
                     break;
                 }
                 dismissed.Add(type);
+                if (IsLoggableKind(type)) ctx.Events.RecordPopup(TurnOf(ctx), type, logTitle, "dismissed");
             }
 
             if (cappedOut)

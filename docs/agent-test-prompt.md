@@ -25,11 +25,12 @@ return. Do not use any tools other than the `shadows` server's.
 The game: you play a dark god corrupting the world through agents (your commandable units). You are
 authorized to freely mutate THIS game (it is expendable). Actions are irreversible — there is no save/undo.
 
-### Tools available (23)
+### Tools available (27)
 game_overview, get_threats, list_locations, get_location, list_units, get_unit, list_persons,
-get_person, list_social_groups, get_social_group, get_player_state, list_recruitable_agents,
-list_powers, list_challenges, inspect, move_unit, cancel_task, perform_challenge, use_power,
-recruit_agent, get_pending_decision, resolve_decision, end_turn.
+get_person, list_social_groups, get_social_group, list_wars, list_investigations, list_holy_orders,
+get_recent_events, get_player_state, list_recruitable_agents, list_powers, list_challenges, inspect,
+move_unit, cancel_task, perform_challenge, use_power, recruit_agent, get_pending_decision,
+resolve_decision, end_turn.
 
 ### Preflight (if this fails, stop and report BLOCKED)
 1. Call `game_overview`. If it errors ("no game in progress" / not ready) or the core tools are missing,
@@ -55,6 +56,9 @@ recruit_agent, get_pending_decision, resolve_decision, end_turn.
   resolve it (see section G) and continue. Some checks below are specifically testing that block behavior.
 - **Error-path checks expect a clean `isError` result, not a crash/hang.** A well-formed error message =
   PASS; a hang, stack trace, or malformed response = FAIL.
+- **Responses are compact JSON, and any key whose value would be `null` is omitted** (absent ≡ null / none /
+  not-applicable — e.g. a cleared `task`, no `pendingDecision`, an undecided `victoryMode`). Assert on
+  presence-or-absence, never on a literal `null`. The one exception is `inspect`, which keeps nulls.
 - Keep a running list of `{id, area, result, expected, observed, notes}` for the final report.
 
 ### Test checklist
@@ -68,7 +72,8 @@ recruit_agent, get_pending_decision, resolve_decision, end_turn.
 - A6 (error): `get_unit {"unitId":"U9999"}` and `get_location {"locationId":"L9999"}` both return clean
   "unknown/stale id" errors.
 - A7 (people): `list_persons` returns a list; `get_person` on the first person's id (`P*`) returns a detail
-  object with stats/traits. Assert the id round-trips (the detail's id matches the one you asked for).
+  object with `stats` and a `traits` array whose entries are `{name, desc}` objects (not bare strings).
+  Assert the id round-trips (the detail's id matches the one you asked for).
 - A8 (societies): `list_social_groups` returns factions; `get_social_group` on your own faction (the one
   owning your commandable agents, e.g. from `list_units`.society) returns a detail object. Assert it
   round-trips.
@@ -76,17 +81,18 @@ recruit_agent, get_pending_decision, resolve_decision, end_turn.
 **B. New state fields (recruitment + end-of-game)**
 - B1: `game_overview` includes `agentCap`, `canRecruit`, `endOfGameAchieved`, `defeated`,
   `availableEnthrallments`.
-- B2: `get_player_state` includes `agentCap`, `canRecruit`, `endOfGameAchieved`, `victoryMode`,
-  `enthralledCount`.
+- B2: `get_player_state` includes `agentCap`, `canRecruit`, `endOfGameAchieved`, `enthralledCount` (and
+  `victoryMode` once the game is decided — omitted while still playing).
 - B3: consistency — `canRecruit` == (`availableEnthrallments` > 0 AND `enthralledCount` < `agentCap`), and
   `defeated` == (`endOfGameAchieved` AND NOT `victoryAchieved`). Compute from the fields and compare.
 
 **C. Movement**
 - C1: pick a commandable agent from `list_units {"scope":"mine"}`; `get_location` its location to get a
   neighbour id; `move_unit` there. Assert the result's `nowAt`/`arrived`/`task`, then `get_unit` shows a
-  go-to task (or it already arrived). Evidence = task before (likely null) vs after.
+  go-to task (or it already arrived). Evidence = task before (likely absent) vs after.
 - C2: `cancel_task` on that unit (or `move_unit` to its own location) clears the order — `get_unit.task`
-  becomes null. (If the unit fully arrived and is idle, note that and still assert task is null.)
+  becomes null/absent (the key is omitted once the task is cleared). (If the unit fully arrived and is idle,
+  note that and still assert task is null/absent.)
 - C3 (error): `move_unit` with a bad `locationId` errors cleanly.
 - C4 (error): find a non-commandable unit (`list_units {"scope":"all"}`, `commandable:false`) and try to
   `move_unit` it — errors "not under your command".
@@ -129,7 +135,7 @@ recruit_agent, get_pending_decision, resolve_decision, end_turn.
 
 **G. Decisions & blocking**
 - G1: when nothing is pending, `get_pending_decision` returns `{pending:false}` and
-  `game_overview.pendingDecision` is null.
+  `game_overview.pendingDecision` is null or absent (the key is omitted when nothing is pending).
 - G2: call `end_turn` repeatedly (up to ~10 times) until either a decision appears
   (`game_overview.pendingDecision` non-null, and every tool result is prefixed with a `⚠` banner) or the
   budget is exhausted. If one appears, `get_pending_decision` lists its options with indices.
@@ -160,7 +166,8 @@ recruit_agent, get_pending_decision, resolve_decision, end_turn.
 
 **J. Threats & enemy intent**
 - J1: `get_threats` returns a `count` and a `threats` array. Each entry has `message` (string),
-  `severity` (number), `beneficial` (bool), and `location` (a `{id,name}` ref or null). PASS if the
+  `severity` (number), `beneficial` (bool), and `location` (a `{id,name}` ref, omitted when the event
+  points at no location). PASS if the
   shape holds for every entry (the array MAY be empty on a very early/quiet turn — that's still PASS;
   note it and lean on J3 later once the world is more active).
 - J2 (consistency): assert `threats` is sorted by `severity` descending, and every non-null
@@ -175,6 +182,37 @@ recruit_agent, get_pending_decision, resolve_decision, end_turn.
   **orc upstart** is a correct match, NOT a FAIL. If no hostile-to-you unit exists within ~15 `end_turn`s,
   mark SKIP (enemy intent is not forcible) — do NOT FAIL.
 
+**K. Analysis surfaces (enriched detail views + new tools)**
+- K1 (time budget & panic): `game_overview` includes `maxTurns`, `turnsRemaining` (omitted in an endless
+  game), a `victoryMode` (a label once the game is decided, else omitted), and a `panic` object with numeric
+  `total`/`fromPowerUse`/`fromCluesDiscovered`/`heroesFallen`/`temporaryChange`. Assert `maxTurns`, `panic`
+  are present and that `panic.total` equals `worldPanic`.
+- K2 (win-condition sheet): `get_player_state.progression` has `maxTurns`, `sealLevels` (array),
+  `agentCaps` (array) and `powerLevelReqs` (array). Assert present.
+- K3 (settlement economy): find a human settlement (`list_locations`, then a `get_location` whose
+  `settlement.isHuman` is true) and assert `settlement.population` (number) and `settlement.food` (object)
+  are present. If no human settlement turns up, SKIP.
+- K4 (person sheet): `get_person` on any `P*` returns `traits` and `items` as arrays of `{name, desc}`
+  objects, plus `xp`, `relationships` and `alerts`. Assert a trait entry has a `name` field.
+- K5 (agent internals): `get_unit` on one of your agents (`list_units {"scope":"mine"}`) returns an `agent`
+  object with a `minions` array and numeric `attack`, and an `investigation` array (possibly empty). Assert
+  `agent` is present.
+- K6 (wars): `list_wars` returns `items`; assert its `total` equals `game_overview.wars`. If non-empty, each
+  entry has `attacker`, `defender`, `objective`. (Empty is PASS on a peaceful game — note it.)
+- K7 (investigations): `list_investigations` returns `items`; assert its `total` equals
+  `game_overview.activeInvestigations`. If non-empty, an entry's `target` (`U*`) round-trips via `get_unit`.
+  (Empty is PASS on a quiet game.)
+- K8 (religion): `list_holy_orders` returns `items`; if non-empty, each has a `holyOrder` block with numeric
+  `enshadowment`, and calling `get_social_group` on that group's id shows the same `holyOrder` block. If
+  empty, SKIP.
+- K9 (recent events): after the `end_turn`s run above, `get_recent_events {"limit":10}` returns `total`,
+  `returned` and an `items` array (≤10), newest-first, each entry `{turn, type, title, message?,
+  resolution?}`. Assert it is **non-empty** and is a **cross-turn** log: an event from an earlier turn is
+  still present now (it accumulates; it is not the single-turn on-screen feed). Furthermore, if any
+  `end_turn` this run reported `autoDismissed` or resolved a `pendingDecision` of kind death/level-up/event,
+  at least one matching `type:"death"`/`"levelUp"`/`"event"` entry must appear here. (Only PASS-empty if no
+  turn has advanced yet.)
+
 ### Reporting (required output)
 1. Print a table with columns: `id | area | result (PASS/FAIL/SKIP/BLOCKED) | expected | observed (tool +
    before→after) | notes`. One row per check above.
@@ -184,7 +222,7 @@ recruit_agent, get_pending_decision, resolve_decision, end_turn.
    directory (use the starting turn number from preflight so the name is stable). Confirm the file path in
    your final message.
 
-Work through A→J in order. Be concise in intermediate narration; the value is in the evidence and the final
+Work through A→K in order. Be concise in intermediate narration; the value is in the evidence and the final
 report.
 ````
 

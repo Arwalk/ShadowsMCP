@@ -40,9 +40,11 @@ namespace ShadowsMcp.Tools
                     object value = evaluator.Evaluate(path, out error);
                     if (error != null) return ToolResult.Error(error);
 
+                    // Reflection: a field being null is meaningful signal, so keep nulls (omitNull:false).
+                    // Still compact — only inspect opts out of null-pruning.
                     return ToolResult.Ok(JsonValue.NewObject()
                         .Set("path", path)
-                        .Set("value", evaluator.Serialize(value, depth, maxItems)));
+                        .Set("value", evaluator.Serialize(value, depth, maxItems)), omitNull: false);
                 }));
         }
 

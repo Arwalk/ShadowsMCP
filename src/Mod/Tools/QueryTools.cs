@@ -30,16 +30,32 @@ namespace ShadowsMcp.Tools
                     om.calculateAgentsUsed();
                     int agentCap = om.god != null ? om.getAgentCap() : 0;
                     bool canRecruit = om.availableEnthrallments > 0 && om.nEnthralled < agentCap;
+                    int maxTurns = om.god != null ? om.god.getMaxTurns() : 0;
                     JsonValue o = JsonValue.NewObject()
                         .Set("modVersion", ModCore.ModVersion)
                         .Set("turn", map.turn)
+                        .Set("maxTurns", maxTurns)
+                        // How long until the game's turn limit (null in an endless game).
+                        .Set("turnsRemaining", map.opt_endless ? JsonValue.Null : JsonValue.Of(Math.Max(0, maxTurns - map.turn)))
                         .Set("god", JsonValue.NewObject()
                             .Set("name", map.overmind.god != null ? map.overmind.god.getName() : null)
                             .Set("type", map.overmind.god != null ? map.overmind.god.GetType().Name : null))
                         .Set("power", Summaries.Round2(map.overmind.power))
+                        // victoryMode is only recorded once the game is decided; null while playing.
+                        .Set("victoryMode", om.endOfGameAchieved ? Summaries.VictoryModeLabel(om.victoryMode) : null)
                         .Set("victoryProgress", Summaries.Round2(map.data_victoryProgess))
                         .Set("worldPanic", Summaries.Round2(map.worldPanic))
+                        // Where the world's alarm is coming from (a player reads this in tooltips).
+                        .Set("panic", JsonValue.NewObject()
+                            .Set("total", Summaries.Round2(map.worldPanic))
+                            .Set("fromPowerUse", Summaries.Round2(om.panicFromPowerUse))
+                            .Set("fromCluesDiscovered", Summaries.Round2(om.panicFromCluesDiscovered))
+                            .Set("heroesFallen", Summaries.Round2(om.panicHeroesFallen))
+                            .Set("temporaryChange", Summaries.Round2(om.panicTemporaryChange)))
                         .Set("awarenessOfUnderground", Summaries.Round2(map.awarenessOfUnderground))
+                        .Set("wars", map.wars != null ? map.wars.Count : 0)
+                        // Clues currently pointing at your agents/interests; drill in via list_investigations.
+                        .Set("activeInvestigations", Summaries.CountInvestigationsAgainstMe(map))
                         .Set("sealsBroken", map.overmind.sealsBroken)
                         .Set("availableEnthrallments", map.overmind.availableEnthrallments)
                         // Losing all agents is NOT a loss (you are the god, points regenerate); recruit more
@@ -285,6 +301,15 @@ namespace ShadowsMcp.Tools
                         .Set("endOfGameAchieved", om.endOfGameAchieved)
                         .Set("victoryMode", om.endOfGameAchieved ? Summaries.VictoryModeLabel(om.victoryMode) : null)
                         .Set("victoryProgress", Summaries.Round2(map.data_victoryProgess))
+                        // The god's win-condition sheet: time budget, seal thresholds, agent-cap curve,
+                        // and the victory / seal descriptive text.
+                        .Set("progression", Summaries.GodProgression(map))
+                        .Set("panic", JsonValue.NewObject()
+                            .Set("total", Summaries.Round2(map.worldPanic))
+                            .Set("fromPowerUse", Summaries.Round2(om.panicFromPowerUse))
+                            .Set("fromCluesDiscovered", Summaries.Round2(om.panicFromCluesDiscovered))
+                            .Set("heroesFallen", Summaries.Round2(om.panicHeroesFallen))
+                            .Set("temporaryChange", Summaries.Round2(om.panicTemporaryChange)))
                         .Set("agents", agents)
                         .Set("powers", powers));
                 })));
@@ -383,6 +408,75 @@ namespace ShadowsMcp.Tools
                         .Set("location", Summaries.LocationRef(loc))
                         .Set("challenges", arr)
                         .Set("unitRituals", rituals));
+                })));
+
+            host.Register(new ToolDefinition(
+                "list_wars",
+                "Every active war, with attacker, defender and the attacker's objective (e.g. INVASION), "
+                + "start turn and projected end. The global picture behind each social group's atWarWith list.",
+                Schema.Object(),
+                a => WithMap(ctx, map =>
+                {
+                    JsonValue arr = JsonValue.NewArray();
+                    if (map.wars != null)
+                        foreach (War w in map.wars) arr.Add(Summaries.WarSummary(w));
+                    return ToolResult.Ok(JsonValue.NewObject()
+                        .Set("total", map.wars != null ? map.wars.Count : 0)
+                        .Set("items", arr));
+                })));
+
+            host.Register(new ToolDefinition(
+                "list_investigations",
+                "The detection dashboard: every clue the heroes hold that points at your interests "
+                + "(your commandable agents or allied evil units such as orc upstarts), with the assigned "
+                + "investigator, the lead's weight, how far the rumour has spread and where it was found. "
+                + "Mirrors the get_threats scope; each clue can raise world panic / awareness of the "
+                + "underground if pursued. Drill into one unit with get_unit (its investigation list).",
+                Schema.Object(),
+                a => WithMap(ctx, map =>
+                {
+                    JsonValue arr = JsonValue.NewArray();
+                    foreach (Location l in map.locations)
+                    {
+                        if (l == null || l.evidence == null) continue;
+                        foreach (Evidence e in l.evidence)
+                            if (Summaries.IsEvidenceAgainstInterest(e)) arr.Add(Summaries.EvidenceSummary(ctx, e, true));
+                    }
+                    return ToolResult.Ok(JsonValue.NewObject().Set("total", arr.Count).Set("items", arr));
+                })));
+
+            host.Register(new ToolDefinition(
+                "list_holy_orders",
+                "Every religion (holy order) with its enshadowment, prophet, tenets, temples and worshipper "
+                + "reach, and whether it worships you. Relevant to several victory paths and the Chosen One threat.",
+                Schema.Object(),
+                a => WithMap(ctx, map =>
+                {
+                    JsonValue arr = JsonValue.NewArray();
+                    foreach (SocialGroup sg in map.socialGroups)
+                    {
+                        HolyOrder ho = sg as HolyOrder;
+                        if (ho == null) continue;
+                        arr.Add(Summaries.SocialGroupSummary(ctx, sg).Set("holyOrder", Summaries.HolyOrderBlock(ctx, ho)));
+                    }
+                    return ToolResult.Ok(JsonValue.NewObject().Set("total", arr.Count).Set("items", arr));
+                })));
+
+            host.Register(new ToolDefinition(
+                "get_recent_events",
+                "Recent game events, newest first — a persistent, cross-turn feed of what has been "
+                + "happening: status messages (idle agents, wars, seals weakening, hero actions) plus the "
+                + "agent deaths, level-ups and narrative events that end_turn dismissed or resolved. The "
+                + "headless counterpart to the on-screen message log, for analysing how a game is "
+                + "developing. Each item is {turn, type, title, message?, resolution?}. (A player action's "
+                + "own mid-turn messages are returned by that action, not re-logged here.)",
+                Schema.Object(Schema.Prop("limit", Schema.Integer("Max events (default 30)"))),
+                a => WithMap(ctx, map =>
+                {
+                    int limit = a["limit"].AsInt(30);
+                    if (limit < 1) limit = 1;
+                    if (limit > MaxLimit) limit = MaxLimit;
+                    return ToolResult.Ok(ctx.Events.Read(limit));
                 })));
         }
 

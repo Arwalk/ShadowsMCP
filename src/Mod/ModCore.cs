@@ -163,6 +163,7 @@ namespace ShadowsMcp
             {
                 _ctx.Map = map;
                 _ctx.Registry.Reset(); // new game or loaded save: session ids start over
+                _ctx.Events.Clear();   // ...and the recent-events feed, so events never leak between games
                 Log.Info("tracking map (turn " + map.turn + ") - entity ids reset");
             }
         }

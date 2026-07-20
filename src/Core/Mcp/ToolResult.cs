@@ -13,10 +13,20 @@ namespace ShadowsMcp.Core.Mcp
             return new ToolResult { Text = text ?? "", IsError = false };
         }
 
-        /// <summary>Pretty-prints the JSON payload so it reads well in MCP clients.</summary>
+        /// <summary>
+        /// Serializes the JSON payload compactly (no indentation) and drops null-valued keys — the
+        /// consumer is an agent, not a human, so whitespace and "key": null pairs are wasted tokens.
+        /// Use the (payload, omitNull) overload with omitNull:false where a null carries meaning
+        /// (e.g. the inspect reflection tool).
+        /// </summary>
         public static ToolResult Ok(JsonValue payload)
         {
-            return new ToolResult { Text = JsonWriter.Write(payload ?? JsonValue.Null, true), IsError = false };
+            return Ok(payload, omitNull: true);
+        }
+
+        public static ToolResult Ok(JsonValue payload, bool omitNull)
+        {
+            return new ToolResult { Text = JsonWriter.Write(payload ?? JsonValue.Null, false, omitNull), IsError = false };
         }
 
         public static ToolResult Error(string message)

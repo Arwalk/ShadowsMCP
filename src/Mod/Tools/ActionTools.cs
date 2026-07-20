@@ -460,6 +460,12 @@ namespace ShadowsMcp.Tools
                 world.bEndTurn(force);
                 after = map.turn;
 
+                // Capture this turn's status messages (idle agents, wars, seals, hero actions) into the
+                // mod's own recent-events feed before the next turnTick wipes map.turnUnifiedMessages.
+                // The death/level-up/event popups the sweep below handles are logged separately, in the
+                // decision layer (they use a different channel and never appear here) - see RecentEventLog.
+                ctx.Events.SnapshotTurn(after, map.turnUnifiedMessages);
+
                 // With force=true, clear purely-informational popups (agent deaths, message boxes) that turn
                 // processing may have raised, so an unattended end_turn(force) loop never stalls on a notice.
                 // A popup carrying a real choice is left open and surfaced via pendingDecision below.

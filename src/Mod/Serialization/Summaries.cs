@@ -234,6 +234,43 @@ namespace ShadowsMcp
                 }
                 o.Set("rituals", rituals);
             }
+
+            // Agent internals: corruption, combat power, fatigue, and the minions that fight beside it.
+            UA ua = u as UA;
+            if (ua != null)
+            {
+                JsonValue minions = JsonValue.NewArray();
+                if (ua.minions != null)
+                {
+                    foreach (Minion m in ua.minions)
+                        if (m != null && !m.isDead) minions.Add(MinionSummary(m));
+                }
+                o.Set("agent", JsonValue.NewObject()
+                    .Set("corrupted", ua.corrupted)
+                    .Set("attack", Safe(() => ua.getStatAttack(), 0))
+                    .Set("challengesSinceRest", ua.challengesSinceRest)
+                    .Set("turnsIdle", ua.turnsIdle)
+                    .Set("disruptionExhaustion", ua.disruptionExhaustion)
+                    .Set("minions", minions));
+            }
+
+            // The detection picture for this unit: which heroes are building a case against it.
+            if (!u.isDead && u.map != null)
+            {
+                JsonValue investigation = JsonValue.NewArray();
+                int myPersonIndex = u.person != null ? u.person.index : -1;
+                foreach (Location l in u.map.locations)
+                {
+                    if (l == null || l.evidence == null) continue;
+                    foreach (Evidence e in l.evidence)
+                    {
+                        if (e == null) continue;
+                        if (e.pointsTo == u || (myPersonIndex >= 0 && e.pointsToPerson == myPersonIndex))
+                            investigation.Add(EvidenceSummary(ctx, e, false));
+                    }
+                }
+                o.Set("investigation", investigation);
+            }
             return o;
         }
 
@@ -329,19 +366,40 @@ namespace ShadowsMcp
 
             if (l.settlement != null)
             {
+                Settlement st = l.settlement;
                 JsonValue s = JsonValue.NewObject()
-                    .Set("type", l.settlement.GetType().Name)
-                    .Set("name", SafeName(() => l.settlement.getName()))
-                    .Set("shadow", Round2(l.settlement.shadow))
-                    .Set("defences", Round2(l.settlement.defences))
-                    .Set("isHuman", l.settlement.isHuman)
-                    .Set("isInfiltrated", l.settlement.isInfiltrated);
-                SettlementHuman sh = l.settlement as SettlementHuman;
-                if (sh != null && sh.ruler != null) s.Set("ruler", PersonRef(sh.ruler));
-                JsonValue subs = JsonValue.NewArray();
-                if (l.settlement.subs != null)
+                    .Set("type", st.GetType().Name)
+                    .Set("name", SafeName(() => st.getName()))
+                    .Set("shadow", Round2(st.shadow))
+                    .Set("defences", Round2(st.defences))
+                    .Set("isHuman", st.isHuman)
+                    .Set("isInfiltrated", st.isInfiltrated);
+                // What this settlement is currently enacting (applies to any settlement type).
+                if (st.actionUnderway != null)
+                    s.Set("action", JsonValue.NewObject()
+                        .Set("name", SafeName(() => st.actionUnderway.getName()))
+                        .Set("progress", st.actionProgress));
+                // Human settlements carry the economy layer (population, prosperity, food, succession).
+                SettlementHuman sh = st as SettlementHuman;
+                if (sh != null)
                 {
-                    foreach (Subsettlement sub in l.settlement.subs)
+                    if (sh.ruler != null) s.Set("ruler", PersonRef(sh.ruler));
+                    if (sh.heir != null) s.Set("heir", PersonRef(sh.heir));
+                    s.Set("population", sh.population)
+                     .Set("prosperity", Round2(sh.prosperity))
+                     .Set("growingPop", Round2(sh.growingPop))
+                     .Set("food", JsonValue.NewObject()
+                        .Set("lastTurn", sh.foodLastTurn)
+                        .Set("local", sh.foodLocal)
+                        .Set("imported", sh.foodImported))
+                     .Set("shadowPolicy", sh.shadowPolicy.ToString())
+                     .Set("supportedMilitary", UnitRef(ctx, sh.supportedMilitary))
+                     .Set("holyOrder", SocialGroupRef(sh.order));
+                }
+                JsonValue subs = JsonValue.NewArray();
+                if (st.subs != null)
+                {
+                    foreach (Subsettlement sub in st.subs)
                     {
                         subs.Add(SafeName(() => sub.getName()));
                     }
@@ -353,12 +411,23 @@ namespace ShadowsMcp
             JsonValue props = JsonValue.NewArray();
             foreach (Property p in l.properties)
             {
-                props.Add(JsonValue.NewObject()
+                JsonValue pv = JsonValue.NewObject()
                     .Set("type", p.GetType().Name)
                     .Set("name", SafeName(() => p.getName()))
-                    .Set("charge", Round2(p.charge)));
+                    .Set("charge", Round2(p.charge));
+                if (p.influences != null && p.influences.Count > 0)
+                    pv.Set("influences", InfluenceList(p.influences));
+                props.Add(pv);
             }
             o.Set("properties", props);
+
+            // Clues the heroes hold here (each can raise panic / awareness of the underground if investigated).
+            if (l.evidence != null && l.evidence.Count > 0)
+            {
+                JsonValue ev = JsonValue.NewArray();
+                foreach (Evidence e in l.evidence) ev.Add(EvidenceSummary(ctx, e, true));
+                o.Set("evidence", ev);
+            }
             return o;
         }
 
@@ -388,23 +457,44 @@ namespace ShadowsMcp
                 .Set("age", p.age)
                 .Set("gold", p.gold)
                 .Set("prestige", Round2(p.prestige))
+                .Set("targetPrestige", Round2(p.targetPrestige))
                 .Set("awareness", Round2(p.awareness))
                 .Set("sanity", Round2(p.sanity))
                 .Set("maxSanity", p.maxSanity)
                 .Set("level", p.level)
+                .Set("xp", p.XP)
+                .Set("xpForNextLevel", p.XPForNextLevel)
                 .Set("skillPoints", p.skillPoints)
+                .Set("kills", p.statistic_kills)
+                .Set("watched", p.watched)
+                .Set("species", p.species != null ? SafeName(() => p.species.name()) : null)
+                .Set("house", p.house != null ? p.house.name : null)
                 .Set("stats", JsonValue.NewObject()
                     .Set("might", p.stat_might)
                     .Set("lore", p.stat_lore)
                     .Set("intrigue", p.stat_intrigue)
-                    .Set("command", p.stat_command));
+                    .Set("command", p.stat_command))
+                // Alert flags the game raises as a person's corruption/awareness crosses thresholds.
+                .Set("alerts", JsonValue.NewObject()
+                    .Set("maxShadow", p.alert_maxShadow)
+                    .Set("halfShadow", p.alert_halfShadow)
+                    .Set("aware", p.alert_aware))
+                // Who this person likes/hates (drives their politics); resolved to person refs.
+                .Set("relationships", JsonValue.NewObject()
+                    .Set("likes", PersonRefsByIndex(ctx, p.likes))
+                    .Set("hates", PersonRefsByIndex(ctx, p.hates))
+                    .Set("extremeLikes", PersonRefsByIndex(ctx, p.extremeLikes))
+                    .Set("extremeHates", PersonRefsByIndex(ctx, p.extremeHates)));
 
+            // Traits and items as {name, desc} objects (were name strings) so their effects are legible.
             JsonValue traits = JsonValue.NewArray();
             if (p.traits != null)
             {
                 foreach (Trait t in p.traits)
                 {
-                    traits.Add(SafeName(() => t.getName()));
+                    traits.Add(JsonValue.NewObject()
+                        .Set("name", SafeName(() => t.getName()))
+                        .Set("desc", Safe(() => t.getDesc(), null)));
                 }
             }
             o.Set("traits", traits);
@@ -414,10 +504,21 @@ namespace ShadowsMcp
             {
                 foreach (Item it in p.items)
                 {
-                    if (it != null) items.Add(SafeName(() => it.getName()));
+                    if (it != null)
+                        items.Add(JsonValue.NewObject()
+                            .Set("name", SafeName(() => it.getName()))
+                            .Set("desc", Safe(() => it.getShortDesc(), null)));
                 }
             }
             o.Set("items", items);
+
+            // Curses are carried on the noble house (shared by all its members).
+            if (p.house != null && p.house.curses != null && p.house.curses.Count > 0)
+            {
+                JsonValue curses = JsonValue.NewArray();
+                foreach (Curse c in p.house.curses) curses.Add(SafeName(() => c.getName()));
+                o.Set("curses", curses);
+            }
             return o;
         }
 
@@ -464,7 +565,10 @@ namespace ShadowsMcp
                 o.Set("posture", soc.posture.ToString())
                  .Set("isRebellion", soc.isRebellion)
                  .Set("isDarkEmpire", soc.isDarkEmpire)
-                 .Set("isAlliance", soc.isAlliance);
+                 .Set("isAlliance", soc.isAlliance)
+                 .Set("internationalTension", Round2(soc.data_highestInternationalTension))
+                 .Set("offensiveTarget", SocialGroupRef(soc.offensiveTarget))
+                 .Set("defensiveTarget", SocialGroupRef(soc.defensiveTarget));
                 Location capital = Safe(() => soc.getCapital(), null);
                 if (capital != null)
                 {
@@ -472,16 +576,30 @@ namespace ShadowsMcp
                     SettlementHuman seat = capital.settlement as SettlementHuman;
                     if (seat != null && seat.ruler != null) o.Set("sovereign", PersonRef(seat.ruler));
                 }
+                // The strategic-level intent: what this nation is currently enacting (declare war,
+                // quarantine, crusade, join the dark empire...), the counterpart to unit taskDetail.
+                if (soc.actionUnderway != null)
+                    o.Set("nationalAction", JsonValue.NewObject()
+                        .Set("name", SafeName(() => soc.actionUnderway.getName()))
+                        .Set("desc", Safe(() => soc.actionUnderway.getShortDesc(), null))
+                        .Set("turnsRequired", Safe(() => soc.actionUnderway.getTurnsRequired(), 0))
+                        .Set("progress", soc.actionProgress));
             }
+
+            // Religion-specific state when this group is a holy order.
+            HolyOrder ho = sg as HolyOrder;
+            if (ho != null) o.Set("holyOrder", HolyOrderBlock(ctx, ho));
 
             JsonValue relations = JsonValue.NewArray();
             foreach (KeyValuePair<SocialGroup, DipRel> kv in sg.relations)
             {
                 if (kv.Key == sg || kv.Value == null) continue;
-                relations.Add(JsonValue.NewObject()
+                JsonValue rel = JsonValue.NewObject()
                     .Set("with", SocialGroupRef(kv.Key))
                     .Set("state", kv.Value.state.ToString())
-                    .Set("status", Round2(kv.Value.status)));
+                    .Set("status", Round2(kv.Value.status));
+                if (kv.Value.war != null) rel.Set("war", WarSummary(kv.Value.war));
+                relations.Add(rel);
             }
             o.Set("relations", relations);
             return o;
@@ -541,7 +659,173 @@ namespace ShadowsMcp
             return o;
         }
 
+        /// <summary>The god's win-condition sheet: time budget, seal thresholds, the agent-cap curve
+        /// as seals break, power-level requirements, and the victory / seal descriptive text a player
+        /// reads on screen. Null when no god is selected.</summary>
+        public static JsonValue GodProgression(Map map)
+        {
+            God god = map.overmind.god;
+            if (god == null) return JsonValue.Null;
+            int maxTurns = Safe(() => god.getMaxTurns(), 0);
+            return JsonValue.NewObject()
+                .Set("maxTurns", maxTurns)
+                .Set("turnsRemaining", map.opt_endless ? JsonValue.Null : JsonValue.Of(Math.Max(0, maxTurns - map.turn)))
+                .Set("maxPower", Safe(() => god.getMaxPower(), 0))
+                .Set("sealLevels", IntArray(Safe(() => god.getSealLevels(), null)))
+                .Set("agentCaps", IntArray(Safe(() => god.getAgentCaps(), null)))
+                .Set("powerLevelReqs", IntList(god.powerLevelReqs))
+                // How this god plays and wins (meaningful throughout the game).
+                .Set("mechanics", Safe(() => god.getDetailedMechanics(), null))
+                .Set("sealDesc", Safe(() => god.getSealDesc(), null))
+                .Set("powerIncreaseText", Safe(() => god.powerIncreaseText(), null))
+                // The specific victory blurb is mode-keyed, and victoryMode is -1 until a win is
+                // recorded — so only surface it once the game is actually decided.
+                .Set("victoryMessage", map.overmind.endOfGameAchieved
+                    ? Safe(() => god.getVictoryMessage(map.overmind.victoryMode), null) : null);
+        }
+
+        private static JsonValue IntArray(int[] a)
+        {
+            JsonValue arr = JsonValue.NewArray();
+            if (a != null) foreach (int v in a) arr.Add(v);
+            return arr;
+        }
+
+        private static JsonValue IntList(List<int> a)
+        {
+            JsonValue arr = JsonValue.NewArray();
+            if (a != null) foreach (int v in a) arr.Add(v);
+            return arr;
+        }
+
+        // ---------- evidence / investigation (the detection economy) ----------
+
+        /// <summary>True when a clue points at a unit you benefit from — one of your commandable
+        /// agents or any UAE (evil agents on your side). Mirrors the hostile-target test in
+        /// get_threats / list_units(hostileToMe): target.isCommandable() || target is UAE.</summary>
+        public static bool IsEvidenceAgainstInterest(Evidence e)
+        {
+            if (e == null || e.pointsTo == null || e.pointsTo.isDead) return false;
+            return e.pointsTo.isCommandable() || e.pointsTo is UAE;
+        }
+
+        /// <summary>One clue the heroes hold. investigator is the hero chasing it (or null); weight is
+        /// how strong the lead is; rumours counts how far it has spread; reported flags that it has
+        /// already been handed to a society. Pass includeTarget for the global investigations view.</summary>
+        public static JsonValue EvidenceSummary(GameContext ctx, Evidence e, bool includeTarget)
+        {
+            if (e == null) return JsonValue.Null;
+            JsonValue o = JsonValue.NewObject();
+            if (includeTarget) o.Set("target", UnitRef(ctx, e.pointsTo));
+            return o
+                .Set("investigator", UnitRef(ctx, e.assignedInvestigator))
+                .Set("weight", Round2(e.weight))
+                .Set("rumours", e.rumourCounter)
+                .Set("foundAt", LocationRef(FindLocation(ctx, e.locationFound)))
+                .Set("turnDropped", e.turnDropped)
+                .Set("reported", e.reportedToSociety);
+        }
+
+        /// <summary>Total live clues pointing at your interests, across the whole map.</summary>
+        public static int CountInvestigationsAgainstMe(Map map)
+        {
+            if (map == null) return 0;
+            int n = 0;
+            foreach (Location l in map.locations)
+            {
+                if (l == null || l.evidence == null) continue;
+                foreach (Evidence e in l.evidence)
+                    if (IsEvidenceAgainstInterest(e)) n++;
+            }
+            return n;
+        }
+
+        // ---------- wars ----------
+
+        public static JsonValue WarSummary(War w)
+        {
+            if (w == null) return JsonValue.Null;
+            return JsonValue.NewObject()
+                .Set("attacker", SocialGroupRef(w.att))
+                .Set("defender", SocialGroupRef(w.def))
+                .Set("objective", w.attackerObjective.ToString())
+                .Set("startTurn", w.startTurn)
+                .Set("canTimeOut", w.canTimeOut)
+                .Set("endsTurn", Safe(() => w.turnOfEnd(), -1));
+        }
+
+        // ---------- religion ----------
+
+        /// <summary>Religion-specific state of a HolyOrder (a SocialGroup subclass): enshadowment,
+        /// prophet, tenets and reach. Null when the group is not a holy order.</summary>
+        public static JsonValue HolyOrderBlock(GameContext ctx, HolyOrder ho)
+        {
+            if (ho == null) return JsonValue.Null;
+            JsonValue tenets = JsonValue.NewArray();
+            if (ho.tenets != null)
+                foreach (HolyTenet t in ho.tenets) tenets.Add(SafeName(() => t.getName()));
+            return JsonValue.NewObject()
+                .Set("enshadowment", Round2(ho.enshadowment))
+                .Set("worshipsThePlayer", ho.worshipsThePlayer)
+                .Set("nAcolytes", ho.nAcolytes)
+                .Set("nTemples", ho.nTemples)
+                .Set("nWorshippers", ho.nWorshippers)
+                .Set("nWorshippingRulers", ho.nWorshippingRulers)
+                .Set("reserves", ho.reserves)
+                .Set("influenceElder", ho.influenceElder)
+                .Set("influenceHuman", ho.influenceHuman)
+                .Set("prophet", UnitRef(ctx, ho.prophet))
+                .Set("divinity", ho.divinity != null ? SafeName(() => ho.divinity.getName()) : null)
+                .Set("tenets", tenets);
+        }
+
+        // ---------- agent minions ----------
+
+        public static JsonValue MinionSummary(Minion m)
+        {
+            if (m == null) return JsonValue.Null;
+            return JsonValue.NewObject()
+                .Set("hp", m.hp)
+                .Set("defence", m.defence)
+                .Set("isDead", m.isDead);
+        }
+
         // ---------- helpers ----------
+
+        /// <summary>Resolve a native person index to a Person (mirrors FindLocation). -1 → null.</summary>
+        public static Person FindPerson(GameContext ctx, int index)
+        {
+            Map map = ctx.Map;
+            if (map == null || index < 0) return null;
+            foreach (Person p in map.persons)
+            {
+                if (p != null && p.index == index) return p;
+            }
+            return null;
+        }
+
+        /// <summary>Render a list of native person indices (likes/hates/…) as PersonRef entries.</summary>
+        private static JsonValue PersonRefsByIndex(GameContext ctx, List<int> indices)
+        {
+            JsonValue arr = JsonValue.NewArray();
+            if (indices != null)
+                foreach (int idx in indices)
+                {
+                    Person p = FindPerson(ctx, idx);
+                    if (p != null) arr.Add(PersonRef(p));
+                }
+            return arr;
+        }
+
+        /// <summary>A property's influence breakdown (ReasonMsg list) as [{reason, value}].</summary>
+        private static JsonValue InfluenceList(List<ReasonMsg> influences)
+        {
+            JsonValue arr = JsonValue.NewArray();
+            if (influences != null)
+                foreach (ReasonMsg r in influences)
+                    if (r != null) arr.Add(JsonValue.NewObject().Set("reason", r.msg).Set("value", Round2(r.value)));
+            return arr;
+        }
 
         public static Location FindLocation(GameContext ctx, int index)
         {
