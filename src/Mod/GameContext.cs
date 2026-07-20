@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Assets.Code;
 using ShadowsMcp.Core.Json;
 using ShadowsMcp.Core.Util;
@@ -28,6 +29,13 @@ namespace ShadowsMcp
         /// across turns from end_turn snapshots and dismissed/resolved popups. Reset on new game / load
         /// alongside <see cref="Registry"/> (see ModCore.OnMapSeen).</summary>
         public readonly RecentEventLog Events = new RecentEventLog();
+
+        /// <summary>Ids of contextual tips already surfaced this game (the mod-side analogue of the base
+        /// game's HintSystem.hasShown[]). A tip fires at most once per game. Reset on new game / load
+        /// alongside <see cref="Registry"/> / <see cref="Events"/> (see ModCore.OnMapSeen), so one-shot
+        /// tips never leak across games loaded in the same process. Touched only on the main thread
+        /// (single-flighted by the dispatcher), so a plain HashSet needs no lock.</summary>
+        public readonly HashSet<string> ShownTips = new HashSet<string>();
 
         public MainThreadDispatcher Dispatcher;
 

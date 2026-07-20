@@ -21,12 +21,17 @@ namespace ShadowsMcp.Core.Mcp
         private readonly IToolHost _host;
         private readonly string _serverName;
         private readonly string _serverVersion;
+        private readonly string _instructions;
 
-        public McpServer(IToolHost host, string serverName, string serverVersion)
+        /// <param name="instructions">Optional MCP initialize.instructions text (a standing brief the client
+        /// injects into the model's context). Kept out of this game-agnostic core: the caller supplies any
+        /// game-specific onboarding. When null/empty, the initialize result simply omits the field.</param>
+        public McpServer(IToolHost host, string serverName, string serverVersion, string instructions = null)
         {
             _host = host;
             _serverName = serverName;
             _serverVersion = serverVersion;
+            _instructions = instructions;
         }
 
         /// <summary>
@@ -120,11 +125,9 @@ namespace ShadowsMcp.Core.Mcp
                     .Set("tools", JsonValue.NewObject()))
                 .Set("serverInfo", JsonValue.NewObject()
                     .Set("name", _serverName)
-                    .Set("version", _serverVersion))
-                .Set("instructions",
-                    "MCP server embedded in the game Shadows of Forbidden Gods. " +
-                    "Query tools read the live game state; action tools command the player's agents. " +
-                    "Entity ids (L*, U*, P*, SG*, C*) are stable only within the current game session - re-query after loading a save.");
+                    .Set("version", _serverVersion));
+            if (!string.IsNullOrEmpty(_instructions))
+                result.Set("instructions", _instructions);
             return JsonRpc.SuccessResponse(req.Id, result);
         }
 

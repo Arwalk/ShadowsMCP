@@ -52,7 +52,8 @@ namespace ShadowsMcp.TestHost
                 Schema.Object(Schema.Prop("ms", Schema.Integer("Milliseconds to sleep"))),
                 a => { Thread.Sleep(a["ms"].AsInt(1000)); return ToolResult.Ok("slept"); }));
 
-            var server = new McpServer(host, "shadows-mcp-testhost", "0.1.0");
+            var server = new McpServer(host, "shadows-mcp-testhost", "0.1.0",
+                "TestHost: exercises the MCP protocol stack with fake tools (echo, fake_overview, fail_tool, slow_tool). Not the real game.");
             var transport = new HttpTransport(server, listenLan: false, port: port);
             int bound = transport.Start();
             Console.WriteLine("READY on http://127.0.0.1:" + bound + "/mcp");

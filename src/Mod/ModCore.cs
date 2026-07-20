@@ -6,6 +6,7 @@ using Assets.Code.Modding;
 using ShadowsMcp.Core.Http;
 using ShadowsMcp.Core.Mcp;
 using ShadowsMcp.Core.Util;
+using ShadowsMcp.Tips;
 using ShadowsMcp.Tools;
 using UnityEngine;
 
@@ -125,8 +126,11 @@ namespace ShadowsMcp
                 ActionTools.RegisterAll(_host, _ctx);
                 InspectTool.RegisterAll(_host, _ctx);
                 DecisionTools.RegisterAll(_host, _ctx);
+                TipsTools.RegisterAll(_host, _ctx);
 
-                _server = new McpServer(_host, "shadows-mcp", ModVersion);
+                // The core mechanics primer becomes the MCP initialize.instructions (always-on onboarding);
+                // situational tips ride game_overview / end_turn, and get_tips is the on-demand catalog.
+                _server = new McpServer(_host, "shadows-mcp", ModVersion, TipEngine.BuildInstructions());
                 RestartTransport();
             }
             catch (Exception ex)
@@ -164,6 +168,7 @@ namespace ShadowsMcp
                 _ctx.Map = map;
                 _ctx.Registry.Reset(); // new game or loaded save: session ids start over
                 _ctx.Events.Clear();   // ...and the recent-events feed, so events never leak between games
+                _ctx.ShownTips.Clear(); // ...and the one-shot contextual tips, so they can fire again next game
                 Log.Info("tracking map (turn " + map.turn + ") - entity ids reset");
             }
         }

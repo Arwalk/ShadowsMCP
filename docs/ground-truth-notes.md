@@ -385,6 +385,21 @@ bodies in `QueryTools.cs`.
   `God.getSealLevels()` (already listed) to derive `nextSealAt = getSealLevels()[sealsBroken]` and
   `turnsToNextSeal = nextSealAt - sealProgress`. Surfaced flat on `game_overview.seals` /
   `get_player_state.seals`. (Meaningful for gods using conventional seals — `God.usesConventionalSeals()`.)
+- **Mechanics tips (`src/Mod/Tips/TipCatalog.cs`)** — the curated `get_tips` catalog and the contextual `tips[]`
+  on `game_overview`/`end_turn` read these (all public in v2.0; unlike the rest of the surface, this field access
+  lives in `TipCatalog.cs`, not `Summaries.cs`/tool bodies). Trigger predicates: `Map.worldPanic` (≥0.1, mirrors
+  the game's WORLD_PANIC hint at `Map.cs:3804`), `Map.awarenessOfUnderground` (≥0.1 — a **mod** design threshold;
+  the game's AWARENESS hint is event-driven with no numeric gate), `Map.wars` (existence), a `Map.units` scan for
+  `Unit.isCommandable()` + `Unit.task is Task_PerformChallenge` whose `.challenge is Ch_Infiltrate` and
+  `Location.settlement.getSecurity(null) > 5` (mirrors the HIGH_SEC trigger at `Task_PerformChallenge.cs:58`),
+  `Overmind.god is God_Vinerva/God_Ophanim/God_LaughingKing` (**Iastur IS the Laughing King — there is no
+  `God_Iastur` type**), and a `Map.socialGroups` scan for `Society.isDarkEmpire` / `SG_DeepOnes` (or
+  `Overmind.deepOnesRiseUp`) / `Soc_Elven`. Two tip bodies interpolate live params —
+  `Map.param.utility_person_FromLiking`/`utility_person_FromExtremeLiking` (tags) and
+  `Map.param.prop_opha_faithWorldShadowReq`/`prop_opha_faithOwnShadowReq` (Ophanim faith) — falling back to
+  `World.staticMap` (then to number-free wording) so `get_tips` works from the main menu. Shown-once state is the
+  mod-owned `GameContext.ShownTips` (`HashSet<string>`, the analogue of `HintSystem.hasShown[]`), cleared on new
+  game/load in `ModCore.OnMapSeen` alongside the entity registry and event log.
 
 ## Misc
 

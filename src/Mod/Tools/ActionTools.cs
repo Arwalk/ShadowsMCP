@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Assets.Code;
 using ShadowsMcp.Core.Json;
 using ShadowsMcp.Core.Mcp;
+using ShadowsMcp.Tips;
 
 namespace ShadowsMcp.Tools
 {
@@ -92,7 +93,7 @@ namespace ShadowsMcp.Tools
                 "count to advance several turns at once (force=true recommended so it doesn't stall on the " +
                 "repetitive 'Life Continues'-type popups); it stops early and reports stopReason on any "
                 + "decision, game over, or threat escalation, and a threatAlert lists agents a hero just "
-                + "started hunting.",
+                + "started hunting. A 'tips' array may also appear, explaining a mechanic that just became relevant.",
                 Schema.Object(
                     Schema.Prop("count", Schema.Integer("Advance up to this many turns (default 1, max 10). Stops early on any decision, game over, or a threat escalation (a hero starts hunting an agent / an agent's odds worsen).")),
                     Schema.Prop("force", Schema.Boolean("Push through battle/level-up/idle-agent interruptions and dismiss informational popups")),
@@ -452,6 +453,8 @@ namespace ShadowsMcp.Tools
                     JsonValue alert = Summaries.ThreatAlert(ctx, map, before1);
                     if (!alert.IsNull) payload1.Set("threatAlert", alert);
                 }
+                JsonValue tips1 = TipEngine.CollectContextual(ctx);
+                if (!tips1.IsNull) payload1.Set("tips", tips1);
                 return ToolResult.Ok(payload1);
             }
 
@@ -508,6 +511,8 @@ namespace ShadowsMcp.Tools
                       .Set("outcome", gameOverPayload["outcome"])
                       .Set("victoryMode", gameOverPayload["victoryMode"]);
             }
+            JsonValue tips = TipEngine.CollectContextual(ctx);
+            if (!tips.IsNull) result.Set("tips", tips);
             return ToolResult.Ok(result);
         }
 

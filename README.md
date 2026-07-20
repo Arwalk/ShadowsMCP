@@ -49,6 +49,7 @@ See `docs/manual-test-checklist.md` for a full end-to-end test script.
 | `list_recruitable_agents` | Recruitment capacity, enthrallable archetypes, and corruptible heroes |
 | `list_powers` | Your god's powers and whether each is castable now |
 | `list_challenges` | Challenges available to one of your agents where it stands |
+| `get_tips` | Curated, agent-facing explanations of game mechanics (infiltration, politics, magic, economy, gods, factions). No args = index; `id`/`category` for one tip or a topic. The same tips also surface in `game_overview`/`end_turn` under `tips`, and the core mechanics are in the server's `initialize` instructions |
 | `inspect` | **Query ANY element** by path, e.g. `map.locations[4].settlement` (read-only reflection) |
 | `move_unit` | Send one of your agents toward a location |
 | `cancel_task` | Clear an agent's current order |

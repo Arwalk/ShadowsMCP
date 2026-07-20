@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Assets.Code;
 using ShadowsMcp.Core.Json;
 using ShadowsMcp.Core.Mcp;
+using ShadowsMcp.Tips;
 using ShadowsMcp.Tools.Decisions;
 
 namespace ShadowsMcp.Tools
@@ -20,7 +21,8 @@ namespace ShadowsMcp.Tools
                 "High-level state of the current game: turn, your god, resources, world counts, seal countdown " +
                 "and a threats breadcrumb. victoryProgress is your weighted score toward victory (score / " +
                 "pointsToWin ~200), not average enshadowment or panic. threats.agentsInDanger flags agents a " +
-                "hero is closing on - open get_threats when it is non-zero.",
+                "hero is closing on - open get_threats when it is non-zero. A 'tips' array may appear here to " +
+                "explain a mechanic the moment it becomes relevant (get_tips is the full reference).",
                 Schema.Object(),
                 a => WithMap(ctx, map =>
                 {
@@ -103,6 +105,10 @@ namespace ShadowsMcp.Tools
                             .Set("commandableUnits", commandable)
                             .Set("persons", map.persons.Count)
                             .Set("socialGroups", map.socialGroups.Count));
+                    // Contextual one-shot tips: explain a mechanic the first turn it becomes relevant, on the
+                    // tool the agent reads every turn (mirrors the game's own hint popups). See TipEngine.
+                    JsonValue tips = TipEngine.CollectContextual(ctx);
+                    if (!tips.IsNull) o.Set("tips", tips);
                     return ToolResult.Ok(o);
                 })));
 

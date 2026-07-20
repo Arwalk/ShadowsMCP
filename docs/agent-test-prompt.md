@@ -25,11 +25,11 @@ return. Do not use any tools other than the `shadows` server's.
 The game: you play a dark god corrupting the world through agents (your commandable units). You are
 authorized to freely mutate THIS game (it is expendable). Actions are irreversible — there is no save/undo.
 
-### Tools available (29)
+### Tools available (30)
 game_overview, get_threats, world_summary, list_locations, get_location, list_units, get_unit,
 list_persons, get_person, list_social_groups, get_social_group, list_wars, list_investigations,
 list_holy_orders, get_recent_events, get_player_state, get_victory_breakdown, list_recruitable_agents,
-list_powers, list_challenges, inspect, move_unit, cancel_task, perform_challenge, use_power,
+list_powers, list_challenges, get_tips, inspect, move_unit, cancel_task, perform_challenge, use_power,
 recruit_agent, get_pending_decision, resolve_decision, end_turn.
 
 ### Preflight (if this fails, stop and report BLOCKED)
@@ -255,6 +255,17 @@ recruit_agent, get_pending_decision, resolve_decision, end_turn.
 - K14 (infiltration detail): `get_location` on a settled human location includes `settlement.infiltration`
   (0..1) and a `subsettlements` array whose entries are `{name, infiltrated}` objects (not bare strings).
   Assert the object shape. If no settled location is handy, SKIP.
+- K15 (mechanics tips): `get_tips` with no arguments returns a `tips` array whose entries are `{id, title,
+  category, summary, core}` plus a `hint` string — assert non-empty and that an entry carries `id` and
+  `summary`. Then `get_tips {"id":"infiltration"}` returns one tip with a `body` string; `get_tips
+  {"category":"god"}` returns a `tips` array (all in that topic); `get_tips {"id":"nope"}` returns a clean
+  "unknown tip id" error (isError). Assert all four.
+- K16 (contextual tips, opportunistic): a `tips` array may appear on `game_overview` and/or `end_turn` when a
+  mechanic first becomes relevant (world panic crossing a threshold, a war starting, a god- or
+  faction-specific rule). If one appears, assert each entry is `{id, title, body}` and that its `id` resolves
+  via `get_tips {"id":...}`, and that the same tip does NOT reappear on the next same-tool call (one-shot per
+  game). If none appears within the run, SKIP with a note. (The core-mechanics primer also ships in the
+  server's `initialize` instructions, which this checklist does not read directly.)
 
 ### Reporting (required output)
 1. Print a table with columns: `id | area | result (PASS/FAIL/SKIP/BLOCKED) | expected | observed (tool +
