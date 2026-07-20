@@ -27,6 +27,7 @@ namespace ShadowsMcp.Tools.Decisions
             new PopupLevelupHandler(),
             new PopupMsgAgentsDeathHandler(),
             new PopupItemTradingHandler(),
+            new PopupScrollSetHandler(), // the scrolling "pick one from this list" carousel (scandal victim, tags, minions)
             new PopupBattleAgentHandler(), // the agent-duel combat menu (multi-round: step / flee / retreat / reorder)
             // ... add further bespoke handlers (PopupHolyOrder …) here, before the fallback.
             new GenericButtonHandler(), // must stay last: CanHandle is always true; lists any popup's buttons

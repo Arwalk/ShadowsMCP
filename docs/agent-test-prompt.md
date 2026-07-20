@@ -200,6 +200,15 @@ resolve_decision, end_turn.
   a `PopupMsgUnified`), assert that option's label carries the explicit WARNING that it PERMANENTLY hides the
   type for the whole game (persists across reload) — so an agent won't blind itself. SKIP if none appears.
 
+- G8 (opportunistic, selection carousel): if a list picker ever blocks (`game_overview.pendingDecision` /
+  `get_pending_decision` shows `kind:"carousel"`, `popupType:"PopupScrollSet"` — e.g. Cause Scandal's victim,
+  Guard Ruins' minion, a For Idle Hands / Devil Finds Work tag), assert its `options` are the REAL entry
+  names (people/tags/minions), NOT carousel controls ("next"/"prev"/"select"/"cancel"), that
+  `selectedIndex` is present and exactly one option carries `selected:true` at that index, and that every
+  option has `enabled`. Then `resolve_decision {"optionIndex":N}` with an N **different** from
+  `selectedIndex`: assert the result's `chose` equals that option's `label` (i.e. you got the entry you
+  asked for, not the highlighted one), `closed:true`, and the ⚠ banner clears. SKIP if none appears.
+
 **H. End turn & game-over**
 - H1: snapshot `game_overview.turn`; `end_turn` (no force); assert the returned/`game_overview` turn
   increased by ≥1.

@@ -322,10 +322,28 @@ The game is single-threaded UI: it "waits for the player" whenever a **modal blo
   one with `button.onClick.Invoke()`. `force=true` dismisses: `dismissKeyHit()` if the popup is a
   `UI_Dismissable` (11 do — `PopupMsg`, `PopupConfirmOrder`, …), else `ui.removeBlocker(blocker)`.
   Exceptions whose main interaction isn't a button (still dismiss/cancel-able, flagged in the
-  option note): item-trading (drag), mod-config (text/toggle), carousels (`PopupScrollSet`/
-  `PopupXScroll`/`PopupBox*`), text-entry (`PopupSaveDialog`/`PopupMsgRenameAgent`/options), and the
-  stepwise `PopupBattleAgent`. Some buttons (`UIE_GodPower.bCast`, `UIE_AgentSelect.bCast`) set
+  option note): item-trading (drag), mod-config (text/toggle), the horizontal god carousel
+  (`PopupXScroll`/`PopupXBoxGodSelectMsg`), text-entry (`PopupSaveDialog`/`PopupMsgRenameAgent`/options),
+  and the stepwise `PopupBattleAgent`. Some buttons (`UIE_GodPower.bCast`, `UIE_AgentSelect.bCast`) set
   `world.selector` instead of closing — the resolve result flags `openedSelector`.
+- **Selection carousels** — `PopupScrollSet` (`PopupScrollSet.cs`), built by
+  `PrefabStore.getScrollSetText`/`getScrollSetAgents`/`getScrollSet`. In-game callers: the Cause Scandal
+  victim pick (`Rt_CauseScandal.complete` → `Sel2_CauseScandal`), `Ch_GuardRuins` (minion to assign),
+  `P_ForIdleHands`/`P_DevilMakesWork` (tag to like/dislike) and `Overmind_Automatic`. State: a public
+  `List<PopupScrollable> scrollables` (display order) plus a public `int index` = the highlighted entry;
+  `bSelect()` does `removeBlocker` then `scrollables[index].clicked(map)`, and `bCancel()` notifies
+  `cancelReceiver` then closes. So **assigning `index` and calling `bSelect()` is exactly a human click**
+  on that entry — the mod's `PopupScrollSetHandler` (registered before the fallback) does that, listing
+  the entries themselves as `options` with the current one flagged `selected` and `selectedIndex` echoed.
+  Before it existed, the button sweep only exposed next/prev/select/cancel, so an agent committed blind
+  (a playthrough picked its scandal victim by luck). Each box also stores its own receiver-side `index`
+  and passes it in `clicked()`, so direct assignment stays correct under `invertOrder`. **Label trap**:
+  read labels off the `PopupScrollable` interface, never `getTextElement()` — `UIE_SelectableText` (what
+  `getScrollSetText` creates) puts its words in `body` and leaves the `title` that `getTextElement()`
+  returns empty, while `PopupBoxText` is the mirror (empty `getTitle()`, label in `getBody()`); the
+  handler takes `getTitle()` and falls back to `getBody()`. `PopupXScroll` (god select, `World
+  .bStartGameOptions`) stays on the generic path: it only exists at the main menu, and every decision
+  tool needs a live `ctx.Map`.
 - **Agent-death notice** — `PopupMsgAgentsDeath` (`PopupMsgAgentsDeath.cs`): raised inside
   `map.turnTick()` when one of your agents dies (`PrefabStore.popMsgAgentDeath → ui.addBlocker`, the
   immediate queue). Purely informational — `bDismiss`/`bDismissAgentA` both call `ui.removeBlocker`

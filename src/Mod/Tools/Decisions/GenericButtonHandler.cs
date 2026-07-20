@@ -15,7 +15,7 @@ namespace ShadowsMcp.Tools.Decisions
     /// and invoking the chosen one's <c>onClick</c> drives the popup exactly like a click.
     ///
     /// Always matches (last in the registry). Popups whose core interaction isn't a button
-    /// (item-trading drag, mod-config inputs, carousels, text-entry, multi-step battle) still expose
+    /// (item-trading drag, mod-config inputs, text-entry, multi-step battle) still expose
     /// their cancel/dismiss/next buttons and are flagged in the note; force=true always dismisses.
     /// </summary>
     public sealed class GenericButtonHandler : IDecisionHandler
@@ -23,11 +23,12 @@ namespace ShadowsMcp.Tools.Decisions
         // popupType names whose main interaction a button-sweep can't fully drive.
         private static readonly HashSet<string> HardTypes = new HashSet<string>
         {
-            "PopupModConfig", "PopupScrollSet", "PopupXScroll",
+            "PopupModConfig", "PopupXScroll",
             "PopupXBoxGodSelectMsg", "PopupBoxText", "PopupBoxMod", "PopupBoxPerson", "PopupBoxAgent",
             "PopupSaveDialog", "PopupSaveMap", "PopupMsgRenameAgent", "PopupGameOptions",
             "PopupIOOptions", "PopupHolyOrder",
-            // PopupBattleAgent is handled bespoke by PopupBattleAgentHandler (registered before this fallback).
+            // PopupBattleAgent and PopupScrollSet (the selection carousel) are handled bespoke by
+            // PopupBattleAgentHandler / PopupScrollSetHandler, registered before this fallback.
         };
 
         // Pure-notification popups: every button just closes the popup (possibly panning the camera),
