@@ -55,8 +55,9 @@ namespace ShadowsMcp.Tools.Decisions
                 .Set("options", options)
                 .Set("note", "These agents have no order and will waste this turn. Give them orders with " +
                     "move_unit / perform_challenge / use_power (then they leave this list), or resolve_decision " +
-                    "with optionIndex 0 (or force=true) to pass them all.")
-                .Set("resolveWith", "resolve_decision with optionIndex 0, or force=true");
+                    "with optionIndex 0 to pass them all. force will NOT pass them: like combat, the idle alert " +
+                    "blocks even under force (end_turn passIdleAgents:true is the explicit multi-turn escape).")
+                .Set("resolveWith", "resolve_decision with optionIndex 0 (order them instead if you can — force does not pass idle)");
         }
 
         public ToolResult Resolve(GameContext ctx, JsonValue args)
@@ -65,11 +66,14 @@ namespace ShadowsMcp.Tools.Decisions
             if (idle.Count == 0)
                 return ToolResult.Error("no agents are idle right now.");
 
-            bool pass = args["force"].AsBool() || args["optionIndex"].AsInt(-1) == 0;
+            // force does NOT pass idle agents — mirror AgentCombatDecision, where force is not a blanket
+            // resolve. Passing must be the conscious optionIndex 0 so an idle agent's turn is never silently
+            // wasted; end_turn passIdleAgents:true is the explicit multi-turn fast-forward.
+            bool pass = args["optionIndex"].AsInt(-1) == 0;
             if (!pass)
                 return ToolResult.Error(idle.Count + " agent(s) are idle (" + IdList(ctx, idle) + "). " +
                     "Give them orders (move_unit / perform_challenge / use_power), or pass them with " +
-                    "resolve_decision optionIndex 0 (or force=true).");
+                    "resolve_decision optionIndex 0. force will not pass them — like combat, idle blocks even under force.");
 
             JsonValue passed = JsonValue.NewArray();
             foreach (Unit u in idle)

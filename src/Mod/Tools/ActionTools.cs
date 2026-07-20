@@ -103,15 +103,19 @@ namespace ShadowsMcp.Tools
                 "is blocking the turn, this returns it with its options (also in game_overview.pendingDecision) " +
                 "and does not advance; pass resolveOptionIndex to pick an option, and it resolves that decision " +
                 "then continues ending the turn. With force=true, auto-resolves what else blocks a single " +
-                "turn's end (skill points auto-spent, the idle-agent alert pushed past for that turn, and " +
-                "purely-informational popups dismissed: the agent-death NOTICE - kind:\"death\", " +
-                "PopupMsgAgentsDeath - and autosave/message boxes). Two things force never auto-answers: a " +
-                "pending agent battle (it always blocks - blockedBy:\"combat\" - and must be resolved: fight " +
-                "to the end, flee, or retreat via resolveOptionIndex / resolve_decision), and a narrative " +
-                "event (kind:\"event\"), INCLUDING the \"Defeat\" event a lost battle raises, because an " +
-                "event's choice can matter - answer it with resolveOptionIndex. Idle agents are a recurring " +
-                "state, not a one-off notice: a count>1 batch stops each turn on the re-raised idle alert " +
-                "(stopReason:\"decision\", kind:\"idleAgents\") unless the agents hold standing orders. Pass " +
+                "turn's end (skill points auto-spent, and purely-informational popups dismissed: the " +
+                "agent-death NOTICE - kind:\"death\", PopupMsgAgentsDeath - and autosave/message boxes). " +
+                "Three things force never auto-answers: a pending agent battle (it always blocks - " +
+                "blockedBy:\"combat\" - and must be resolved: fight to the end, flee, or retreat via " +
+                "resolveOptionIndex / resolve_decision); the idle-agent alert (blockedBy:\"decision\", " +
+                "kind:\"idleAgents\" - like combat it blocks even under force, so an idle agent's turn is " +
+                "never silently wasted: give it an order, or pass all idle with resolveOptionIndex 0); and a " +
+                "narrative event (kind:\"event\"), INCLUDING the \"Defeat\" event a lost battle raises, because " +
+                "an event's choice can matter - answer it with resolveOptionIndex. Idle is a recurring state " +
+                "(Task_PassTurn lasts one turn), so a count>1 batch stops on the first idle turn (advancedBy " +
+                "may be 0, stopReason:\"decision\", kind:\"idleAgents\") - to fast-forward unattended give every " +
+                "agent a standing order (they leave the idle set), or pass passIdleAgents:true to bulk-pass " +
+                "idle each turn. Pass " +
                 "count to advance several turns at once (force=true recommended so it doesn't stall on the " +
                 "repetitive 'Life Continues'-type popups); it stops early and reports stopReason on any "
                 + "decision, game over, or a meaningful threat escalation (an agent becomes huntable / a hero "
@@ -123,7 +127,8 @@ namespace ShadowsMcp.Tools
                 + "explaining a mechanic that just became relevant.",
                 Schema.Object(
                     Schema.Prop("count", Schema.Integer("Advance up to this many turns (default 1, max 10). Stops early on any decision, game over, or a meaningful threat escalation (an agent becomes huntable, a hero it is not favoured against starts hunting it, or its odds worsen).")),
-                    Schema.Prop("force", Schema.Boolean("Auto-resolve level-up/skill-point and idle-agent interruptions and dismiss purely-informational popups (the death NOTICE, message boxes). Does NOT skip a pending battle (always blocks) or a narrative event (kind:event, including a lost battle's Defeat popup) - resolve those explicitly. In a count>1 batch, idle agents re-raise each turn and stop the batch unless they hold orders.")),
+                    Schema.Prop("force", Schema.Boolean("Auto-resolve level-up/skill-point interruptions and dismiss purely-informational popups (the death NOTICE, message boxes). Does NOT skip a pending battle OR the idle-agent alert (both always block, like combat) or a narrative event (kind:event, including a lost battle's Defeat popup) - resolve those explicitly (order the idle agents, or pass them with resolveOptionIndex 0). In a count>1 batch, idle blocks the first idle turn (advancedBy may be 0) unless agents hold standing orders or you pass passIdleAgents:true.")),
+                    Schema.Prop("passIdleAgents", Schema.Boolean("Deliberate fast-forward opt-in: bulk-pass every idle agent (a visible 'Passing Turn') each turn so a multi-turn advance doesn't stop on the recurring idle-agent alert. Unlike force this is a conscious choice to waste those agents' turns - prefer giving them standing orders instead. Only affects idle; combat and narrative events still block.")),
                     Schema.Prop("resolveOptionIndex", Schema.Integer("If a decision popup is blocking the turn, choose this option (index from the pendingDecision options) to resolve it, then continue ending the turn")),
                     Schema.Prop("stopOnThreatMotivation", Schema.Integer("Opt-in caution: stop the batch on the first turn a hunter's motivation toward one of your agents is AT OR ABOVE this percent, even while the agent is still favoured - catches threat building up before an agent becomes huntable. Level-triggered: fires whether the hunter rose to it mid-batch OR was already there at batch start. Motivation can exceed 100 for a strongly-inclined hunter, so a threshold above 100 is valid (e.g. 150 = only when strongly inclined). Omit or 0 to disable (default)."))),
                 a =>
@@ -761,9 +766,9 @@ namespace ShadowsMcp.Tools
                     .Set("detail", rr != null ? rr.Text : null);
             }
 
-            // Pending agent combat must NEVER be auto-resolved — even under force=true. Unlike idle agents /
-            // unspent skill points / informational popups (which the game's force path legitimately pushes
-            // through), a battle is a real tactical choice, and World.bEndTurn(force) would silently fight it via
+            // Pending agent combat must NEVER be auto-resolved — even under force=true. Unlike unspent skill
+            // points / informational popups (which the game's force path legitimately pushes through), a
+            // battle is a real tactical choice, and World.bEndTurn(force) would silently fight it via
             // BattleAgents.automatic(). So while combat is pending we DENY force to bEndTurn: bEndTurn(false) pops
             // the battle (or just stops on whatever popup is on top) instead of automatic()-ing it, and the turn
             // cannot advance. Detect it directly — an agent still engaged this turn, or an already-open battle
@@ -775,13 +780,33 @@ namespace ShadowsMcp.Tools
                 combatEngaged = !pdCombat.IsNull && pdCombat["kind"].AsString() == "combat";
             }
 
+            // The idle-agent alert is a hard block too — force must NOT silently waste an idle agent's turn
+            // (in this game you almost always want every unit active). Mirror combat: while an agent is idle we
+            // DENY force to bEndTurn, so bEndTurn(false) stops on the idle guard (World.cs:699) and the turn
+            // surfaces the idleAgents decision instead of blowing past it. Detected directly (not via the
+            // pending-decision kind) so a message/death popup on top can't mask the idle state and let force slip.
+            // passIdleAgents is the one deliberate escape: assign every idle agent Task_PassTurn (a visible
+            // "Passing Turn"), so an intentional multi-turn fast-forward keeps advancing — a conscious choice to
+            // waste those turns, not the blanket force. It leaves a to-be-fought (engaged) agent alone.
+            if (args["passIdleAgents"].AsBool())
+            {
+                foreach (Unit u in map.units)
+                {
+                    if (u == null || u.isDead || !u.isCommandable() || !(u is UA)) continue;
+                    if (u.engagedBy != null && u.turnLastEngaged == map.turn) continue;
+                    if (u.task == null && u.movesTaken == 0) u.task = new Task_PassTurn();
+                }
+            }
+            bool idleBlocks = AnyAgentIdle(map, world); // passIdleAgents just gave those agents a task ⇒ not idle
+
             int before = map.turn;
             int after;
             JsonValue autoDismiss;
             try
             {
-                // Deny force while combat is pending so bEndTurn pops the battle instead of auto-resolving it.
-                world.bEndTurn(force && !combatEngaged);
+                // Deny force while combat OR the idle-agent alert is pending, so bEndTurn stops (pops the
+                // battle / selects the idle unit) instead of auto-resolving or silently wasting them.
+                world.bEndTurn(force && !combatEngaged && !idleBlocks);
                 after = map.turn;
 
                 // Capture this turn's status messages (idle agents, wars, seals, hero actions) into the
@@ -816,9 +841,14 @@ namespace ShadowsMcp.Tools
                 if (!resolved.IsNull) result.Set("resolved", resolved);
                 if (!autoDismiss.IsNull && autoDismiss["count"].AsInt(0) > 0)
                     result.Set("autoDismissed", autoDismiss);
-                // A fresh decision may have popped during processing (e.g. an event's follow-up).
+                // A fresh decision may have popped during processing (e.g. an event's follow-up). When the
+                // caller opted into passIdleAgents, don't surface the idle alert they'll re-raise next turn
+                // (Task_PassTurn clears each turnTick) — else a passIdleAgents batch would stop on it every turn.
+                // Any OTHER decision (level-up, event, combat) still surfaces and stops the batch.
                 JsonValue nowPending = Decisions.DecisionRegistry.FullOrNull(ctx);
-                if (!nowPending.IsNull) result.Set("pendingDecision", DecorateResolveHint(nowPending));
+                if (!nowPending.IsNull &&
+                    !(args["passIdleAgents"].AsBool() && nowPending["kind"].AsString() == "idleAgents"))
+                    result.Set("pendingDecision", DecorateResolveHint(nowPending));
                 return result;
             }
 
@@ -887,6 +917,24 @@ namespace ShadowsMcp.Tools
             return false;
         }
 
+        /// <summary>True while the idle-agent alert blocks turn end: option_idleAlert on and a commandable UA has
+        /// no order and hasn't moved (the World.cs:699 guard). Used to deny force to bEndTurn so a forced end_turn
+        /// never silently wastes an idle agent's turn — it must be ordered or explicitly passed (resolve optionIndex
+        /// 0 / passIdleAgents), exactly as a pending battle is never auto-resolved. Detected directly (not via the
+        /// pending-decision kind) so a message/death popup on top can't mask the idle state and let force slip.
+        /// Gated on UA to match the engine guard (UA-only) and IdleAgentsDecision.IdleAgents.</summary>
+        private static bool AnyAgentIdle(Map map, World world)
+        {
+            if (map == null || map.automatic || map.units == null) return false;
+            if (world == null || !world.option_idleAlert) return false;
+            foreach (Unit u in map.units)
+            {
+                if (u == null || u.isDead || !u.isCommandable() || !(u is UA)) continue;
+                if (u.task == null && u.movesTaken == 0) return true;
+            }
+            return false;
+        }
+
         private static string DiagnoseEndTurnBlock(Map map, World world)
         {
             if (world.turnLock) return "turn processing is already underway";
@@ -904,7 +952,7 @@ namespace ShadowsMcp.Tools
                     return u.getName() + " has unspent skill points (force=true auto-spends them)";
                 if (world.option_idleAlert && u.task == null && u.movesTaken == 0)
                     return u.getName() + " is idle and the idle-agent alert is on (give it an order, " +
-                        "pass it via resolve_decision, or force=true)";
+                        "pass it via resolve_decision optionIndex 0, or fast-forward with end_turn passIdleAgents:true)";
             }
             return "unknown guard - check the game window for popups";
         }

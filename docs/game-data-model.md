@@ -81,6 +81,9 @@ bEndTurn(force):
   guards: turnLock, open dialog (ui.blocker), active selector,
           agent engaged in combat, unspent skill points, idle-agent alert
           (force=true auto-resolves battles, auto-spends skill points, skips alerts)
+          NB: this is the raw engine primitive. The mod's end_turn tool denies force to bEndTurn
+          for BOTH a pending battle AND the idle-agent alert (both hard-block; idle needs an order
+          or resolveOptionIndex 0, or the passIdleAgents:true opt-in) — see ground-truth-notes.md.
   turnLock = true
   map.turnTick():
       turn++

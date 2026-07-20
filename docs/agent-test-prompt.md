@@ -173,10 +173,14 @@ recruit_agent, command_army, get_pending_decision, resolve_decision, end_turn.
   the once and SKIP the other with a note.
 - G4 (idle-agent alert): if `end_turn` reports `blockedBy:"decision"` with an idle-agents kind, resolve it
   with `resolve_decision {"optionIndex":0}` (pass all) OR by ordering an agent, then `end_turn` advances.
-  Note a `count>1` `force` batch does NOT keep skipping idle agents: `force` clears a one-off popup, not
-  this recurring state, so the batch advances one turn then stops again next turn on the re-raised alert
-  (`stopReason:"decision"`, `kind:"idleAgents"`). To advance many turns unattended, give every agent a
-  standing order (they leave the idle set).
+  `force` does NOT skip idle: like combat, the idle alert blocks even under `force` — assert
+  `end_turn {"force":true}` with an idle agent does NOT advance and returns `blockedBy:"decision"` /
+  `kind:"idleAgents"` (and `resolve_decision {"force":true}` no longer passes idle: it asks for
+  `optionIndex 0`). Idle is a recurring state (`Task_PassTurn` lasts one turn), so a `count>1` `force` batch
+  stops on the first idle turn (`advancedBy` may be 0, `stopReason:"decision"`, `kind:"idleAgents"`). To
+  advance many turns unattended, give every agent a standing order (they leave the idle set) OR pass
+  `passIdleAgents:true` — the explicit opt-in that bulk-passes idle each turn (a visible "Passing Turn");
+  assert `end_turn {"count":3,"passIdleAgents":true}` advances multiple turns without stopping on idle.
 - G5 (opportunistic, agent death): if an agent dies, the popup kind decides the expectation — the turn
   always still advances. A non-combat death surfaces as a `kind:"death"` NOTICE (`PopupMsgAgentsDeath`):
   assert `end_turn {"force":true}` auto-dismisses it (`autoDismissed.count > 0`, `dismissed` includes
@@ -202,10 +206,12 @@ recruit_agent, command_army, get_pending_decision, resolve_decision, end_turn.
   false and `end_turn` STILL advances — losing all agents is NOT a loss. (If you never hit 0 agents, SKIP.)
 - H4 (opportunistic): if the game ends (`endOfGameAchieved` true), assert `end_turn` returns
   `{gameOver:true, outcome:"victory"|"defeat", ...}` and does NOT advance `turn`. Else SKIP.
-- H5 (multi-turn): snapshot `game_overview.turn`; `end_turn {"count":3,"force":true}`; assert the result has
-  `advancedBy` (1–3), `requestedCount:3` and a `stoppedEarly` bool, and that `turn` rose by exactly
+- H5 (multi-turn): snapshot `game_overview.turn`; `end_turn {"count":3,"force":true,"passIdleAgents":true}`
+  (`passIdleAgents` so an idle agent doesn't legitimately stop the batch at `advancedBy:0`); assert the result
+  has `advancedBy` (1–3), `requestedCount:3` and a `stoppedEarly` bool, and that `turn` rose by exactly
   `advancedBy`. If `stoppedEarly` is true, assert a `stopReason` is present
-  (decision / gameOver / threatEscalation / threatMotivation / notAdvanced).
+  (decision / gameOver / threatEscalation / threatMotivation / notAdvanced). (Without `passIdleAgents`, an
+  idle agent is expected to stop the batch early with `advancedBy:0`, `stopReason:"decision"` — see G4.)
 - H6 (opportunistic, threatAlert): if any `end_turn` (single or batched) returns a `threatAlert`, assert it
   is an array whose entries each name an `agent`, a `trigger`
   (becameHuntable / gainedHunter / worsened / motivation), and — when a hunter is present — a hunter with a
@@ -220,8 +226,10 @@ recruit_agent, command_army, get_pending_decision, resolve_decision, end_turn.
   hunter with motivation >0 exists.
 
 **I. Robustness / soak**
-- I1: run `end_turn {"force":true}` for ~5–10 turns in a row; assert it never stalls (each call returns,
-  advancing or clearly reporting a preserved real decision) and `turn` keeps climbing.
+- I1: run `end_turn {"force":true,"passIdleAgents":true}` for ~5–10 turns in a row; assert it never stalls
+  (each call returns, advancing or clearly reporting a preserved real decision) and `turn` keeps climbing.
+  (`passIdleAgents` so the recurring idle-agent alert — which now blocks even under `force`, like combat —
+  doesn't legitimately halt the climb; without it, an idle agent is expected to stop the advance.)
 - I2 (error): a malformed call (e.g. `perform_challenge {"unitId":"U1"}` with no challengeId, or a bogus
   challengeId like `C-nope`) returns a clean error, not a hang. (Challenge ids no longer go stale over
   turns, so a genuinely-invalid id is the way to exercise this.)

@@ -180,7 +180,17 @@ mcp list_recruitable_agents
 - [ ] Order one idle agent (`move_unit`) → it drops off the idle list and the banner count falls
 - [ ] `mcp resolve_decision '{"optionIndex":0}'` → remaining idle agents show "Passing Turn" in
       `get_unit`; the banner clears and `mcp end_turn` (no force) advances
-- [ ] Turn the in-game idle-agent alert **off** → no idle pending decision is reported
+- [ ] **force no longer skips idle (mirrors combat):** with an idle agent, `mcp end_turn '{"force":true}'`
+      does **not** advance the turn — it returns `blockedBy:"decision"` with `kind:"idleAgents"` (an idle
+      agent's turn is never silently wasted). A `count>1` `force` batch stops on the first idle turn
+      (`advancedBy:0`, `stopReason:"decision"`)
+- [ ] `mcp resolve_decision '{"force":true}'` on the idle alert no longer passes it — it returns a guidance
+      error asking for `optionIndex 0` (force still dismisses ordinary popups; idle is not one)
+- [ ] **Explicit fast-forward:** `mcp end_turn '{"count":3,"passIdleAgents":true}'` advances several turns
+      with idle agents present (they show "Passing Turn"), never stopping on the re-raised idle alert;
+      combat/events still stop it
+- [ ] Turn the in-game idle-agent alert **off** → no idle pending decision is reported, and
+      `mcp end_turn '{"force":true}'` advances normally
 
 ## 7. Save-game safety
 

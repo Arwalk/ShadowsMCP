@@ -314,6 +314,13 @@ The game is single-threaded UI: it "waits for the player" whenever a **modal blo
   `turnTick` clears itself). The mod models these as `INonModalDecision` (idle = `IdleAgentsDecision`),
   checked by `DecisionRegistry` only when `ui.blocker == null`, and surfaced/answered through the
   same `pendingDecision` / `get_pending_decision` / `resolve_decision` path as modal popups.
+  The mod treats idle as a hard block even under `force` (mirroring combat): `AdvanceOneTurn` passes
+  `force && !combatEngaged && !idleBlocks` to `bEndTurn` (idle detected directly via `AnyAgentIdle`, so a
+  message/death popup on top can't mask it and let force slip), and `IdleAgentsDecision.Resolve` passes only
+  on explicit `optionIndex 0`, never `force` — so a forced `end_turn` never silently wastes an idle agent's
+  turn. `end_turn`'s `passIdleAgents:true` is the one deliberate escape: it assigns `Task_PassTurn` to every
+  idle agent each turn and suppresses the re-raised idle decision, so an intentional multi-turn fast-forward
+  keeps advancing.
 
 Mod wrapping: `src/Mod/Tools/Decisions/` (handler per popup family + `DecisionRegistry`) and
 `src/Mod/Tools/DecisionTools.cs` (`get_pending_decision`, `resolve_decision`). A pending decision
