@@ -1210,7 +1210,7 @@ namespace ShadowsMcp
             public bool IsHuntable;
             public bool InHiding;
             public UA TopHunter;
-            public double TopMotivation;   // 0..1
+            public double TopMotivation;   // hunter's inclination to attack; uncapped (1.0 = evenly weighed, >1.0 = strongly inclined, mirroring the game's own >100% threat text)
             public int HunterDanger;
 
             public string Verdict()
@@ -1272,7 +1272,9 @@ namespace ShadowsMcp
                     IsHuntable = myProfile >= 50.0 && myMenace > 25.0,
                     InHiding = ua.task is Task_InHiding,
                     TopHunter = topHunter,
-                    TopMotivation = topHunter != null ? Math.Min(topMotivation, 1.0) : 0.0,
+                    // Uncapped: a strongly-inclined hunter reads >100%, matching the game's own threat text
+                    // (get_threats.threats[].message) rather than clamping to a misleading flat 100%.
+                    TopMotivation = topHunter != null ? topMotivation : 0.0,
                     HunterDanger = topHunter != null ? Safe(() => topHunter.getDangerEstimate(), 0) : 0
                 });
             }
@@ -1323,9 +1325,10 @@ namespace ShadowsMcp
         /// should stop for threats. Retuned to fire only on *meaningful* danger by default (an agent becomes
         /// huntable, gains a hunter it is NOT favoured against, or its odds worsen) - a merely-in-range,
         /// favoured, non-huntable hunter no longer stops the batch (that was the "fires constantly at low
-        /// motivation" noise). When <paramref name="motivationStopPct"/> &gt; 0 (opt-in), it ALSO flags the
-        /// first turn a hunter's motivation toward an agent rises to &gt;= that %, catching threat build-up
-        /// before the agent is exposed. <paramref name="alert"/> gets the per-agent detail (each entry tagged
+        /// motivation" noise). When <paramref name="motivationStopPct"/> &gt; 0 (opt-in), it ALSO flags any
+        /// turn a hunter's motivation toward an agent is AT OR ABOVE that % - level-triggered, so it fires
+        /// even when the hunter was already above at batch start (the edge form silently missed that common
+        /// case). <paramref name="alert"/> gets the per-agent detail (each entry tagged
         /// with a <c>trigger</c>), or null if nothing; <paramref name="reason"/> is the stopReason
         /// ("threatEscalation" for danger, "threatMotivation" for the opt-in tripwire, else null).</summary>
         public static void EvaluateThreatStop(GameContext ctx, Map map, List<AgentSafetyInfo> before,
@@ -1348,12 +1351,15 @@ namespace ShadowsMcp
                                 VerdictRank(s.Verdict()) > VerdictRank(b.Verdict());
                 bool meaningful = becameHuntable || gainedHunter || worsened;
 
+                // Motivation tripwire (opt-in): stop when a hunter's inclination toward this agent is AT OR
+                // ABOVE the threshold - level-triggered, NOT edge-triggered, so it also fires when the hunter
+                // was already above at batch start (the edge form silently never fired in that common case).
+                // The batch loop breaks on the first stop, so this cannot re-fire within a single batch.
                 int nowPct = s.TopHunter != null ? (int)Math.Round(s.TopMotivation * 100.0) : 0;
-                int wasPct = (had && b.TopHunter != null) ? (int)Math.Round(b.TopMotivation * 100.0) : 0;
-                bool roseToThreshold = motivationStopPct > 0 && s.TopHunter != null &&
-                                       nowPct >= motivationStopPct && wasPct < motivationStopPct;
+                bool atOrAboveThreshold = motivationStopPct > 0 && s.TopHunter != null &&
+                                          nowPct >= motivationStopPct;
 
-                if (meaningful || roseToThreshold)
+                if (meaningful || atOrAboveThreshold)
                 {
                     JsonValue a = AgentSafetyJson(ctx, s);
                     a.Set("message", AgentSafetyLine(ctx, s));
@@ -1363,7 +1369,7 @@ namespace ShadowsMcp
                         : "motivation");
                     alerts.Add(a);
                     if (meaningful) danger = true;
-                    if (roseToThreshold) motivation = true;
+                    if (atOrAboveThreshold) motivation = true;
                 }
             }
 

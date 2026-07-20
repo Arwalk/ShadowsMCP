@@ -148,10 +148,11 @@ mcp list_recruitable_agents
 
 **Agent-death notice (informational popup raised during turn processing):**
 
-- [ ] Get an agent killed (e.g. a high-danger challenge like "Infiltrate Holy Site", or losing a
-      battle). On the `end_turn` that kills it, the turn **still advances**; afterwards
-      `game_overview.pendingDecision.kind == "death"` and every tool result carries a
-      `⚠ A decision is pending (death: … has died) …` banner
+- [ ] Get an agent killed by something OTHER than a battle (e.g. a high-danger challenge like
+      "Infiltrate Holy Site"). On the `end_turn` that kills it, the turn **still advances**; afterwards
+      `game_overview.pendingDecision.kind == "death"` (`PopupMsgAgentsDeath`) and every tool result carries
+      a `⚠ A decision is pending (death: … has died) …` banner. (A death in **battle** instead raises a
+      `kind:"event"` "Defeat" `PopupEvent` — see the narrative-event row below, not this one.)
 - [ ] `mcp get_pending_decision` shows `kind:"death"`, the message text, and two options
       ("Dismiss" / "Focus the fallen agent's location, then dismiss")
 - [ ] `mcp resolve_decision '{"optionIndex":0}'` closes it and returns `resolved:true`; the banner

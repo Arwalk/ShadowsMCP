@@ -173,9 +173,17 @@ recruit_agent, command_army, get_pending_decision, resolve_decision, end_turn.
   the once and SKIP the other with a note.
 - G4 (idle-agent alert): if `end_turn` reports `blockedBy:"decision"` with an idle-agents kind, resolve it
   with `resolve_decision {"optionIndex":0}` (pass all) OR by ordering an agent, then `end_turn` advances.
-- G5 (opportunistic, agent death): if an agent dies (an `end_turn` result or `game_overview` shows a death
-  decision), assert the turn still advanced and `end_turn {"force":true}` auto-dismisses it
-  (`autoDismissed.count > 0`). Else SKIP.
+  Note a `count>1` `force` batch does NOT keep skipping idle agents: `force` clears a one-off popup, not
+  this recurring state, so the batch advances one turn then stops again next turn on the re-raised alert
+  (`stopReason:"decision"`, `kind:"idleAgents"`). To advance many turns unattended, give every agent a
+  standing order (they leave the idle set).
+- G5 (opportunistic, agent death): if an agent dies, the popup kind decides the expectation — the turn
+  always still advances. A non-combat death surfaces as a `kind:"death"` NOTICE (`PopupMsgAgentsDeath`):
+  assert `end_turn {"force":true}` auto-dismisses it (`autoDismissed.count > 0`, `dismissed` includes
+  `"death"`). A lost **battle** instead raises a `kind:"event"` "Defeat" popup (`PopupEvent`): assert
+  `force` does NOT auto-dismiss it (narrative events are never auto-answered, so no `autoDismissed` entry
+  for it) yet `turn` still advances, and it clears via `resolve_decision {"optionIndex":0}` /
+  `end_turn {"resolveOptionIndex":0}`. Test whichever path occurs; SKIP the rest.
 - G6 (opportunistic, item trading): if an item-trade popup ever blocks (`game_overview.pendingDecision` /
   `get_pending_decision` shows `kind:"itemTrading"`, `popupType:"PopupItemTrading"`), assert it exposes a
   `sides` array of two `{side, name, gold, items:[{name, top?}]}` objects and `options` whose labels are
@@ -203,10 +211,13 @@ recruit_agent, command_army, get_pending_decision, resolve_decision, end_turn.
   (becameHuntable / gainedHunter / worsened / motivation), and — when a hunter is present — a hunter with a
   `motivationPct`, and that the same agent appears in `get_threats.agentSafety`. Note the retuned stop no
   longer fires for a merely-in-range, favoured, non-huntable hunter. Else SKIP.
-- H7 (opportunistic, motivation stop): read a top hunter's `motivationPct` = M (>0) from `get_threats`; call
-  `end_turn {"count":3,"stopOnThreatMotivation":<a value ≤ M>}`. If motivation rises to/above the threshold
-  during the batch, assert it stops with `stopReason:"threatMotivation"` and a `threatAlert` entry whose
-  `trigger` is `motivation`. If no hunter/motivation exists to cross the threshold, SKIP (not forcible).
+- H7 (motivation stop): read a top hunter's `motivationPct` = M (>0) from `get_threats`; call
+  `end_turn {"count":3,"stopOnThreatMotivation":<a value ≤ M>}`. The stop is **level-triggered**: assert it
+  stops on turn 1 with `stopReason:"threatMotivation"` and a `threatAlert` entry whose `trigger` is
+  `motivation` — it fires whether the hunter was ALREADY ≥ the threshold at batch start (the common case that
+  used to be missed) or rises to it mid-batch. Also confirm `motivationPct` can now read >100 when the game's
+  own threat text does (the flat-100 cap was removed), so a threshold >100 is accepted. SKIP only if no
+  hunter with motivation >0 exists.
 
 **I. Robustness / soak**
 - I1: run `end_turn {"force":true}` for ~5–10 turns in a row; assert it never stalls (each call returns,

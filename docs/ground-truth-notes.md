@@ -243,7 +243,11 @@ Losing all your agents is **not** a loss — you are the god, and points regener
 `victoryMode` 0-5) or `Overmind.defeat(msg)` (`:1116`, heroes reforge the seals / fulfil the prophecy, monster
 hearts slain, etc. — never from unit count). The mod surfaces `endOfGameAchieved` + `defeated`/`victoryMode`
 in `game_overview` / `get_player_state`, and `end_turn` returns `gameOver` (with outcome) without advancing
-once it is set (`ActionTools.EndTurn`). Agent death itself stays a purely informational `PopupMsgAgentsDeath`.
+once it is set (`ActionTools.EndTurn`). Agent death itself is never a game-over. It surfaces in one of two
+ways: a natural/challenge death raises the informational `PopupMsgAgentsDeath` notice (kind:`death`,
+`IsInformational` → auto-dismissable under `force`), while losing an agent **in battle** raises a
+`PopupEvent` "Defeat" (kind:`event`) — a narrative event, so it is preserved under `force` like any event
+and must be answered via `resolveOptionIndex`/`resolve_decision`, not auto-dismissed.
 
 ## Decision windows / popups (UIMaster.cs, PopupEvent.cs, PopupAgentLevelup.cs, ModKernel.cs)
 

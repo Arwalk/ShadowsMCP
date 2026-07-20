@@ -102,23 +102,30 @@ namespace ShadowsMcp.Tools
                 "End your turn (runs the full turn processing; may take a few seconds). If a decision popup " +
                 "is blocking the turn, this returns it with its options (also in game_overview.pendingDecision) " +
                 "and does not advance; pass resolveOptionIndex to pick an option, and it resolves that decision " +
-                "then continues ending the turn. With force=true, auto-resolves whatever else blocks the turn " +
-                "end (skill points auto-spent, idle-agent warnings skipped, informational popups like agent " +
-                "deaths dismissed). A pending agent battle is the one thing force will NOT skip: it always " +
-                "blocks (blockedBy:\"combat\") and must be resolved - fight to the end, flee, or retreat via " +
-                "resolveOptionIndex / resolve_decision. Pass " +
+                "then continues ending the turn. With force=true, auto-resolves what else blocks a single " +
+                "turn's end (skill points auto-spent, the idle-agent alert pushed past for that turn, and " +
+                "purely-informational popups dismissed: the agent-death NOTICE - kind:\"death\", " +
+                "PopupMsgAgentsDeath - and autosave/message boxes). Two things force never auto-answers: a " +
+                "pending agent battle (it always blocks - blockedBy:\"combat\" - and must be resolved: fight " +
+                "to the end, flee, or retreat via resolveOptionIndex / resolve_decision), and a narrative " +
+                "event (kind:\"event\"), INCLUDING the \"Defeat\" event a lost battle raises, because an " +
+                "event's choice can matter - answer it with resolveOptionIndex. Idle agents are a recurring " +
+                "state, not a one-off notice: a count>1 batch stops each turn on the re-raised idle alert " +
+                "(stopReason:\"decision\", kind:\"idleAgents\") unless the agents hold standing orders. Pass " +
                 "count to advance several turns at once (force=true recommended so it doesn't stall on the " +
                 "repetitive 'Life Continues'-type popups); it stops early and reports stopReason on any "
                 + "decision, game over, or a meaningful threat escalation (an agent becomes huntable / a hero "
                 + "it is not favoured against starts hunting it / its odds worsen), with a threatAlert listing "
                 + "the affected agents (each tagged with what triggered it). Set stopOnThreatMotivation to also "
-                + "halt on rising hunter motivation, before an agent is exposed. A 'tips' array may also appear, "
+                + "halt when a hunter's motivation toward an agent is at or above that percent - it fires "
+                + "whether motivation rose to it mid-batch OR was already there at the start, and can exceed "
+                + "100 for a strongly-inclined hunter. A 'tips' array may also appear, "
                 + "explaining a mechanic that just became relevant.",
                 Schema.Object(
                     Schema.Prop("count", Schema.Integer("Advance up to this many turns (default 1, max 10). Stops early on any decision, game over, or a meaningful threat escalation (an agent becomes huntable, a hero it is not favoured against starts hunting it, or its odds worsen).")),
-                    Schema.Prop("force", Schema.Boolean("Push through battle/level-up/idle-agent interruptions and dismiss informational popups")),
+                    Schema.Prop("force", Schema.Boolean("Auto-resolve level-up/skill-point and idle-agent interruptions and dismiss purely-informational popups (the death NOTICE, message boxes). Does NOT skip a pending battle (always blocks) or a narrative event (kind:event, including a lost battle's Defeat popup) - resolve those explicitly. In a count>1 batch, idle agents re-raise each turn and stop the batch unless they hold orders.")),
                     Schema.Prop("resolveOptionIndex", Schema.Integer("If a decision popup is blocking the turn, choose this option (index from the pendingDecision options) to resolve it, then continue ending the turn")),
-                    Schema.Prop("stopOnThreatMotivation", Schema.Integer("Opt-in caution: also stop the batch the first turn a hunter's motivation toward one of your agents rises to >= this percent (1-100), even while the agent is still favoured - catches threat building up before an agent becomes huntable. Omit or 0 to disable (default)."))),
+                    Schema.Prop("stopOnThreatMotivation", Schema.Integer("Opt-in caution: stop the batch on the first turn a hunter's motivation toward one of your agents is AT OR ABOVE this percent, even while the agent is still favoured - catches threat building up before an agent becomes huntable. Level-triggered: fires whether the hunter rose to it mid-batch OR was already there at batch start. Motivation can exceed 100 for a strongly-inclined hunter, so a threshold above 100 is valid (e.g. 150 = only when strongly inclined). Omit or 0 to disable (default)."))),
                 a =>
                 {
                     bool force = a["force"].AsBool();
