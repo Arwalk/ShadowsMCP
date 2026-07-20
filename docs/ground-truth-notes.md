@@ -139,6 +139,29 @@ Warns (confirm dialog) when abandoning a `Task_PerformChallenge` whose progress 
   c.claimedBy = um; ui.checkData()`.
 - Remote challenge: `Task_GoToPerformChallenge(Challenge c)` (used by AI & UI flows).
 
+## Commandable-military special orders — Raze / Drive Back / Attack (UM.cs, UIScroll_Unit.cs:456-499)
+
+A **third action category** beside challenges and powers: direct command methods on `UM`, which the game UI
+hand-builds as buttons for a selected commandable military unit. They are **not** `Challenge`s (never in
+`location.GetChallenges()` — the UI wraps them in cosmetic `UIE_Challenge` boxes with `special=1/2/3`) and
+**not** `Power`s, so they surface through no `getChallenges`/`getPowers` accessor. Replicated by the mod's
+`command_army` tool and advertised by `Summaries.UnitOrders` (get_unit/list_units `orders`).
+
+- **Raze settlement** — `UM.playerCommandsRazeSettlement()` (UM.cs:174). Gate: `isCommandable()` AND
+  `um.location.settlement is SettlementHuman` AND `!(task is Task_InBattle)`. **No target arg** — acts on the
+  unit's own tile. Commit: `task = new Task_RazeLocation{ ignorePeace = true }` (drains `settlement.defences`
+  each turn until `fallIntoRuin`). This is how an awakened `God_Snake` / `UM_SheWhoWillFeast` wins.
+- **Drive back a hero** — `UM.playerCommandsDriveBack(UA)` (UM.cs:187). Target: a `UA` in `um.location.units`
+  with `!target.isCommandable()`. Gate: `!(task is Task_InBattle)`. Forces the hero to drop its task and
+  retreat to a neighbour.
+- **Attack an army** — `UM.playerOrdersAttack(UM)` (UM.cs:102, virtual). Target: a `UM` in
+  `um.location.units` with `!target.isCommandable() && target.society != um.society`. Gate:
+  `!(task is Task_InBattle)` AND `movesTaken < getMaxMoves()`. Starts a `BattleArmy`.
+
+All three end with `map.world.ui.checkData()`. The UI only offers drive-back/attack against units **sharing
+the commander's tile** (it iterates `um.location.units`), so `command_army` enforces `target.location ==
+um.location`.
+
 ## Powers (Power.cs, God.cs, Overmind.cs, UIE_GodPower.cs, Sel_CastPower.cs)
 
 - `overmind.power: double` is the resource; `overmind.god.getPowers(): List<Power>`;

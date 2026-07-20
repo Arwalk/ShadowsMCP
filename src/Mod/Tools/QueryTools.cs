@@ -226,7 +226,9 @@ namespace ShadowsMcp.Tools
 
             host.Register(new ToolDefinition(
                 "list_units",
-                "List units. Default scope 'mine' = your commandable agents. Paginated.",
+                "List units. Default scope 'mine' = your commandable agents. Paginated. A commandable military " +
+                "unit carries an 'orders' array (raze/drive_back/attack via command_army) when one is available " +
+                "on its tile.",
                 Schema.Object(
                     Schema.Prop("scope", Schema.StringEnum("Filter: mine (default), agents, military, all, hostileToMe (units hunting/disrupting a shadow-aligned unit you benefit from - your own agents or allied evil units such as orc upstarts; mirrors get_threats)", "mine", "agents", "military", "all", "hostileToMe")),
                     Schema.Prop("socialGroupId", Schema.String("Only units of this social group (e.g. SG3)")),
@@ -262,7 +264,9 @@ namespace ShadowsMcp.Tools
 
             host.Register(new ToolDefinition(
                 "get_unit",
-                "Full detail for one unit: person, task, menace/profile, rituals it can perform.",
+                "Full detail for one unit: person, task, menace/profile, rituals it can perform, and (for a " +
+                "commandable military unit) an 'orders' array of army commands - raze/drive_back/attack - issued " +
+                "via command_army.",
                 Schema.Object(Schema.Prop("unitId", Schema.String("Unit id, e.g. U17"), required: true)),
                 a => WithMap(ctx, map =>
                 {

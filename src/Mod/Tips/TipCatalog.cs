@@ -143,6 +143,17 @@ namespace ShadowsMcp.Tips
                 "resolve them via game_overview's pendingDecision (or get_pending_decision / resolve_decision). " +
                 "Expect challenges to run longer than the raw turn estimate because of these events."),
 
+            Ctx("army_orders", "Commandable armies: raze, drive back, attack", "tactics", HasCommandableArmy,
+                "A commandable military unit has special orders (command_army): raze cities, drive back heroes, attack armies.",
+                "You control a military unit (a UM) - for example an awakened god-army such as She Who Will Feast, " +
+                "or an orc raiding party. Besides moving, it has special orders that are NEITHER challenges nor god " +
+                "powers, so they never appear in list_challenges or list_powers: they are listed under 'orders' in " +
+                "get_unit/list_units and issued with the command_army tool. order=raze devours the human settlement " +
+                "the unit is standing on (move it onto the city first; the city's defences fall each turn until it " +
+                "is destroyed) - this is how She Who Will Feast wins; order=drive_back forces an enemy hero on its " +
+                "tile to retreat; order=attack starts a battle with an enemy army on its tile. If this unit IS your " +
+                "awakened god, guard it - its death ends the game."),
+
             Ctx("politics", "War & civil war", "politics", AnyWar,
                 "Wars devastate human nations; hierophants in an infiltrated capital can start them and civil wars.",
                 "There is now a war in the world, and wars are a powerful weapon for you. Once you have infiltrated " +
@@ -310,6 +321,18 @@ namespace ShadowsMcp.Tips
             if (m == null || m.units == null) return false;
             foreach (Unit u in m.units)
                 if (u != null && u.isCommandable() && u.task is Task_PerformChallenge) return true;
+            return false;
+        }
+
+        // Fires when the player controls a military unit (a commandable UM) - an awakened god-army like
+        // UM_SheWhoWillFeast, or a mid-game orc raiding party - whose raze/drive-back/attack orders are only
+        // reachable via command_army. See Summaries.UnitOrders.
+        private static bool HasCommandableArmy(GameContext c)
+        {
+            Map m = c != null ? c.Map : null;
+            if (m == null || m.units == null) return false;
+            foreach (Unit u in m.units)
+                if (u is UM && !u.isDead && u.isCommandable()) return true;
             return false;
         }
 

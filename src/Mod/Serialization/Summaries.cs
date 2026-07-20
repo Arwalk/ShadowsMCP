@@ -212,8 +212,72 @@ namespace ShadowsMcp
                 .Set("movesTaken", u.movesTaken)
                 .Set("maxMoves", u.getMaxMoves())
                 .Set("task", dead ? JsonValue.Null : TaskBrief(u.task));
+            // Commandable-military "special orders" (raze / drive back / attack) - a third action category
+            // the game surfaces on a selected UM, invoked via command_army. Omitted (null) for anything that
+            // isn't a live commandable UM with an order available on its tile.
+            JsonValue orders = UnitOrders(ctx, u);
+            if (!orders.IsNull) o.Set("orders", orders);
             if (dead) o.Set("isDead", true);
             return o;
+        }
+
+        /// <summary>The commandable-military special orders available to <paramref name="u"/> on its current
+        /// tile - the game's own Raze / Drive Back / Attack buttons (UIScroll_Unit), which are neither god
+        /// powers nor challenges and so surface nowhere else. Each entry is {order, target, hint}; the hint
+        /// spells out the exact command_army call. Returns <see cref="JsonValue.Null"/> unless this is a live,
+        /// commandable, not-in-battle UM with at least one order applicable right now.</summary>
+        public static JsonValue UnitOrders(GameContext ctx, Unit u)
+        {
+            UM um = u as UM;
+            if (um == null || um.isDead || !um.isCommandable()) return JsonValue.Null;
+            // In battle every order pops "... while in battle" - offer none (mirrors UM.playerCommands*).
+            if (um.task is Task_InBattle) return JsonValue.Null;
+
+            JsonValue arr = JsonValue.NewArray();
+            bool any = false;
+
+            // Raze: the unit is standing on a human settlement (the only gate the UI applies).
+            SettlementHuman razeTarget = um.location != null ? um.location.settlement as SettlementHuman : null;
+            if (razeTarget != null)
+            {
+                arr.Add(JsonValue.NewObject()
+                    .Set("order", "raze")
+                    .Set("target", LocationRef(um.location))
+                    .Set("hint", "command_army {unitId:" + UnitId(ctx, um) + ", order:\"raze\"} razes " +
+                        SafeName(() => razeTarget.getName()) + " - its defences fall each turn until it is destroyed"));
+                any = true;
+            }
+
+            // Drive back / attack: one entry per hostile unit sharing this tile (the UI iterates location.units).
+            if (um.location != null && um.location.units != null)
+            {
+                foreach (Unit other in um.location.units)
+                {
+                    if (other == null || other.isDead) continue;
+                    UA ua = other as UA;
+                    if (ua != null && !ua.isCommandable())
+                    {
+                        arr.Add(JsonValue.NewObject()
+                            .Set("order", "drive_back")
+                            .Set("target", UnitRef(ctx, ua))
+                            .Set("hint", "command_army {unitId:" + UnitId(ctx, um) + ", order:\"drive_back\", targetUnitId:" +
+                                UnitId(ctx, ua) + "} forces this hero to retreat and drop its task"));
+                        any = true;
+                    }
+                    UM enemyArmy = other as UM;
+                    if (enemyArmy != null && !enemyArmy.isCommandable() && enemyArmy.society != um.society)
+                    {
+                        arr.Add(JsonValue.NewObject()
+                            .Set("order", "attack")
+                            .Set("target", UnitRef(ctx, enemyArmy))
+                            .Set("hint", "command_army {unitId:" + UnitId(ctx, um) + ", order:\"attack\", targetUnitId:" +
+                                UnitId(ctx, enemyArmy) + "} starts a battle with this army"));
+                        any = true;
+                    }
+                }
+            }
+
+            return any ? arr : JsonValue.Null;
         }
 
         public static JsonValue UnitDetail(GameContext ctx, Unit u)

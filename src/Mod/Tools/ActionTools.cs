@@ -80,6 +80,21 @@ namespace ShadowsMcp.Tools
                     Schema.Prop("locationId", Schema.String("Target location for the archetype, e.g. L3 (ignored when heroUnitId is given)"))),
                 a => QueryTools.WithMap(ctx, map => RecruitAgent(ctx, map, a))));
 
+            host.Register(new ToolDefinition(
+                "command_army",
+                "Issue a commandable military unit's special order - the third action category beside challenges " +
+                "and powers, used by army units such as an awakened god-army (e.g. She Who Will Feast) or an orc " +
+                "raiding party. order=raze devours the human settlement the unit is standing on (move it onto the " +
+                "city first; the city's defences fall each turn until it is destroyed); order=drive_back forces an " +
+                "enemy hero sharing the unit's tile to retreat and drop its task; order=attack starts a battle with " +
+                "an enemy army sharing the tile. A unit's currently-available orders (with the exact call) appear " +
+                "under 'orders' in get_unit / list_units.",
+                Schema.Object(
+                    Schema.Prop("unitId", Schema.String("Your military unit's id, e.g. U17"), required: true),
+                    Schema.Prop("order", Schema.StringEnum("Which order to issue", "raze", "drive_back", "attack"), required: true),
+                    Schema.Prop("targetUnitId", Schema.String("For drive_back/attack: the enemy unit sharing your unit's tile, e.g. U9 (ignored for raze)"))),
+                a => QueryTools.WithMap(ctx, map => CommandArmy(ctx, map, a))));
+
             // Registered as a server-thread tool: end-turn processing can exceed the normal
             // per-tool timeout, so it dispatches its own job with the longer budget.
             host.RegisterServerThread(new ToolDefinition(
@@ -423,6 +438,119 @@ namespace ShadowsMcp.Tools
             foreach (UAE_Abstraction ab in om.agentsGeneric) if (ab.code == code) return ab;
             foreach (UAE_Abstraction ab in om.agentsUnique) if (ab.code == code) return ab;
             return null;
+        }
+
+        // ---------- commandable-military special orders (raze / drive back / attack) ----------
+
+        /// <summary>Issue one of the three UM commands the game exposes on a selected commandable military unit
+        /// (UIScroll_Unit's Raze / Drive Back / Attack buttons). These are neither god powers nor challenges, so
+        /// they have no other tool. Each branch mirrors the exact guard + commit the matching UM.playerCommands*
+        /// / playerOrdersAttack method uses, returning a clean error where the UI would pop a message.</summary>
+        private static ToolResult CommandArmy(GameContext ctx, Map map, JsonValue a)
+        {
+            Unit u;
+            ToolResult err = ResolveCommandable(ctx, a["unitId"].AsString(), out u);
+            if (err != null) return err;
+
+            UM um = u as UM;
+            if (um == null)
+                return ToolResult.Error(u.getName() + " is not a military unit; only commandable armies (a UM, " +
+                    "such as an awakened god-army or an orc raiding party) can be given these orders.");
+
+            string order = a["order"].AsString();
+            if (string.IsNullOrEmpty(order))
+                return ToolResult.Error("missing 'order' - one of raze, drive_back, attack.");
+            order = order.ToLowerInvariant();
+
+            // Shared guard: none of the three orders can be issued while in battle (each method pops this).
+            if (um.task is Task_InBattle)
+                return ToolResult.Error(um.getName() + " cannot be given orders while in battle.");
+
+            switch (order)
+            {
+                case "raze":
+                {
+                    SettlementHuman sh = um.location != null ? um.location.settlement as SettlementHuman : null;
+                    if (sh == null)
+                        return ToolResult.Error(um.getName() + " must be standing on a human settlement to raze it - " +
+                            "move it onto the city first (its current tile has no human settlement).");
+                    um.playerCommandsRazeSettlement();
+                    CheckUiData(map);
+                    return ToolResult.Ok(JsonValue.NewObject()
+                        .Set("unit", Summaries.UnitRef(ctx, um))
+                        .Set("order", "raze")
+                        .Set("target", Summaries.LocationRef(um.location))
+                        .Set("task", TaskShort(um.task))
+                        .Set("status", "razing " + sh.getName() + " - its defences will fall each turn until it is destroyed"));
+                }
+                case "drive_back":
+                {
+                    Unit target;
+                    ToolResult terr = ResolveTileTarget(ctx, um, a["targetUnitId"].AsString(), out target);
+                    if (terr != null) return terr;
+                    UA ua = target as UA;
+                    if (ua == null)
+                        return ToolResult.Error(target.getName() + " is not a hero/agent; drive_back targets an enemy " +
+                            "hero (use order=attack for an enemy army).");
+                    if (ua.isCommandable())
+                        return ToolResult.Error(target.getName() + " is under your command; you can only drive back enemy heroes.");
+                    um.playerCommandsDriveBack(ua);
+                    CheckUiData(map);
+                    return ToolResult.Ok(JsonValue.NewObject()
+                        .Set("unit", Summaries.UnitRef(ctx, um))
+                        .Set("order", "drive_back")
+                        .Set("target", Summaries.UnitRef(ctx, ua))
+                        .Set("status", "drove back " + ua.getName() + " - forced to retreat and drop its current task"));
+                }
+                case "attack":
+                {
+                    Unit target;
+                    ToolResult terr = ResolveTileTarget(ctx, um, a["targetUnitId"].AsString(), out target);
+                    if (terr != null) return terr;
+                    UM enemyArmy = target as UM;
+                    if (enemyArmy == null)
+                        return ToolResult.Error(target.getName() + " is not an army; order=attack targets an enemy army " +
+                            "(use order=drive_back for an enemy hero).");
+                    if (enemyArmy.isCommandable())
+                        return ToolResult.Error(target.getName() + " is under your command; you cannot attack your own army.");
+                    if (enemyArmy.society == um.society)
+                        return ToolResult.Error(target.getName() + " is in your own society; you can only attack a hostile army.");
+                    if (um.movesTaken >= um.getMaxMoves())
+                        return ToolResult.Error(um.getName() + " has no remaining movement points this turn to attack.");
+                    um.playerOrdersAttack(enemyArmy);
+                    CheckUiData(map);
+                    return ToolResult.Ok(JsonValue.NewObject()
+                        .Set("unit", Summaries.UnitRef(ctx, um))
+                        .Set("order", "attack")
+                        .Set("target", Summaries.UnitRef(ctx, enemyArmy))
+                        .Set("status", "attacking " + enemyArmy.getName()));
+                }
+                default:
+                    return ToolResult.Error("unknown order '" + order + "' - one of raze, drive_back, attack.");
+            }
+        }
+
+        /// <summary>Resolve a drive_back/attack target and enforce that it shares the commander's tile
+        /// (the game only offers these orders against units in um.location.units).</summary>
+        private static ToolResult ResolveTileTarget(GameContext ctx, UM um, string id, out Unit target)
+        {
+            target = Summaries.ResolveId(ctx, id) as Unit;
+            if (target == null)
+                return ToolResult.Error(string.IsNullOrEmpty(id)
+                    ? "this order needs a targetUnitId (the enemy unit sharing your unit's tile) - see get_unit.orders."
+                    : "unknown or stale unit id: " + id + " - re-run list_units.");
+            if (target.isDead)
+                return ToolResult.Error(target.getName() + " is dead.");
+            if (target.location != um.location)
+                return ToolResult.Error(target.getName() + " is not on " + um.getName() + "'s tile; these orders only " +
+                    "apply to a unit sharing your unit's location (move onto its tile first).");
+            return null;
+        }
+
+        private static string TaskShort(Task t)
+        {
+            if (t == null) return null;
+            try { return t.getShort(); } catch { return t.GetType().Name; }
         }
 
         // ---------- end turn ----------

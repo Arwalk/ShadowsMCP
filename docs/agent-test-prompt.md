@@ -25,12 +25,12 @@ return. Do not use any tools other than the `shadows` server's.
 The game: you play a dark god corrupting the world through agents (your commandable units). You are
 authorized to freely mutate THIS game (it is expendable). Actions are irreversible — there is no save/undo.
 
-### Tools available (30)
+### Tools available (31)
 game_overview, get_threats, world_summary, list_locations, get_location, list_units, get_unit,
 list_persons, get_person, list_social_groups, get_social_group, list_wars, list_investigations,
 list_holy_orders, get_recent_events, get_player_state, get_victory_breakdown, list_recruitable_agents,
 list_powers, list_challenges, get_tips, inspect, move_unit, cancel_task, perform_challenge, use_power,
-recruit_agent, get_pending_decision, resolve_decision, end_turn.
+recruit_agent, command_army, get_pending_decision, resolve_decision, end_turn.
 
 ### Preflight (if this fails, stop and report BLOCKED)
 1. Call `game_overview`. If it errors ("no game in progress" / not ready) or the core tools are missing,
@@ -267,6 +267,28 @@ recruit_agent, get_pending_decision, resolve_decision, end_turn.
   game). If none appears within the run, SKIP with a note. (The core-mechanics primer also ships in the
   server's `initialize` instructions, which this checklist does not read directly.)
 
+**L. Commandable-army orders (`command_army`)**
+- L1 (error, wrong unit type): pick one of your agents (a `UA`, `kind:"agent"` from `list_units
+  {"scope":"mine"}`) and call `command_army {"unitId":"U...","order":"raze"}`; assert a clean error saying it
+  is not a military unit (agents can't raze). (Always testable.)
+- L2 (orders are military-only): `get_unit` on that same agent does NOT include an `orders` array (the key is
+  omitted for non-military units). Assert absence.
+- L3 (error, bad order value): if you have any commandable **military** unit (`kind:"military"` AND
+  `commandable:true` — from `list_units {"scope":"military"}`), call `command_army
+  {"unitId":"U...","order":"nope"}` and assert a clean "unknown order" error. If you have no commandable
+  military unit, SKIP (they come from an awakened god such as She Who Will Feast, or mid-game orc raiders —
+  not forcible on a short run).
+- L4 (opportunistic, orders shape): if a commandable military unit has an `orders` array in `get_unit`, assert
+  each entry is `{order, target, hint}` with `order` ∈ {raze, drive_back, attack} and `target` a `{id,name}`
+  ref (a location for raze, a unit for drive_back/attack). Else SKIP.
+- L5 (opportunistic, live raze): if a commandable military unit shows a `raze` order (it is standing on a human
+  settlement), snapshot that settlement's `defences` (`get_location`), call `command_army
+  {"unitId":"U...","order":"raze"}`, assert `get_unit.task` becomes a raze task, then `end_turn` a turn or two
+  and assert the settlement's `defences` dropped (heading toward destruction). Else SKIP.
+- L6 (error, on-tile target): if you have a commandable military unit, `command_army
+  {"unitId":"U...","order":"attack"}` with no `targetUnitId` (or a `targetUnitId` for a unit not on its tile)
+  returns a clean error asking for an on-tile target. Else SKIP.
+
 ### Reporting (required output)
 1. Print a table with columns: `id | area | result (PASS/FAIL/SKIP/BLOCKED) | expected | observed (tool +
    before→after) | notes`. One row per check above.
@@ -276,7 +298,7 @@ recruit_agent, get_pending_decision, resolve_decision, end_turn.
    directory (use the starting turn number from preflight so the name is stable). Confirm the file path in
    your final message.
 
-Work through A→K in order. Be concise in intermediate narration; the value is in the evidence and the final
+Work through A→L in order. Be concise in intermediate narration; the value is in the evidence and the final
 report.
 ````
 

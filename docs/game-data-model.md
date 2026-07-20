@@ -250,6 +250,12 @@ if (unit.movesTaken < unit.getMaxMoves())
     unit.task.turnTick(unit);        // start moving immediately with the moves left
 ```
 
+A commandable **military** unit (`UM`) also has three special orders the game UI exposes as buttons —
+`playerCommandsRazeSettlement()` (raze the human settlement it stands on), `playerCommandsDriveBack(UA)`
+(force an enemy hero on its tile to retreat) and `playerOrdersAttack(UM)` (attack an enemy army on its tile).
+These are neither challenges nor powers (see `ground-truth-notes.md`); the mod exposes them via the
+`command_army` tool and lists the available ones under `orders` in get_unit/list_units.
+
 ## 7. The player: `Overmind`, `God`, `Power`
 
 ### `Overmind`
