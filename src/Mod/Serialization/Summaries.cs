@@ -252,6 +252,34 @@ namespace ShadowsMcp
                     .Set("turnsIdle", ua.turnsIdle)
                     .Set("disruptionExhaustion", ua.disruptionExhaustion)
                     .Set("minions", minions));
+
+                // Combat readiness for risk management. dangerEstimate is the strength number the engine
+                // compares unit-vs-unit (UA.getDangerEstimate: hp + defence + attack + minions) — read a
+                // hostile hero's dangerEstimate too and compare to gauge who would win. isHuntable is the
+                // human-ruler assassination trigger (profile >= 50 AND menace > 25).
+                o.Set("combat", JsonValue.NewObject()
+                    .Set("dangerEstimate", Safe(() => ua.getDangerEstimate(), 0))
+                    .Set("hp", u.hp)
+                    .Set("defence", Safe(() => ua.getMaxDefence(), 0))
+                    .Set("attack", Safe(() => ua.getStatAttack(), 0))
+                    .Set("menace", Round2(u.menace))
+                    .Set("profile", Round2(u.profile))
+                    .Set("isHuntable", u.profile >= 50.0 && u.menace > 25.0)
+                    .Set("inHiding", ua.task is Task_InHiding));
+
+                // What this agent is carrying (items live on the person; same shape as get_person.items).
+                JsonValue items = JsonValue.NewArray();
+                if (ua.person != null && ua.person.items != null)
+                {
+                    foreach (Item it in ua.person.items)
+                    {
+                        if (it != null)
+                            items.Add(JsonValue.NewObject()
+                                .Set("name", SafeName(() => it.getName()))
+                                .Set("desc", Safe(() => it.getShortDesc(), null)));
+                    }
+                }
+                o.Set("items", items);
             }
 
             // The detection picture for this unit: which heroes are building a case against it.
@@ -373,7 +401,10 @@ namespace ShadowsMcp
                     .Set("shadow", Round2(st.shadow))
                     .Set("defences", Round2(st.defences))
                     .Set("isHuman", st.isHuman)
-                    .Set("isInfiltrated", st.isInfiltrated);
+                    .Set("isInfiltrated", st.isInfiltrated)
+                    // Fraction of infiltratable sub-districts infiltrated (0..1); 1.0 == fully infiltrated.
+                    // Several challenges (Enshadow, Desecrate) gate on this reaching 1.0.
+                    .Set("infiltration", Round2(Safe(() => st.infiltration, 0.0)));
                 // What this settlement is currently enacting (applies to any settlement type).
                 if (st.actionUnderway != null)
                     s.Set("action", JsonValue.NewObject()
@@ -401,7 +432,13 @@ namespace ShadowsMcp
                 {
                     foreach (Subsettlement sub in st.subs)
                     {
-                        subs.Add(SafeName(() => sub.getName()));
+                        // {name, infiltrated} per district (was name-only), so an agent can see e.g.
+                        // "City Palace infiltrated: false" — the gate behind Enshadow / Desecrate.
+                        JsonValue sv = JsonValue.NewObject()
+                            .Set("name", SafeName(() => sub.getName()))
+                            .Set("infiltrated", sub.infiltrated);
+                        if (Safe(() => sub.menace, 0.0) != 0.0) sv.Set("menace", Round2(sub.menace));
+                        subs.Add(sv);
                     }
                 }
                 s.Set("subsettlements", subs);
@@ -607,7 +644,7 @@ namespace ShadowsMcp
 
         // ---------- challenges ----------
 
-        public static JsonValue ChallengeSummary(GameContext ctx, Challenge c, Unit forUnit)
+        public static JsonValue ChallengeSummary(GameContext ctx, Challenge c, Unit forUnit, bool includeDescription = true)
         {
             JsonValue o = JsonValue.NewObject()
                 .Set("id", ChallengeId(ctx, c))
@@ -620,7 +657,21 @@ namespace ShadowsMcp
                 .Set("profileGain", Safe(() => Round2(c.getProfile()), 0))
                 .Set("danger", Safe(() => c.getDanger(), 0))
                 .Set("claimedBy", UnitRef(ctx, c.claimedBy));
-            try { o.Set("description", c.getDesc()); } catch { }
+            // Why the challenge is locked / what it needs — the game's own hint text (getRestriction).
+            // `valid` says whether the world preconditions are met and `validForUnit` whether THIS unit
+            // qualifies; `restriction` states the actual requirement (e.g. "Requires 100% Infiltration.
+            // Cannot perform if Ward is higher than 50%"). Combine it with the location's shadow /
+            // infiltration / ward (get_location or world_summary) to see which condition is unmet.
+            try
+            {
+                string restriction = c.getRestriction();
+                if (!string.IsNullOrEmpty(restriction)) o.Set("restriction", restriction);
+            }
+            catch { }
+            if (includeDescription)
+            {
+                try { o.Set("description", c.getDesc()); } catch { }
+            }
 
             UA ua = forUnit as UA;
             if (ua != null)
@@ -825,6 +876,224 @@ namespace ShadowsMcp
                 foreach (ReasonMsg r in influences)
                     if (r != null) arr.Add(JsonValue.NewObject().Set("reason", r.msg).Set("value", Round2(r.value)));
             return arr;
+        }
+
+        // ---------- seals ----------
+
+        /// <summary>Live seal countdown: seals broken, the running turn counter (sealProgress), the turn
+        /// the next seal breaks (God.getSealLevels()[sealsBroken]) and turns remaining. Surfaced flat so an
+        /// agent reading game_overview each turn cannot miss the fixed break schedule.</summary>
+        public static JsonValue SealTiming(Map map)
+        {
+            Overmind om = map != null ? map.overmind : null;
+            God god = om != null ? om.god : null;
+            int[] levels = god != null ? Safe(() => god.getSealLevels(), null) : null;
+            int broken = om != null ? om.sealsBroken : 0;
+            int progress = om != null ? om.sealProgress : 0;
+            JsonValue o = JsonValue.NewObject()
+                .Set("sealsBroken", broken)
+                .Set("sealProgress", progress);
+            if (levels != null && broken >= 0 && broken < levels.Length)
+            {
+                o.Set("nextSealAt", levels[broken]);
+                o.Set("turnsToNextSeal", Math.Max(0, levels[broken] - progress));
+            }
+            return o;
+        }
+
+        // ---------- combat safety (risk management) ----------
+
+        /// <summary>Per-agent risk snapshot: the most-inclined nearby hunter for each of your commandable
+        /// agents, mirroring the hunt scan in Overmind.getThreats. dangerEstimate is the engine's
+        /// unit-vs-unit strength (UA.getDangerEstimate); isHuntable is the human-ruler assassination trigger
+        /// (profile >= 50 AND menace > 25). Shared by get_threats (detail), game_overview (counts) and
+        /// end_turn (before/after escalation diff).</summary>
+        public sealed class AgentSafetyInfo
+        {
+            public UA Agent;
+            public int DangerEstimate;
+            public double Profile;
+            public double Menace;
+            public bool IsHuntable;
+            public bool InHiding;
+            public UA TopHunter;
+            public double TopMotivation;   // 0..1
+            public int HunterDanger;
+
+            public string Verdict()
+            {
+                if (TopHunter == null) return "safe";
+                if (DangerEstimate >= (double)HunterDanger * 1.2) return "favoured";
+                if (HunterDanger >= (double)DangerEstimate * 1.2) return "outmatched";
+                return "even";
+            }
+
+            /// <summary>A nearby hunter is inclined AND you are not clearly stronger.</summary>
+            public bool InDanger() { return TopHunter != null && Verdict() != "favoured"; }
+        }
+
+        public static List<AgentSafetyInfo> ComputeAgentSafety(GameContext ctx, Map map)
+        {
+            var result = new List<AgentSafetyInfo>();
+            if (map == null || map.units == null) return result;
+            foreach (Unit unit in map.units)
+            {
+                if (unit == null || unit.isDead) continue;
+                UA ua = unit as UA;
+                if (ua == null || !ua.isCommandable()) continue;
+
+                double myProfile = Safe(() => ua.profile, 0.0);
+                UA topHunter = null;
+                double topMotivation = 0.0;
+                foreach (Unit other in map.units)
+                {
+                    // Mirror Overmind.getThreats: only hostile heroes (skip your own agents and allied UAEN),
+                    // within the hero's reach (stepDist <= profile/5), ranked by getAttackUtility.
+                    if (other == null || other.isDead || other is UAEN || other.isCommandable()) continue;
+                    UA hunter = other as UA;
+                    if (hunter == null) continue;
+                    int dist;
+                    try { dist = map.getStepDist(hunter.location, ua.location); }
+                    catch { continue; }
+                    if ((double)dist > myProfile / 5.0) continue;
+
+                    var reasons = new List<ReasonMsg>();
+                    try { hunter.getAttackUtility(ua, reasons); }
+                    catch { continue; }
+                    double pos = 0.0, neg = 1.0;
+                    foreach (ReasonMsg r in reasons)
+                    {
+                        if (r.value > 0.0) pos += r.value; else neg -= r.value;
+                    }
+                    double motivation = neg != 0.0 ? pos / neg : 0.0;
+                    if (motivation > topMotivation) { topMotivation = motivation; topHunter = hunter; }
+                }
+
+                double myMenace = Safe(() => ua.menace, 0.0);
+                result.Add(new AgentSafetyInfo
+                {
+                    Agent = ua,
+                    DangerEstimate = Safe(() => ua.getDangerEstimate(), 0),
+                    Profile = myProfile,
+                    Menace = myMenace,
+                    IsHuntable = myProfile >= 50.0 && myMenace > 25.0,
+                    InHiding = ua.task is Task_InHiding,
+                    TopHunter = topHunter,
+                    TopMotivation = topHunter != null ? Math.Min(topMotivation, 1.0) : 0.0,
+                    HunterDanger = topHunter != null ? Safe(() => topHunter.getDangerEstimate(), 0) : 0
+                });
+            }
+            return result;
+        }
+
+        public static JsonValue AgentSafetyJson(GameContext ctx, AgentSafetyInfo s)
+        {
+            JsonValue o = JsonValue.NewObject()
+                .Set("agent", UnitRef(ctx, s.Agent))
+                .Set("dangerEstimate", s.DangerEstimate)
+                .Set("profile", Round2(s.Profile))
+                .Set("menace", Round2(s.Menace))
+                .Set("isHuntable", s.IsHuntable)
+                .Set("inHiding", s.InHiding)
+                .Set("verdict", s.Verdict());
+            if (s.TopHunter != null)
+                o.Set("topHunter", JsonValue.NewObject()
+                    .Set("unit", UnitRef(ctx, s.TopHunter))
+                    .Set("motivationPct", (int)Math.Round(s.TopMotivation * 100.0))
+                    .Set("dangerEstimate", s.HunterDanger));
+            return o;
+        }
+
+        /// <summary>Compact one-line danger summary for game_overview.threats.mostUrgent / threatAlert.</summary>
+        public static string AgentSafetyLine(GameContext ctx, AgentSafetyInfo s)
+        {
+            if (s.TopHunter == null) return null;
+            string hunter = SafeName(() => s.TopHunter.getName());
+            string agent = SafeName(() => s.Agent.getName());
+            return hunter + " is hunting " + agent + " (motivation " +
+                (int)Math.Round(s.TopMotivation * 100.0) + "%, " + s.Verdict() + ")";
+        }
+
+        private static int VerdictRank(string v)
+        {
+            switch (v)
+            {
+                case "favoured": return 1;
+                case "even": return 2;
+                case "outmatched": return 3;
+                default: return 0; // safe
+            }
+        }
+
+        /// <summary>Compare a before-snapshot to the live state; return an array of agents that just gained a
+        /// hunter or whose odds worsened (null if none). Drives end_turn.threatAlert / early-stop.</summary>
+        public static JsonValue ThreatAlert(GameContext ctx, Map map, List<AgentSafetyInfo> before)
+        {
+            var now = ComputeAgentSafety(ctx, map);
+            var byAgent = new Dictionary<UA, AgentSafetyInfo>();
+            if (before != null) foreach (var b in before) byAgent[b.Agent] = b;
+
+            JsonValue alerts = JsonValue.NewArray();
+            foreach (var s in now)
+            {
+                AgentSafetyInfo b;
+                bool had = byAgent.TryGetValue(s.Agent, out b);
+                bool gainedHunter = s.TopHunter != null && (!had || b.TopHunter == null);
+                bool worsened = s.TopHunter != null && had && b.TopHunter != null &&
+                                VerdictRank(s.Verdict()) > VerdictRank(b.Verdict());
+                if (gainedHunter || worsened)
+                {
+                    JsonValue a = AgentSafetyJson(ctx, s);
+                    a.Set("message", AgentSafetyLine(ctx, s));
+                    alerts.Add(a);
+                }
+            }
+            return alerts.Count > 0 ? alerts : JsonValue.Null;
+        }
+
+        // ---------- world summary ----------
+
+        /// <summary>One terse strategic row per location for world_summary: coords, owner, and settlement
+        /// essentials (shadow, defences, population, infiltration + per-sub infiltrated state, capital flag)
+        /// plus neighbour ids. Same field reads as LocationDetail, without the per-location tool overhead.</summary>
+        public static JsonValue WorldSummaryRow(GameContext ctx, Location l)
+        {
+            JsonValue o = JsonValue.NewObject()
+                .Set("id", LocationId(l))
+                .Set("name", SafeName(() => l.getName()))
+                .Set("owner", SocialGroupRef(l.soc));
+            if (l.hex != null)
+                o.Set("coords", JsonValue.NewObject().Set("x", l.hex.x).Set("y", l.hex.y).Set("z", l.hex.z));
+
+            if (l.settlement != null)
+            {
+                Settlement st = l.settlement;
+                JsonValue sset = JsonValue.NewObject()
+                    .Set("type", st.GetType().Name)
+                    .Set("shadow", Round2(st.shadow))
+                    .Set("defences", Round2(st.defences))
+                    .Set("isInfiltrated", st.isInfiltrated)
+                    .Set("infiltration", Round2(Safe(() => st.infiltration, 0.0)));
+                SettlementHuman sh = st as SettlementHuman;
+                if (sh != null) sset.Set("population", sh.population);
+                Society soc = l.soc as Society;
+                if (soc != null && soc.capital == l.index) sset.Set("isCapital", true);
+                if (st.subs != null && st.subs.Count > 0)
+                {
+                    JsonValue subs = JsonValue.NewArray();
+                    foreach (Subsettlement sub in st.subs)
+                        subs.Add(JsonValue.NewObject()
+                            .Set("name", SafeName(() => sub.getName()))
+                            .Set("infiltrated", sub.infiltrated));
+                    sset.Set("subs", subs);
+                }
+                o.Set("settlement", sset);
+            }
+
+            JsonValue neighbours = JsonValue.NewArray();
+            foreach (Location n in l.getNeighbours()) neighbours.Add(LocationId(n));
+            o.Set("neighbours", neighbours);
+            return o;
         }
 
         public static Location FindLocation(GameContext ctx, int index)

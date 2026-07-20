@@ -61,6 +61,11 @@ namespace ShadowsMcp.Core.Mcp
             return JsonValue.NewObject().Set("type", "integer").Set("description", description);
         }
 
+        public static JsonValue Number(string description)
+        {
+            return JsonValue.NewObject().Set("type", "number").Set("description", description);
+        }
+
         public static JsonValue Boolean(string description)
         {
             return JsonValue.NewObject().Set("type", "boolean").Set("description", description);

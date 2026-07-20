@@ -17,7 +17,10 @@ namespace ShadowsMcp.Tools
         {
             host.Register(new ToolDefinition(
                 "game_overview",
-                "High-level state of the current game: turn, your god, resources, threat levels, world counts.",
+                "High-level state of the current game: turn, your god, resources, world counts, seal countdown " +
+                "and a threats breadcrumb. victoryProgress is your weighted score toward victory (score / " +
+                "pointsToWin ~200), not average enshadowment or panic. threats.agentsInDanger flags agents a " +
+                "hero is closing on - open get_threats when it is non-zero.",
                 Schema.Object(),
                 a => WithMap(ctx, map =>
                 {
@@ -31,6 +34,24 @@ namespace ShadowsMcp.Tools
                     int agentCap = om.god != null ? om.getAgentCap() : 0;
                     bool canRecruit = om.availableEnthrallments > 0 && om.nEnthralled < agentCap;
                     int maxTurns = om.god != null ? om.god.getMaxTurns() : 0;
+
+                    // Combat-danger breadcrumb: an agent that only ever reads game_overview should still
+                    // notice heroes closing on its agents. agentsInDanger > 0 => open get_threats.
+                    var safety = Summaries.ComputeAgentSafety(ctx, map);
+                    int agentsInDanger = 0;
+                    Summaries.AgentSafetyInfo worstThreat = null;
+                    foreach (var s in safety)
+                    {
+                        if (!s.InDanger()) continue;
+                        agentsInDanger++;
+                        if (worstThreat == null || s.TopMotivation > worstThreat.TopMotivation) worstThreat = s;
+                    }
+                    JsonValue threatsBlock = JsonValue.NewObject()
+                        .Set("agentsInField", safety.Count)
+                        .Set("agentsInDanger", agentsInDanger);
+                    if (worstThreat != null) threatsBlock.Set("mostUrgent", Summaries.AgentSafetyLine(ctx, worstThreat));
+                    if (agentsInDanger > 0) threatsBlock.Set("hint", "call get_threats for per-agent odds and the full threats panel");
+
                     JsonValue o = JsonValue.NewObject()
                         .Set("modVersion", ModCore.ModVersion)
                         .Set("turn", map.turn)
@@ -44,6 +65,9 @@ namespace ShadowsMcp.Tools
                         // victoryMode is only recorded once the game is decided; null while playing.
                         .Set("victoryMode", om.endOfGameAchieved ? Summaries.VictoryModeLabel(om.victoryMode) : null)
                         .Set("victoryProgress", Summaries.Round2(map.data_victoryProgess))
+                        // Distinct from victoryProgress: the average enshadowment of rulers/heroes. Surfaced
+                        // so the two are not conflated. Full victory split via get_victory_breakdown.
+                        .Set("avrgEnshadowment", Summaries.Round2(map.data_avrgEnshadowment))
                         .Set("worldPanic", Summaries.Round2(map.worldPanic))
                         // Where the world's alarm is coming from (a player reads this in tooltips).
                         .Set("panic", JsonValue.NewObject()
@@ -56,7 +80,11 @@ namespace ShadowsMcp.Tools
                         .Set("wars", map.wars != null ? map.wars.Count : 0)
                         // Clues currently pointing at your agents/interests; drill in via list_investigations.
                         .Set("activeInvestigations", Summaries.CountInvestigationsAgainstMe(map))
+                        .Set("threats", threatsBlock)
                         .Set("sealsBroken", map.overmind.sealsBroken)
+                        // Seals break on a fixed turn schedule; seals.turnsToNextSeal is the countdown, and
+                        // each break raises your power cap / unlocks abilities. Do not miss it.
+                        .Set("seals", Summaries.SealTiming(map))
                         .Set("availableEnthrallments", map.overmind.availableEnthrallments)
                         // Losing all agents is NOT a loss (you are the god, points regenerate); recruit more
                         // with recruit_agent. The game truly ends only when endOfGameAchieved is set.
@@ -80,10 +108,13 @@ namespace ShadowsMcp.Tools
 
             host.Register(new ToolDefinition(
                 "get_threats",
-                "Current threats and opportunities, mirroring the game's built-in Threats panel: "
-                + "heroes moving to attack your agents, the most-inclined attacker per agent (with "
-                + "motivation %), the Chosen One's prophecy progress, seal/Iastur rituals, incoming "
-                + "wars and holy-order mood. Sorted by severity (highest first).",
+                "THE primary per-turn risk check - call it before ending a turn whenever an agent is in the "
+                + "field. Mirrors the game's Threats panel (heroes moving to attack your agents, the "
+                + "most-inclined attacker per agent with motivation %, the Chosen One's prophecy progress, "
+                + "seal/Iastur rituals, incoming wars and holy-order mood; sorted by severity), PLUS an "
+                + "agentSafety array: per agent, its dangerEstimate, whether it is huntable (profile>=50 and "
+                + "menace>25), the top hunter and a strength verdict (favoured/even/outmatched) - the "
+                + "\"will my agent survive if attacked\" picture that lets you hide or retreat before it dies.",
                 Schema.Object(),
                 a => WithMap(ctx, map =>
                 {
@@ -92,9 +123,15 @@ namespace ShadowsMcp.Tools
                     threats.Sort((x, y) => y.priority.CompareTo(x.priority));
                     JsonValue arr = JsonValue.NewArray();
                     foreach (MsgEvent e in threats) arr.Add(Summaries.ThreatEvent(ctx, e));
+                    // Structured per-agent combat odds (who is hunting each agent, motivation %, and a
+                    // strength verdict from danger estimates) - the "will my agent die" picture.
+                    var safety = Summaries.ComputeAgentSafety(ctx, map);
+                    JsonValue safetyArr = JsonValue.NewArray();
+                    foreach (var s in safety) safetyArr.Add(Summaries.AgentSafetyJson(ctx, s));
                     return ToolResult.Ok(JsonValue.NewObject()
                         .Set("count", threats.Count)
-                        .Set("threats", arr));
+                        .Set("threats", arr)
+                        .Set("agentSafety", safetyArr));
                 })));
 
             host.Register(new ToolDefinition(
@@ -139,6 +176,46 @@ namespace ShadowsMcp.Tools
                     Location l = Summaries.ResolveId(ctx, a["locationId"].AsString()) as Location;
                     if (l == null) return ToolResult.Error("unknown location id: " + a["locationId"].AsString());
                     return ToolResult.Ok(Summaries.LocationDetail(ctx, l));
+                })));
+
+            host.Register(new ToolDefinition(
+                "world_summary",
+                "The whole map in one call - the strategic picture list_locations/get_location only give one "
+                + "hex at a time. Every location returns its coords, owner and (if settled) the settlement "
+                + "essentials: type, shadow, defences, population, infiltration fraction + per-district "
+                + "infiltrated state, capital flag, and neighbour ids. Defaults to settled locations; pass "
+                + "settlementsOnly=false for all hexes. Filter by owner (socialGroupId) or minShadow, page "
+                + "with limit/offset.",
+                Schema.Object(
+                    Schema.Prop("settlementsOnly", Schema.Boolean("Only locations that have a settlement (default true)")),
+                    Schema.Prop("socialGroupId", Schema.String("Only locations owned by this social group, e.g. SG3")),
+                    Schema.Prop("minShadow", Schema.Number("Only settlements with shadow >= this (0..1)")),
+                    Schema.Prop("limit", Schema.Integer("Max results (default " + DefaultLimit + ")")),
+                    Schema.Prop("offset", Schema.Integer("Skip this many results"))),
+                a => WithMap(ctx, map =>
+                {
+                    bool settlementsOnly = a["settlementsOnly"].IsNull || a["settlementsOnly"].AsBool();
+                    SocialGroup socFilter = null;
+                    if (!a["socialGroupId"].IsNull)
+                    {
+                        socFilter = Summaries.ResolveId(ctx, a["socialGroupId"].AsString()) as SocialGroup;
+                        if (socFilter == null) return ToolResult.Error("unknown social group id: " + a["socialGroupId"].AsString());
+                    }
+                    double minShadow = a["minShadow"].AsDouble(-1.0);
+                    var matches = new List<Location>();
+                    foreach (Location l in map.locations)
+                    {
+                        if (l == null) continue;
+                        if (settlementsOnly && l.settlement == null) continue;
+                        if (socFilter != null && l.soc != socFilter) continue;
+                        if (minShadow >= 0.0)
+                        {
+                            if (l.settlement == null) continue;
+                            if (l.settlement.shadow < minShadow) continue;
+                        }
+                        matches.Add(l);
+                    }
+                    return Paginate(a, matches, l => Summaries.WorldSummaryRow(ctx, l));
                 })));
 
             host.Register(new ToolDefinition(
@@ -294,6 +371,8 @@ namespace ShadowsMcp.Tools
                         .Set("power", Summaries.Round2(om.power))
                         .Set("sealsBroken", om.sealsBroken)
                         .Set("sealProgress", om.sealProgress)
+                        // Countdown to the next seal (nextSealAt / turnsToNextSeal) on the fixed schedule.
+                        .Set("seals", Summaries.SealTiming(map))
                         .Set("availableEnthrallments", om.availableEnthrallments)
                         .Set("enthralledCount", om.nEnthralled)
                         .Set("agentCap", agentCap)
@@ -312,6 +391,29 @@ namespace ShadowsMcp.Tools
                             .Set("temporaryChange", Summaries.Round2(om.panicTemporaryChange)))
                         .Set("agents", agents)
                         .Set("powers", powers));
+                })));
+
+            host.Register(new ToolDefinition(
+                "get_victory_breakdown",
+                "The full breakdown behind victoryProgress: the game's own scoring sheet with points-to-win "
+                + "and every weighted category (% population in the Dark Empire, enshadowed population outside "
+                + "it, enshadowed+insane rulers, insane rulers, population destroyed, Deep One / Vinerva / "
+                + "Ophanim contributions) and the score total. Use it to see which of your activities is "
+                + "actually scoring. victoryProgress = score total / pointsToWin.",
+                Schema.Object(),
+                a => WithMap(ctx, map =>
+                {
+                    Overmind om = map.overmind;
+                    if (om == null) return ToolResult.Error("no game state");
+                    string breakdown;
+                    // Same call the game's own HUD uses (UITopRight); it recomputes the live figures.
+                    try { breakdown = om.computeVictoryProgress(); }
+                    catch (Exception ex) { return ToolResult.Error("could not compute victory breakdown: " + ex.Message); }
+                    return ToolResult.Ok(JsonValue.NewObject()
+                        .Set("victoryProgress", Summaries.Round2(map.data_victoryProgess))
+                        .Set("avrgEnshadowment", Summaries.Round2(map.data_avrgEnshadowment))
+                        .Set("pointsToWin", 200)
+                        .Set("breakdown", breakdown));
                 })));
 
             host.Register(new ToolDefinition(
@@ -373,10 +475,16 @@ namespace ShadowsMcp.Tools
 
             host.Register(new ToolDefinition(
                 "list_challenges",
-                "Challenges and rituals available to one of your units. Optionally list another location's challenges to plan a move.",
+                "Challenges and rituals available to one of your units, each with its ROI (menaceGain, "
+                + "profileGain, complexity, progressPerTurn), valid/validForUnit flags and a restriction hint "
+                + "stating what it needs. Optionally list another location's challenges to plan a move. Pass "
+                + "terse=true to drop the long prose descriptions, performableOnly=true to list only what "
+                + "this unit can act on right now.",
                 Schema.Object(
                     Schema.Prop("unitId", Schema.String("Unit id, e.g. U17"), required: true),
-                    Schema.Prop("locationId", Schema.String("Look at this location instead of the unit's current one"))),
+                    Schema.Prop("locationId", Schema.String("Look at this location instead of the unit's current one")),
+                    Schema.Prop("terse", Schema.Boolean("Omit each challenge's long 'description' prose (keeps name/type/ROI/valid/restriction). Cheaper output.")),
+                    Schema.Prop("performableOnly", Schema.Boolean("Only challenges this unit can act on now (valid AND validForUnit)"))),
                 a => WithMap(ctx, map =>
                 {
                     Unit u = Summaries.ResolveId(ctx, a["unitId"].AsString()) as Unit;
@@ -387,6 +495,21 @@ namespace ShadowsMcp.Tools
                         loc = Summaries.ResolveId(ctx, a["locationId"].AsString()) as Location;
                         if (loc == null) return ToolResult.Error("unknown location id: " + a["locationId"].AsString());
                     }
+                    bool terse = a["terse"].AsBool();
+                    bool performableOnly = a["performableOnly"].AsBool();
+                    UA uaF = u as UA;
+                    UM umF = u as UM;
+                    Func<Challenge, bool> performable = c =>
+                    {
+                        try
+                        {
+                            if (!c.valid()) return false;
+                            if (uaF != null) return c.validFor(uaF);
+                            if (umF != null) return c.validFor(umF);
+                            return true;
+                        }
+                        catch { return false; }
+                    };
 
                     // Refresh the location's challenge list the same way the game UI does.
                     loc.populateStandardChallenges();
@@ -394,14 +517,16 @@ namespace ShadowsMcp.Tools
                     JsonValue arr = JsonValue.NewArray();
                     foreach (Challenge c in loc.GetChallenges())
                     {
-                        arr.Add(Summaries.ChallengeSummary(ctx, c, u));
+                        if (performableOnly && !performable(c)) continue;
+                        arr.Add(Summaries.ChallengeSummary(ctx, c, u, !terse));
                     }
                     JsonValue rituals = JsonValue.NewArray();
                     if (u.rituals != null)
                     {
                         foreach (Challenge r in u.rituals)
                         {
-                            rituals.Add(Summaries.ChallengeSummary(ctx, r, u));
+                            if (performableOnly && !performable(r)) continue;
+                            rituals.Add(Summaries.ChallengeSummary(ctx, r, u, !terse));
                         }
                     }
                     return ToolResult.Ok(JsonValue.NewObject()

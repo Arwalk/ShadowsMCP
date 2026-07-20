@@ -88,8 +88,13 @@ namespace ShadowsMcp.Tools
                 "and does not advance; pass resolveOptionIndex to pick an option, and it resolves that decision " +
                 "then continues ending the turn. With force=true, auto-resolves whatever blocks the turn end " +
                 "(pending battles fought automatically, skill points auto-spent, idle-agent warnings skipped, " +
-                "informational popups like agent deaths dismissed) - same as the game's own force path.",
+                "informational popups like agent deaths dismissed) - same as the game's own force path. Pass " +
+                "count to advance several turns at once (force=true recommended so it doesn't stall on the " +
+                "repetitive 'Life Continues'-type popups); it stops early and reports stopReason on any "
+                + "decision, game over, or threat escalation, and a threatAlert lists agents a hero just "
+                + "started hunting.",
                 Schema.Object(
+                    Schema.Prop("count", Schema.Integer("Advance up to this many turns (default 1, max 10). Stops early on any decision, game over, or a threat escalation (a hero starts hunting an agent / an agent's odds worsen).")),
                     Schema.Prop("force", Schema.Boolean("Push through battle/level-up/idle-agent interruptions and dismiss informational popups")),
                     Schema.Prop("resolveOptionIndex", Schema.Integer("If a decision popup is blocking the turn, choose this option (index from the pendingDecision options) to resolve it, then continue ending the turn"))),
                 a =>
@@ -186,12 +191,17 @@ namespace ShadowsMcp.Tools
             if (u.engagedBy != null && u.turnLastEngaged == map.turn)
                 return ToolResult.Error(u.getName() + " is under attack by " + u.engagedBy.getName() +
                     " and must resolve this combat first.");
+            // Surface the game's own reason text (getRestriction) so a rejected attempt says WHY, not just
+            // "requirements not met" - e.g. "Requires 100% Infiltration. Cannot perform if Ward > 50%".
+            string restr;
+            try { restr = c.getRestriction(); } catch { restr = null; }
+            string why = string.IsNullOrEmpty(restr) ? "" : ": " + restr;
             if (!c.valid())
-                return ToolResult.Error("the requirements to enable challenge '" + c.getName() + "' are not met.");
+                return ToolResult.Error("the requirements to enable challenge '" + c.getName() + "' are not met" + why);
             if (ua != null && !c.validFor(ua))
-                return ToolResult.Error(u.getName() + " does not meet the requirements for '" + c.getName() + "'.");
+                return ToolResult.Error(u.getName() + " does not meet the requirements for '" + c.getName() + "'" + why);
             if (um != null && !c.validFor(um))
-                return ToolResult.Error(u.getName() + " does not meet the requirements for '" + c.getName() + "'.");
+                return ToolResult.Error(u.getName() + " does not meet the requirements for '" + c.getName() + "'" + why);
             if (u.task is Task_Disrupted)
                 return ToolResult.Error(u.getName() + " is currently disrupted.");
             if (!c.allowMultipleUsers() && c.claimedBy != null && c.claimedBy.location == c.location &&
@@ -416,18 +426,104 @@ namespace ShadowsMcp.Tools
 
         // ---------- end turn ----------
 
+        private const int MaxTurnBatch = 10;
+
+        private enum StepStatus { Advanced, GameOver, Blocked, NotAdvanced, Error }
+
         private static ToolResult EndTurn(GameContext ctx, Map map, bool force, JsonValue args)
         {
             World world = map.world;
             if (world == null) return ToolResult.Error("game world not ready");
 
+            int count = args["count"].AsInt(1);
+            if (count < 1) count = 1;
+            if (count > MaxTurnBatch) count = MaxTurnBatch;
+
+            // Single turn: preserve the original result shapes exactly, plus a threatAlert if a hero began
+            // hunting one of your agents this turn.
+            if (count == 1)
+            {
+                var before1 = Summaries.ComputeAgentSafety(ctx, map);
+                StepStatus st1;
+                JsonValue payload1 = AdvanceOneTurn(ctx, map, world, force, applyResolve: true, args, out st1);
+                if (st1 == StepStatus.Error) return ToolResult.Error(payload1["error"].AsString());
+                if (st1 == StepStatus.Advanced)
+                {
+                    JsonValue alert = Summaries.ThreatAlert(ctx, map, before1);
+                    if (!alert.IsNull) payload1.Set("threatAlert", alert);
+                }
+                return ToolResult.Ok(payload1);
+            }
+
+            // Multi-turn batch: advance up to count turns, stopping early on a decision, game over, or a
+            // threat escalation so a batched advance never blows past an agent walking into danger.
+            var before = Summaries.ComputeAgentSafety(ctx, map);
+            int advancedBy = 0;
+            string stopReason = null;
+            JsonValue firstResolved = JsonValue.Null;
+            JsonValue lastAutoDismiss = JsonValue.Null;
+            JsonValue pending = JsonValue.Null;
+            JsonValue threatAlert = JsonValue.Null;
+            JsonValue gameOverPayload = JsonValue.Null;
+
+            for (int i = 0; i < count; i++)
+            {
+                StepStatus st;
+                JsonValue payload = AdvanceOneTurn(ctx, map, world, force, applyResolve: i == 0, args, out st);
+
+                if (st == StepStatus.Error)
+                {
+                    if (advancedBy == 0) return ToolResult.Error(payload["error"].AsString());
+                    stopReason = "error"; break;
+                }
+                if (st == StepStatus.GameOver) { gameOverPayload = payload; stopReason = "gameOver"; break; }
+                if (st == StepStatus.Blocked) { pending = payload["pendingDecision"]; stopReason = "decision"; break; }
+                if (st == StepStatus.NotAdvanced) { stopReason = payload["reason"].AsString("notAdvanced"); break; }
+
+                // Advanced.
+                advancedBy++;
+                if (i == 0 && !payload["resolved"].IsNull) firstResolved = payload["resolved"];
+                if (!payload["autoDismissed"].IsNull) lastAutoDismiss = payload["autoDismissed"];
+                // A decision may have popped mid-processing even though the turn advanced; stop and surface it.
+                if (!payload["pendingDecision"].IsNull) { pending = payload["pendingDecision"]; stopReason = "decision"; break; }
+
+                // Threat-escalation early stop: a hero started hunting an agent, or an agent's odds worsened.
+                JsonValue alert = Summaries.ThreatAlert(ctx, map, before);
+                if (!alert.IsNull) { threatAlert = alert; stopReason = "threatEscalation"; break; }
+            }
+
+            JsonValue result = JsonValue.NewObject()
+                .Set("turn", map.turn)
+                .Set("advancedBy", advancedBy)
+                .Set("requestedCount", count)
+                .Set("stoppedEarly", advancedBy < count);
+            if (advancedBy < count && stopReason != null) result.Set("stopReason", stopReason);
+            if (!firstResolved.IsNull) result.Set("resolved", firstResolved);
+            if (!lastAutoDismiss.IsNull && lastAutoDismiss["count"].AsInt(0) > 0) result.Set("autoDismissed", lastAutoDismiss);
+            if (!pending.IsNull) result.Set("pendingDecision", pending); // already decorated by AdvanceOneTurn
+            if (!threatAlert.IsNull) result.Set("threatAlert", threatAlert);
+            if (!gameOverPayload.IsNull)
+            {
+                result.Set("gameOver", true)
+                      .Set("outcome", gameOverPayload["outcome"])
+                      .Set("victoryMode", gameOverPayload["victoryMode"]);
+            }
+            return ToolResult.Ok(result);
+        }
+
+        /// <summary>Advance exactly one turn. Returns the per-turn payload and sets <paramref name="status"/>
+        /// so the caller (single call or batch loop) knows whether it advanced, hit game over, is blocked by
+        /// a decision, made partial progress, or errored. Mirrors the game's own end-turn guard sequence.</summary>
+        private static JsonValue AdvanceOneTurn(GameContext ctx, Map map, World world, bool force, bool applyResolve, JsonValue args, out StepStatus status)
+        {
             // The game is over: stop advancing and say so unmistakably. Losing your agents is NOT this -
             // only Overmind.endOfGameAchieved (heroes reforged the seals / fulfilled the prophecy, or you won).
             Overmind om = map.overmind;
             if (om != null && om.endOfGameAchieved)
             {
+                status = StepStatus.GameOver;
                 string vm = om.victoryAchieved ? Summaries.VictoryModeLabel(om.victoryMode) : null;
-                return ToolResult.Ok(JsonValue.NewObject()
+                return JsonValue.NewObject()
                     .Set("gameOver", true)
                     .Set("advanced", false)
                     .Set("outcome", om.victoryAchieved ? "victory" : "defeat")
@@ -435,14 +531,14 @@ namespace ShadowsMcp.Tools
                     .Set("turn", map.turn)
                     .Set("message", om.victoryAchieved
                         ? "You have won - the game is over. Further turns do nothing."
-                        : "You have been defeated - the game is over. Further turns do nothing."));
+                        : "You have been defeated - the game is over. Further turns do nothing.");
             }
 
-            // If the caller passed a choice for a blocking decision, answer it before advancing. This lets
-            // an agent resolve popups through end_turn alone, without loading the get_pending_decision /
-            // resolve_decision tools (which some MCP clients leave deferred and never load).
+            // If the caller passed a choice for a blocking decision, answer it before advancing (first
+            // iteration of a batch only). This lets an agent resolve popups through end_turn alone, without
+            // loading the get_pending_decision / resolve_decision tools (which some MCP clients never load).
             JsonValue resolved = JsonValue.Null;
-            if (!args["resolveOptionIndex"].IsNull &&
+            if (applyResolve && !args["resolveOptionIndex"].IsNull &&
                 !Decisions.DecisionRegistry.FullOrNull(ctx).IsNull)
             {
                 JsonValue rargs = JsonValue.NewObject().Set("optionIndex", args["resolveOptionIndex"]);
@@ -462,13 +558,10 @@ namespace ShadowsMcp.Tools
 
                 // Capture this turn's status messages (idle agents, wars, seals, hero actions) into the
                 // mod's own recent-events feed before the next turnTick wipes map.turnUnifiedMessages.
-                // The death/level-up/event popups the sweep below handles are logged separately, in the
-                // decision layer (they use a different channel and never appear here) - see RecentEventLog.
                 ctx.Events.SnapshotTurn(after, map.turnUnifiedMessages);
 
                 // With force=true, clear purely-informational popups (agent deaths, message boxes) that turn
                 // processing may have raised, so an unattended end_turn(force) loop never stalls on a notice.
-                // A popup carrying a real choice is left open and surfaced via pendingDecision below.
                 autoDismiss = force
                     ? Decisions.DecisionRegistry.AutoDismissInformational(ctx)
                     : JsonValue.Null;
@@ -477,15 +570,16 @@ namespace ShadowsMcp.Tools
             {
                 // Turn processing can race with itself when an event mutates a world collection mid-tick
                 // (e.g. a civil-war resolution creates a new society while social groups are being
-                // enumerated), throwing "Collection was modified". It is transient and self-healing, so
-                // return a clean, actionable error instead of leaking the raw .NET message. The turn may
-                // have partly advanced; the caller should re-query and retry.
-                return ToolResult.Error("turn processing hit a transient state change (an event altered the " +
-                    "world mid-turn). No stable result this call - re-check game_overview and call end_turn again.");
+                // enumerated). It is transient and self-healing; report cleanly and let the caller retry.
+                status = StepStatus.Error;
+                return JsonValue.NewObject().Set("error", "turn processing hit a transient state change (an " +
+                    "event altered the world mid-turn). No stable result this call - re-check game_overview " +
+                    "and call end_turn again.");
             }
 
             if (after > before)
             {
+                status = StepStatus.Advanced;
                 JsonValue result = JsonValue.NewObject()
                     .Set("turn", after)
                     .Set("advancedBy", after - before);
@@ -495,14 +589,12 @@ namespace ShadowsMcp.Tools
                 // A fresh decision may have popped during processing (e.g. an event's follow-up).
                 JsonValue nowPending = Decisions.DecisionRegistry.FullOrNull(ctx);
                 if (!nowPending.IsNull) result.Set("pendingDecision", DecorateResolveHint(nowPending));
-                return ToolResult.Ok(result);
+                return result;
             }
 
             // Turn did not advance. If a decision is blocking, surface it with its options so the agent can
-            // answer it via resolveOptionIndex - rather than returning a bare "a dialog is open" error.
-            // Resolving a decision this call (e.g. a level-up) can chain into a follow-up popup that is
-            // still sitting in the delayed queue, not yet the live blocker; promote it before concluding
-            // the turn is stuck, so we surface a real decision instead of an opaque "unknown guard".
+            // answer it via resolveOptionIndex. Resolving a decision can chain into a follow-up popup still
+            // in the delayed queue; promote it before concluding the turn is stuck.
             JsonValue pending = Decisions.DecisionRegistry.FullOrNull(ctx);
             if (pending.IsNull)
             {
@@ -511,29 +603,32 @@ namespace ShadowsMcp.Tools
             }
             if (!pending.IsNull)
             {
+                status = StepStatus.Blocked;
                 JsonValue result = JsonValue.NewObject()
                     .Set("advanced", false)
                     .Set("blockedBy", "decision")
                     .Set("pendingDecision", DecorateResolveHint(pending));
                 if (!resolved.IsNull) result.Set("resolved", resolved);
-                return ToolResult.Ok(result);
+                return result;
             }
 
             // We answered a decision but the turn still hasn't advanced and nothing is pending: that is
-            // progress, not a failure. Report it cleanly and actionably (call end_turn again) instead of
-            // erroring with an unactionable guard string an MCP client can't act on.
+            // progress, not a failure. Report it cleanly and actionably (call end_turn again).
             if (!resolved.IsNull)
             {
-                return ToolResult.Ok(JsonValue.NewObject()
+                status = StepStatus.NotAdvanced;
+                return JsonValue.NewObject()
                     .Set("advanced", false)
                     .Set("turn", after)
+                    .Set("reason", "decisionAnswered")
                     .Set("resolved", resolved)
-                    .Set("hint", "decision answered, but the turn has not advanced yet - call end_turn again to continue."));
+                    .Set("hint", "decision answered, but the turn has not advanced yet - call end_turn again to continue.");
             }
 
             // Some other guard fired: report which one.
-            string reason = DiagnoseEndTurnBlock(map, world);
-            return ToolResult.Error("the turn did not advance: " + reason);
+            status = StepStatus.Error;
+            string diag = DiagnoseEndTurnBlock(map, world);
+            return JsonValue.NewObject().Set("error", "the turn did not advance: " + diag);
         }
 
         /// <summary>Tag a pending-decision object with how to answer it through end_turn.</summary>

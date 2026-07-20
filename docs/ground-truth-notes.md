@@ -350,6 +350,41 @@ bodies in `QueryTools.cs`.
   (`DecisionRegistry`, kinds `death`/`levelUp`/`event` — which never call `addUnifiedMessage`, so they
   duplicate nothing). Items are `{turn, type, title, message?, resolution?}`, newest-first; the log is
   bounded and cleared on new game/load alongside the entity registry.
+- **Combat odds / risk (`Summaries.ComputeAgentSafety`)** — `UA.getDangerEstimate()` (`UA.cs:467`, int =
+  `hp + defence + attack + Σ minion`; the engine's own unit-vs-unit strength, differenced at `UA.cs:708`),
+  `UA.getMaxDefence()` (`UA.cs:263`), `UA.getAttackUtility(Unit other, List<ReasonMsg> reasons, bool
+  includeDangerousFoe = true)` (`UA.cs:668`), `Map.getStepDist(Location, Location)` (`Map.cs:4307`), and the
+  `Task_InHiding` task type (`Task_InHiding.cs:3`). The scan mirrors the hunt loop inside
+  `Overmind.getThreats` (`Overmind.cs:784-818`): per commandable UA it ranks hostile heroes (skipping
+  `isCommandable()` and `UAEN`) within `profile / 5` steps by `getAttackUtility`, normalising the positive vs
+  negative `ReasonMsg.value`s into a motivation %. The **isHuntable** flag is the human-ruler assassination
+  trigger `unit is UA { profile: >=50.0, menace: >25.0 }` from `SettlementHuman.getLocalActions()`
+  (`SettlementHuman.cs:432`, spawns `Act_AttackAgent`). Surfaced as `get_threats.agentSafety`,
+  `get_unit.combat`, the `game_overview.threats` breadcrumb, and the `end_turn.threatAlert` before/after diff.
+- **Challenge lock reason** — `Challenge.getRestriction()` (`Challenge.cs:59`, free-text hint e.g. "Requires
+  100% Infiltration. Cannot perform if Ward is higher than 50%"; shown in-game at
+  `UISideChallengeDetails.cs:55`). Surfaced as `restriction` on every challenge and appended to
+  `perform_challenge`'s `valid()`/`validFor()` rejection messages.
+- **Infiltration detail** — `Settlement.infiltration` (`Settlement.cs:56`, computed 0..1 fraction of
+  infiltrated infiltratable subs; 1.0 when `isInfiltrated`) plus per-district `Subsettlement.infiltrated`
+  (`Subsettlement.cs:11`) and `Subsettlement.menace` (`Subsettlement.cs:13`). `get_location`'s
+  `subsettlements` entries became `{name, infiltrated}` objects (were bare `sub.getName()` strings); also on
+  `world_summary`. These back the Enshadow / Desecrate `restriction` gates.
+- **World map (`world_summary` / `Summaries.WorldSummaryRow`)** — walks `map.locations` and, per location,
+  reuses the `LocationDetail` reads (`Location.hex.x/y/z`, `Location.soc`, `Settlement` essentials) plus a
+  capital flag `((Society)Location.soc).capital == Location.index` (the exact test at `Sub_City.cs:116`).
+  Agent inventory (`Person.items`, `Item.getName()`/`getShortDesc()`) now also appears on `get_unit` as
+  `items`, not only on `get_person`.
+- **Victory breakdown** — `Overmind.computeVictoryProgress()` (`Overmind.cs:368`) returns the full
+  human-readable 8-category scoring sheet; `get_victory_breakdown` returns it verbatim, plus
+  `Map.data_avrgEnshadowment` (`Map.cs:157`) also added to `game_overview`. **Display-safe**: the game's own
+  HUD/tooltip calls it every refresh (`UITopRight.cs:215`, `PopupVictoryStats.cs:53`). Caveat — it recomputes
+  and writes the `map.data_*` victory fields and, only at threshold, would call `victory()`/`defeat()` (the
+  same as the next `turnTick` would); harmless to call for display, and all tools are main-thread-marshalled.
+- **Seal countdown (`Summaries.SealTiming`)** — combines `Overmind.sealsBroken`/`sealProgress` with
+  `God.getSealLevels()` (already listed) to derive `nextSealAt = getSealLevels()[sealsBroken]` and
+  `turnsToNextSeal = nextSealAt - sealProgress`. Surfaced flat on `game_overview.seals` /
+  `get_player_state.seals`. (Meaningful for gods using conventional seals — `God.usesConventionalSeals()`.)
 
 ## Misc
 

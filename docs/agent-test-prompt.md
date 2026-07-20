@@ -25,12 +25,12 @@ return. Do not use any tools other than the `shadows` server's.
 The game: you play a dark god corrupting the world through agents (your commandable units). You are
 authorized to freely mutate THIS game (it is expendable). Actions are irreversible — there is no save/undo.
 
-### Tools available (27)
-game_overview, get_threats, list_locations, get_location, list_units, get_unit, list_persons,
-get_person, list_social_groups, get_social_group, list_wars, list_investigations, list_holy_orders,
-get_recent_events, get_player_state, list_recruitable_agents, list_powers, list_challenges, inspect,
-move_unit, cancel_task, perform_challenge, use_power, recruit_agent, get_pending_decision,
-resolve_decision, end_turn.
+### Tools available (29)
+game_overview, get_threats, world_summary, list_locations, get_location, list_units, get_unit,
+list_persons, get_person, list_social_groups, get_social_group, list_wars, list_investigations,
+list_holy_orders, get_recent_events, get_player_state, get_victory_breakdown, list_recruitable_agents,
+list_powers, list_challenges, inspect, move_unit, cancel_task, perform_challenge, use_power,
+recruit_agent, get_pending_decision, resolve_decision, end_turn.
 
 ### Preflight (if this fails, stop and report BLOCKED)
 1. Call `game_overview`. If it errors ("no game in progress" / not ready) or the core tools are missing,
@@ -103,6 +103,16 @@ resolve_decision, end_turn.
 - D2: `perform_challenge` on a listed challenge; assert `get_unit.task` became a perform/travel task.
 - D3 (opportunistic): if a challenge has >4 turns of progress, `move_unit`/`cancel_task` without `force`
   returns an abandon-warning error, and with `force:true` succeeds.
+- D4 (restriction reason): in `list_challenges`, assert that any challenge with `valid:false` (or
+  `validForUnit:false`) carries a `restriction` string explaining what it needs. If every listed challenge
+  is valid, SKIP with a note (restriction is only present when the game supplies hint text).
+- D5 (opt-in params): `list_challenges {"unitId":"U...","terse":true}` omits `description` from every entry
+  (assert absent) while name/type/`valid` remain; `list_challenges {"unitId":"U...","performableOnly":true}`
+  returns only entries with `valid` AND `validForUnit` true (assert none has either false). Compare counts
+  against the unfiltered call.
+- D6 (error names the reason): find a listed challenge with `valid:false` and `perform_challenge` it; assert
+  the error message includes the `restriction` text, not just "requirements … are not met". If none is
+  invalid, SKIP.
 
 **E. Powers**
 - E1: `list_powers` returns powers with `cost` and a castable flag.
@@ -157,6 +167,13 @@ resolve_decision, end_turn.
   false and `end_turn` STILL advances — losing all agents is NOT a loss. (If you never hit 0 agents, SKIP.)
 - H4 (opportunistic): if the game ends (`endOfGameAchieved` true), assert `end_turn` returns
   `{gameOver:true, outcome:"victory"|"defeat", ...}` and does NOT advance `turn`. Else SKIP.
+- H5 (multi-turn): snapshot `game_overview.turn`; `end_turn {"count":3,"force":true}`; assert the result has
+  `advancedBy` (1–3), `requestedCount:3` and a `stoppedEarly` bool, and that `turn` rose by exactly
+  `advancedBy`. If `stoppedEarly` is true, assert a `stopReason` is present
+  (decision / gameOver / threatEscalation / notAdvanced).
+- H6 (opportunistic, threatAlert): if any `end_turn` (single or batched) returns a `threatAlert`, assert it
+  is an array whose entries each name an `agent` and a hunter with a `motivationPct`, and that the same
+  agent appears in `get_threats.agentSafety`. Else SKIP.
 
 **I. Robustness / soak**
 - I1: run `end_turn {"force":true}` for ~5–10 turns in a row; assert it never stalls (each call returns,
@@ -181,6 +198,12 @@ resolve_decision, end_turn.
   (`target.isCommandable() || target is UAE`), so a hero hunting a shadow-aligned third party such as an
   **orc upstart** is a correct match, NOT a FAIL. If no hostile-to-you unit exists within ~15 `end_turn`s,
   mark SKIP (enemy intent is not forcible) — do NOT FAIL.
+- J4 (combat odds): `get_threats` includes an `agentSafety` array. For each of your field agents it has
+  `dangerEstimate` (number), `isHuntable` (bool), `inHiding` (bool) and a `verdict`
+  (safe/favoured/even/outmatched); when a hunter is near it also has `topHunter` with `motivationPct` and
+  `dangerEstimate`. Assert the shape for every entry. Cross-check: an agent with a `topHunter` here should,
+  via `get_unit`, expose a `combat` block whose `dangerEstimate` matches. (Empty `agentSafety` is PASS when
+  you have no agents in the field — note it.)
 
 **K. Analysis surfaces (enriched detail views + new tools)**
 - K1 (time budget & panic): `game_overview` includes `maxTurns`, `turnsRemaining` (omitted in an endless
@@ -212,6 +235,26 @@ resolve_decision, end_turn.
   `end_turn` this run reported `autoDismissed` or resolved a `pendingDecision` of kind death/level-up/event,
   at least one matching `type:"death"`/`"levelUp"`/`"event"` entry must appear here. (Only PASS-empty if no
   turn has advanced yet.)
+- K10 (world map): `world_summary` returns paginated `items`; each row has `id`, `neighbours` (ids) and,
+  for settled rows, a `settlement` with numeric `shadow`/`defences` (and `population` for human ones) plus a
+  `coords {x,y,z}`. Assert at least one settlement row and that its `id` round-trips via `get_location`.
+  Then `world_summary {"settlementsOnly":false}` returns a `total` ≥ the settlements-only `total` (empty
+  hexes included).
+- K11 (victory breakdown): `get_victory_breakdown` returns a `breakdown` string (a multi-line scoring sheet
+  mentioning "Points to win" and a "Score total") plus numeric `victoryProgress`, `avrgEnshadowment` and
+  `pointsToWin`. Assert `victoryProgress` equals `game_overview.victoryProgress`, and `avrgEnshadowment`
+  equals `game_overview.avrgEnshadowment`.
+- K12 (seal countdown): `game_overview.seals` and `get_player_state.seals` each have `sealsBroken`,
+  `sealProgress` and (unless all seals are already broken) `nextSealAt` and `turnsToNextSeal`. Assert
+  `turnsToNextSeal == nextSealAt - sealProgress`. Advance a few turns and assert `sealProgress` increased
+  and `turnsToNextSeal` shrank by the same amount.
+- K13 (danger breadcrumb + inventory): `game_overview.threats` has numeric `agentsInField` and
+  `agentsInDanger`, plus a `mostUrgent` string whenever `agentsInDanger > 0` — assert present. `get_unit` on
+  one of your agents now includes a `combat` block ({dangerEstimate, hp, defence, attack, isHuntable,
+  inHiding}) and an `items` array (possibly empty) — assert both keys present.
+- K14 (infiltration detail): `get_location` on a settled human location includes `settlement.infiltration`
+  (0..1) and a `subsettlements` array whose entries are `{name, infiltrated}` objects (not bare strings).
+  Assert the object shape. If no settled location is handy, SKIP.
 
 ### Reporting (required output)
 1. Print a table with columns: `id | area | result (PASS/FAIL/SKIP/BLOCKED) | expected | observed (tool +
