@@ -25,12 +25,13 @@ return. Do not use any tools other than the `shadows` server's.
 The game: you play a dark god corrupting the world through agents (your commandable units). You are
 authorized to freely mutate THIS game (it is expendable). Actions are irreversible — there is no save/undo.
 
-### Tools available (31)
+### Tools available (33)
 game_overview, get_threats, world_summary, list_locations, get_location, list_units, get_unit,
 list_persons, get_person, list_social_groups, get_social_group, list_wars, list_investigations,
 list_holy_orders, get_recent_events, get_player_state, get_victory_breakdown, list_recruitable_agents,
 list_powers, list_challenges, get_tips, inspect, move_unit, cancel_task, perform_challenge, use_power,
-recruit_agent, command_army, get_pending_decision, resolve_decision, end_turn.
+recruit_agent, command_army, influence_holy_order_tenet, oppose_divinity, get_pending_decision,
+resolve_decision, end_turn.
 
 ### Preflight (if this fails, stop and report BLOCKED)
 1. Call `game_overview`. If it errors ("no game in progress" / not ready) or the core tools are missing,
@@ -290,8 +291,9 @@ recruit_agent, command_army, get_pending_decision, resolve_decision, end_turn.
   `game_overview.activeInvestigations`. If non-empty, an entry's `target` (`U*`) round-trips via `get_unit`.
   (Empty is PASS on a quiet game.)
 - K8 (religion): `list_holy_orders` returns `items`; if non-empty, each has a `holyOrder` block with numeric
-  `enshadowment`, and calling `get_social_group` on that group's id shows the same `holyOrder` block. If
-  empty, SKIP.
+  `enshadowment`, `influenceElder`, `influenceElderReq` and a boolean `canChangeTenet`, and calling
+  `get_social_group` on that group's id shows the same `holyOrder` block (its tenets carry `desc`, since
+  that is the detail path). If empty, SKIP the whole of section N too.
 - K9 (recent events): after the `end_turn`s run above, `get_recent_events {"limit":10}` returns `total`,
   `returned` and an `items` array (≤10), newest-first, each entry `{turn, type, title, message?,
   resolution?}`. Assert it is **non-empty** and is a **cross-turn** log: an event from an earlier turn is
@@ -387,6 +389,44 @@ a note.
   assert `get_unit` on it has a `battle` block with `attackers`/`defenders`, `commandAdvantagePct`, and
   `advantageFavours`. Army battles auto-resolve and do NOT block `end_turn`. Else SKIP.
 
+**N. Holy-order doctrine (`influence_holy_order_tenet`, `oppose_divinity`)** — if `list_holy_orders` is
+empty, mark N1–N8 SKIP. Spending influence is irreversible; that is fine on this expendable game.
+- N1 (tenet shape): `list_holy_orders {"orderId":"SG..."}` (use an order's id from the plain listing)
+  returns exactly that one order, and every entry in `holyOrder.tenets` is an **object** with `name`,
+  `type` (e.g. `H_Alignment`), numeric `status`/`min`/`max`, boolean `structural`, a `reads` label, a
+  `desc`, and a `canInfluence` object with `toward_elder`/`toward_human` booleans. Assert on one entry.
+- N2 (the Alignment gate is described, not just enforced): in that same payload find the `H_Alignment`
+  tenet. For any **non-structural** tenet whose `status` is ≤ 0 and ≤ Alignment's `status`, assert
+  `canInfluence.toward_elder` is `false` **and** a `blockedReason` mentioning Alignment is present. If no
+  tenet meets that condition (Alignment already driven low), note it and PASS.
+- N3 (bulk listing stays lean): plain `list_holy_orders` (no args) still returns tenet objects with
+  `canInfluence`, but **without** `desc`. Assert absence of `desc` there and presence under N1.
+- N4 (error, unknown order): `influence_holy_order_tenet {"orderId":"SG9999","tenet":"H_Alignment",
+  "direction":"toward_elder"}` returns a clean "unknown social group id" error. Also call it with the id of
+  a non-religious group (from `list_social_groups`) and assert a clean "is not a holy order" error.
+- N5 (error, unknown tenet): with a real `orderId`, pass `"tenet":"H_NotAThing"`; assert a clean error that
+  **lists that order's actual tenets** (they differ per order — some are removed at worldgen, some added
+  mid-game).
+- N6 (error, not enough influence): find an order with `canChangeTenet:false` and try to influence any of
+  its tenets; assert a clean error reporting have/need (e.g. "12/40 Elder influence") and, when the order is
+  gaining influence, an estimate in turns. If every order is ready, SKIP.
+- N7 (live change — the core check): find an order with `canChangeTenet:true` (watch
+  `game_overview.holyOrders.readyToInfluence`, which appears only while one exists; you may need to run
+  several `end_turn`s, and it may never fire on a short run — SKIP with a note if so). Snapshot its
+  `influenceElder` and its `H_Alignment` status, then call `influence_holy_order_tenet` with
+  `{"tenet":"H_Alignment","direction":"toward_elder"}`. Assert: the result's `statusAfter` ==
+  `statusBefore - 1`; a re-read of `list_holy_orders {orderId}` shows the tenet at the new status,
+  `influenceElder` reset to `0` and `canChangeTenet:false`; and `game_overview.holyOrders` no longer lists
+  that order (unless another is ready). If the result carried a `nowDarkenable` list, spot-check that one of
+  those tenets now reports `canInfluence.toward_elder:true`.
+- N8 (divinity): if any order has a `holyOrder.divinity` block (SKIP if divine entities are off in this
+  game), assert it has numeric `strength`, `presencesCorrupted`/`presencesTotal` and booleans
+  `canUndermine`/`canExile`. Then call `oppose_divinity {"orderId":"SG...","action":"exile"}` on an entity
+  whose `canExile` is false and assert a clean error naming what is missing (strength and/or uncorrupted
+  presences). Optionally, if `canUndermine` is true and you can spare 1 power, run `action:"undermine"` and
+  assert `strength` dropped by 10 and `powerRemaining` fell by 1; the War-in-Heaven event it raises should
+  come back as a `pendingDecision` (resolve it before continuing).
+
 ### Reporting (required output)
 1. Print a table with columns: `id | area | result (PASS/FAIL/SKIP/BLOCKED) | expected | observed (tool +
    before→after) | notes`. One row per check above.
@@ -396,7 +436,7 @@ a note.
    directory (use the starting turn number from preflight so the name is stable). Confirm the file path in
    your final message.
 
-Work through A→M in order. Be concise in intermediate narration; the value is in the evidence and the final
+Work through A→N in order. Be concise in intermediate narration; the value is in the evidence and the final
 report.
 ````
 

@@ -988,7 +988,9 @@ namespace ShadowsMcp.Tools
             return null;
         }
 
-        private static void CheckUiData(Map map)
+        /// <summary>Refresh the game's UI after a tool wrote state (the UI would otherwise keep showing
+        /// stale panels). Cosmetic - shared with HolyOrderTools, never throws.</summary>
+        internal static void CheckUiData(Map map)
         {
             try
             {

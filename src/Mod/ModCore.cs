@@ -124,6 +124,7 @@ namespace ShadowsMcp
                 _host = new GameToolHost(_ctx);
                 QueryTools.RegisterAll(_host, _ctx);
                 ActionTools.RegisterAll(_host, _ctx);
+                HolyOrderTools.RegisterAll(_host, _ctx);
                 InspectTool.RegisterAll(_host, _ctx);
                 DecisionTools.RegisterAll(_host, _ctx);
                 TipsTools.RegisterAll(_host, _ctx);

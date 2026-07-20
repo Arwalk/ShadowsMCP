@@ -43,7 +43,7 @@ See `docs/manual-test-checklist.md` for a full end-to-end test script.
 | `list_social_groups` / `get_social_group` | Societies and factions, military, wars. Detail adds diplomacy, the **national action** underway, and a **holy-order** block for religions |
 | `list_wars` | Every active war: attacker, defender, the attacker's objective, start & projected end |
 | `list_investigations` | Detection dashboard: every clue pointing at your agents, with investigators, weight and location |
-| `list_holy_orders` | Religions: enshadowment, prophet, tenets, temples, worshippers |
+| `list_holy_orders` | Religions: enshadowment, prophet, temples, worshippers, divine entity, and each **tenet** with its status, range and which way it can currently be influenced. `orderId`/`verbose` add descriptions and example calls |
 | `get_recent_events` | The game's turn message log — what changed recently (newest first) |
 | `get_player_state` | Your god, power, agents, recruitment capacity, powers, and the **win-condition sheet** (seal thresholds, agent-cap curve, victory text) |
 | `list_recruitable_agents` | Recruitment capacity, enthrallable archetypes, and corruptible heroes |
@@ -56,6 +56,8 @@ See `docs/manual-test-checklist.md` for a full end-to-end test script.
 | `perform_challenge` | Have an agent start a challenge |
 | `use_power` | Cast one of your god's powers |
 | `recruit_agent` | Spend a recruitment point to enthrall a new agent (archetype onto a location, or corrupt an eligible hero in place) |
+| `influence_holy_order_tenet` | Spend a religion's banked Elder influence to shift one of its tenets (`toward_elder` / `toward_human`) — the holy-order screen's doctrine lever |
+| `oppose_divinity` | Undermine (−1 power, −10 strength) or exile the divine entity behind a religion |
 | `get_pending_decision` / `resolve_decision` | Read and answer a pending decision popup (level-up trait pick, event choice, agent-death notice) |
 | `end_turn` | Advance the turn; if a decision popup blocks it, returns the options and accepts `resolveOptionIndex` to answer them (so decisions can be resolved without the two tools above). Once the game is over (`endOfGameAchieved`), returns `gameOver` with the outcome and does not advance |
 

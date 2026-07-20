@@ -372,8 +372,41 @@ bodies in `QueryTools.cs`.
   `getTurnsRequired()`), `actionProgress`. `DipRel.war` / `Map.wars` (`War`): `att`/`def`/`startTurn`/
   `attackerObjective` (`warType`)/`canTimeOut`/`turnOfEnd()`.
 - **Religion** — `HolyOrder` (a `SocialGroup`): `enshadowment`, `nAcolytes`/`nTemples`/`nWorshippers`/
-  `nWorshippingRulers`, `reserves`, `influenceElder`/`influenceHuman`, `worshipsThePlayer`, `prophet`
-  (`UA`), `divinity` (`DivineEntity.getName()`), `tenets` (`List<HolyTenet>` → `getName()`).
+  `nWorshippingRulers`, `reserves`, `influenceElder`/`influenceHuman`, `influenceElderReq`/
+  `influenceHumanReq` (both scale with `tenet_dogmatic.status`), `computeInfluenceDark(null)` (per-turn
+  gain), `worshipsThePlayer`, `prophet` (`UA`), `divinity` (`DivineEntity`), `tenet_alignment`, and
+  `tenets` (`List<HolyTenet>` → `getName()`/`getDesc()`/`status`/`getMaxNegativeInfluence()`/
+  `getMaxPositiveInfluence()`/`structuralTenet()`). `updateData()` recomputes the derived counts.
+  `DivineEntity`: `getName()`, `getMoodDesc()`, `strength`, `anger`, `exiled`, `presences`
+  (`List<Pr_EntityPresence>` → `corrupted`).
+- **Holy-order screen parity** (`influence_holy_order_tenet`, `oppose_divinity`) — the mod reproduces
+  `PopupHolyOrder` / `UIE_HolyTenet`, which are otherwise click-only:
+  - *Tenet change* (`UIE_HolyTenet.bInfluencePositively` / `bInfluenceNegatively`) is the whole commit:
+    `tenet.status±1`, then `order.influenceElder = 0`. The mod then calls `updateData()` (as
+    `PopupHolyOrder.setTo` does) and refreshes the UI. `toward_human` = `status++`, `toward_elder` =
+    `status--`.
+  - *Screen gate* (`UIE_HolyTenet.setTo`): `order.influenceElder >= order.influenceElderReq`.
+    `HolyOrder.debugInfluence` is deliberately ignored.
+  - *Per-direction eligibility*, mirrored verbatim in `Summaries.TenetEligibility`:
+    `toward_human` iff `status < getMaxPositiveInfluence()`; `toward_elder` iff
+    `status > getMaxNegativeInfluence()` **and not**
+    `(!(t is H_Alignment) && !t.structuralTenet() && t.status <= 0 && t.status <= order.tenet_alignment.status)`.
+    That last clause is the strategic gate the UI expresses only by hiding a button: an ordinary tenet
+    cannot be darkened until `Alignment Status` (range −3..+3, starts at +3) has been driven below it.
+  - *Influence economy*: `HolyOrder.turnTick` adds `computeInfluenceDark(null)` per turn and **clamps at
+    the requirement**, so influence banked past it is discarded; `receiveFunding` adds half an agent's
+    funding. `influenceHuman` is spent by the game itself (`humanAIExpenditure`) and is read-only here.
+  - *The tenet list is dynamic*: `opt_holyOrderSubsetting` drops half the non-structural tenets at
+    worldgen, gods add their own (`H_SectOfTheSerpent`/`H_Indulgences`/`H_MaddeningInsight`),
+    `HolyOrder_Witches` adds three more, and `Ch_HungersPromise` appends `H_TheFeast` mid-game — so
+    tenets are always resolved against `order.tenets` as it stands, never a fixed table.
+  - *Divinity* (`PopupHolyOrder.bUndermine` / `bExile`): undermine needs `overmind.power >= 1`, then
+    `power -= 1`, `strength -= 10` (floored at 0), `anger += param.holy_entityAngerGain`, and on the
+    first use anywhere sets `hasStartedWarInHeaven`, adds `0.1` to `panicTemporaryChange` and pops
+    `anw.warInHeaven`. Exile sets `exiled` and drives every `UAA` of that order to `sanity = 0`,
+    `shadow = 1`, then pops `anw.exiledDivinity`. `bExile` itself only re-checks `strength == 0`, but the
+    button is shown only when *all* presences are corrupted too — the mod enforces the stricter, visible
+    condition.
 - **God win-condition sheet** — `God`: `getMaxTurns()`, `getMaxPower()`, `getSealLevels()`,
   `getAgentCaps()`, `powerLevelReqs`, `getDetailedMechanics()`, `getSealDesc()`, `powerIncreaseText()`,
   and `getVictoryMessage(mode)`. `Map.opt_endless` gates `turnsRemaining`. `Overmind.victoryMode` is `-1`

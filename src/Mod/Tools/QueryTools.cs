@@ -140,6 +140,11 @@ namespace ShadowsMcp.Tools
                             .Set("commandableUnits", commandable)
                             .Set("persons", map.persons.Count)
                             .Set("socialGroups", map.socialGroups.Count));
+                    // Perishable opportunity: a religion with its Elder influence bar full can have one tenet
+                    // rewritten right now, and further influence it earns is discarded until you spend it. The
+                    // game only says so once, in a message; without this an agent banks influence forever.
+                    JsonValue readyOrders = HolyOrdersReadyToInfluence(ctx, map);
+                    if (!readyOrders.IsNull) o.Set("holyOrders", readyOrders);
                     // Contextual one-shot tips: explain a mechanic the first turn it becomes relevant, on the
                     // tool the agent reads every turn (mirrors the game's own hint popups). See TipEngine.
                     JsonValue tips = TipEngine.CollectContextual(ctx);
@@ -621,17 +626,35 @@ namespace ShadowsMcp.Tools
 
             host.Register(new ToolDefinition(
                 "list_holy_orders",
-                "Every religion (holy order) with its enshadowment, prophet, tenets, temples and worshipper "
-                + "reach, and whether it worships you. Relevant to several victory paths and the Chosen One threat.",
-                Schema.Object(),
+                "Every religion (holy order) with its enshadowment, prophet, temples, worshipper reach, "
+                + "divine entity, and whether it worships you. Relevant to several victory paths and the "
+                + "Chosen One threat. Also the control panel for a faith's DOCTRINE: each entry's "
+                + "holyOrder.tenets lists that order's tenets with their current status, range and which "
+                + "way you may shift them (canInfluence.toward_elder / toward_human), and "
+                + "holyOrder.canChangeTenet says whether enough Elder influence is banked to shift one now "
+                + "with influence_holy_order_tenet. Pass orderId (or verbose) for the full detail: each "
+                + "tenet's description and a ready-to-paste call.",
+                Schema.Object(
+                    Schema.Prop("orderId", Schema.String("Only this holy order, e.g. SG5 (implies verbose)")),
+                    Schema.Prop("verbose", Schema.Boolean("Include every tenet's description and example call (large across all orders)"))),
                 a => WithMap(ctx, map =>
                 {
+                    SocialGroup only = null;
+                    if (!a["orderId"].IsNull)
+                    {
+                        only = Summaries.ResolveId(ctx, a["orderId"].AsString()) as SocialGroup;
+                        if (only == null) return ToolResult.Error("unknown social group id: " + a["orderId"].AsString());
+                        if (!(only is HolyOrder))
+                            return ToolResult.Error(Summaries.SafeDisplayName(only) + " is not a holy order");
+                    }
+                    bool detail = only != null || a["verbose"].AsBool();
                     JsonValue arr = JsonValue.NewArray();
                     foreach (SocialGroup sg in map.socialGroups)
                     {
                         HolyOrder ho = sg as HolyOrder;
-                        if (ho == null) continue;
-                        arr.Add(Summaries.SocialGroupSummary(ctx, sg).Set("holyOrder", Summaries.HolyOrderBlock(ctx, ho)));
+                        if (ho == null || (only != null && sg != only)) continue;
+                        arr.Add(Summaries.SocialGroupSummary(ctx, sg)
+                            .Set("holyOrder", Summaries.HolyOrderBlock(ctx, ho, detail)));
                     }
                     return ToolResult.Ok(JsonValue.NewObject().Set("total", arr.Count).Set("items", arr));
                 })));
@@ -668,6 +691,40 @@ namespace ShadowsMcp.Tools
                 pd.Set("resolveHint", "pick an option by its index: call end_turn with resolveOptionIndex " +
                     "(or resolve_decision with optionIndex). force=true skips/dismisses where allowed.");
             return pd;
+        }
+
+        /// <summary>
+        /// The game_overview "you can rewrite a faith's doctrine now" block, or null when no religion has
+        /// its Elder influence bar full. Kept silent in the common case; when it fires it names the orders
+        /// and their Alignment status, because darkening Alignment is the prerequisite for most changes.
+        /// </summary>
+        internal static JsonValue HolyOrdersReadyToInfluence(GameContext ctx, Map map)
+        {
+            JsonValue ready = JsonValue.NewArray();
+            foreach (SocialGroup sg in map.socialGroups)
+            {
+                HolyOrder ho = sg as HolyOrder;
+                if (ho == null) continue;
+                int req;
+                try { req = ho.influenceElderReq; } catch { continue; }
+                if (ho.influenceElder < req) continue;
+                JsonValue entry = JsonValue.NewObject()
+                    .Set("id", Summaries.SocialGroupId(ho))
+                    .Set("name", Summaries.SafeDisplayName(ho))
+                    .Set("influenceElder", ho.influenceElder)
+                    .Set("influenceElderReq", req);
+                if (ho.tenet_alignment != null)
+                    entry.Set("alignmentStatus", ho.tenet_alignment.status);
+                ready.Add(entry);
+            }
+            if (ready.Count == 0) return JsonValue.Null;
+            return JsonValue.NewObject()
+                .Set("readyToInfluence", ready)
+                .Set("hint", "each of these can have one tenet shifted NOW with influence_holy_order_tenet; "
+                    + "their Elder influence is capped, so anything they earn until you spend it is lost. "
+                    + "list_holy_orders {\"orderId\":\"SG...\"} shows which tenets are eligible and why. "
+                    + "An ordinary tenet can only be darkened once alignmentStatus is below it, so the usual "
+                    + "first purchase is {\"tenet\":\"H_Alignment\",\"direction\":\"toward_elder\"}.");
         }
 
         /// <summary>True when this unit's current task targets a shadow-aligned unit you benefit from —

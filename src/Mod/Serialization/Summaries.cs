@@ -126,6 +126,24 @@ namespace ShadowsMcp
             catch { return "<unnamed>"; }
         }
 
+        /// <summary>A social group's display name for error messages, never throwing.</summary>
+        public static string SafeDisplayName(SocialGroup sg)
+        {
+            return sg == null ? "<none>" : SafeName(() => sg.getName());
+        }
+
+        /// <summary>A holy tenet's display name, never throwing.</summary>
+        public static string TenetName(HolyTenet t)
+        {
+            return t == null ? "<none>" : SafeName(() => t.getName());
+        }
+
+        /// <summary>A divine entity's display name, never throwing.</summary>
+        public static string DivinityName(DivineEntity d)
+        {
+            return d == null ? "<none>" : SafeName(() => d.getName());
+        }
+
         // ---------- refs (id + name, for embedding) ----------
 
         public static JsonValue LocationRef(Location l)
@@ -839,7 +857,7 @@ namespace ShadowsMcp
 
             // Religion-specific state when this group is a holy order.
             HolyOrder ho = sg as HolyOrder;
-            if (ho != null) o.Set("holyOrder", HolyOrderBlock(ctx, ho));
+            if (ho != null) o.Set("holyOrder", HolyOrderBlock(ctx, ho, detail: true));
 
             JsonValue relations = JsonValue.NewArray();
             foreach (KeyValuePair<SocialGroup, DipRel> kv in sg.relations)
@@ -1101,14 +1119,23 @@ namespace ShadowsMcp
         // ---------- religion ----------
 
         /// <summary>Religion-specific state of a HolyOrder (a SocialGroup subclass): enshadowment,
-        /// prophet, tenets and reach. Null when the group is not a holy order.</summary>
-        public static JsonValue HolyOrderBlock(GameContext ctx, HolyOrder ho)
+        /// prophet, tenets (with their live influence eligibility) and reach. Null when the group is not
+        /// a holy order. <paramref name="detail"/> adds each tenet's description and a ready-to-paste
+        /// influence_holy_order_tenet call - omitted from the bulk listing, where ~20 tenets per order
+        /// across every religion would dominate the payload.</summary>
+        public static JsonValue HolyOrderBlock(GameContext ctx, HolyOrder ho, bool detail)
         {
             if (ho == null) return JsonValue.Null;
+
+            int req = Safe(() => ho.influenceElderReq, 0);
+            int perTurn = Safe(() => ho.computeInfluenceDark(null), 0);
+            bool canChange = ho.influenceElder >= req;
+
             JsonValue tenets = JsonValue.NewArray();
             if (ho.tenets != null)
-                foreach (HolyTenet t in ho.tenets) tenets.Add(SafeName(() => t.getName()));
-            return JsonValue.NewObject()
+                foreach (HolyTenet t in ho.tenets) tenets.Add(TenetSummary(ho, t, detail));
+
+            JsonValue o = JsonValue.NewObject()
                 .Set("enshadowment", Round2(ho.enshadowment))
                 .Set("worshipsThePlayer", ho.worshipsThePlayer)
                 .Set("nAcolytes", ho.nAcolytes)
@@ -1117,10 +1144,146 @@ namespace ShadowsMcp
                 .Set("nWorshippingRulers", ho.nWorshippingRulers)
                 .Set("reserves", ho.reserves)
                 .Set("influenceElder", ho.influenceElder)
+                .Set("influenceElderReq", req)
+                .Set("influenceElderPerTurn", perTurn)
+                .Set("canChangeTenet", canChange)
+                // influenceHuman is spent by the game's own AI (HolyOrder.humanAIExpenditure), not by you.
                 .Set("influenceHuman", ho.influenceHuman)
+                .Set("influenceHumanReq", Safe(() => ho.influenceHumanReq, 0));
+
+            if (canChange)
+                o.Set("influenceCapped", true)
+                 .Set("hint", "you can change one tenet now - influence_holy_order_tenet {\"orderId\":\""
+                     + SocialGroupId(ho) + "\",...}. Elder influence is capped at the requirement, so "
+                     + "further gain is wasted until you spend it.");
+            else if (perTurn > 0)
+                o.Set("turnsUntilCanChangeTenet", (req - ho.influenceElder + perTurn - 1) / perTurn);
+
+            return o
                 .Set("prophet", UnitRef(ctx, ho.prophet))
-                .Set("divinity", ho.divinity != null ? SafeName(() => ho.divinity.getName()) : null)
+                .Set("divinity", DivinityBlock(ctx, ho))
                 .Set("tenets", tenets);
+        }
+
+        /// <summary>One tenet of a holy order, with the two influence directions the game would offer.
+        /// "toward_elder" is the UI's negative/left button (status--), "toward_human" its positive one.</summary>
+        public static JsonValue TenetSummary(HolyOrder ho, HolyTenet t, bool detail)
+        {
+            if (t == null) return JsonValue.Null;
+            bool towardElder, towardHuman;
+            string blocked;
+            TenetEligibility(ho, t, out towardElder, out towardHuman, out blocked);
+
+            JsonValue o = JsonValue.NewObject()
+                .Set("name", SafeName(() => t.getName()))
+                .Set("type", t.GetType().Name)
+                .Set("status", t.status)
+                .Set("min", Safe(() => t.getMaxNegativeInfluence(), 0))
+                .Set("max", Safe(() => t.getMaxPositiveInfluence(), 0))
+                .Set("structural", Safe(() => t.structuralTenet(), false))
+                .Set("reads", TenetStatusLabel(t))
+                .Set("canInfluence", JsonValue.NewObject()
+                    .Set("toward_elder", towardElder)
+                    .Set("toward_human", towardHuman));
+            if (blocked != null) o.Set("blockedReason", blocked);
+            if (detail)
+            {
+                o.Set("desc", SafeName(() => t.getDesc()));
+                if (towardElder || towardHuman)
+                    o.Set("call", "influence_holy_order_tenet {\"orderId\":\"" + SocialGroupId(ho)
+                        + "\",\"tenet\":\"" + t.GetType().Name + "\",\"direction\":\""
+                        + (towardElder ? "toward_elder" : "toward_human") + "\"}");
+            }
+            return o;
+        }
+
+        /// <summary>The game's own status wording for a tenet (UIE_HolyTenet.setTo): ordinary tenets read
+        /// as Human/Elder Powers, structural ones as Positive/Negative.</summary>
+        public static string TenetStatusLabel(HolyTenet t)
+        {
+            if (t == null) return null;
+            bool structural = Safe(() => t.structuralTenet(), false);
+            if (t.status == 0) return "Neutral (Inert)";
+            if (t.status > 0) return (structural ? "Positive: +" : "Human: +") + t.status;
+            return (structural ? "Negative: +" : "Elder Powers: +") + (-t.status);
+        }
+
+        /// <summary>Which way this tenet may be influenced right now, mirroring the button-visibility rules
+        /// in UIE_HolyTenet.setTo. Deliberately IGNORES whether the order has banked enough Elder influence
+        /// (that is an order-level gate, reported separately as canChangeTenet) so an agent can plan ahead.
+        /// <paramref name="blockedReason"/> is set only when neither direction is legal.</summary>
+        public static void TenetEligibility(HolyOrder ho, HolyTenet t,
+            out bool towardElder, out bool towardHuman, out string blockedReason)
+        {
+            towardElder = false;
+            towardHuman = false;
+            blockedReason = null;
+            if (ho == null || t == null) return;
+
+            int min = Safe(() => t.getMaxNegativeInfluence(), 0);
+            int max = Safe(() => t.getMaxPositiveInfluence(), 0);
+            bool structural = Safe(() => t.structuralTenet(), false);
+            HolyTenet alignment = ho.tenet_alignment;
+
+            // The gate the game hides behind an invisible button: an ordinary tenet cannot be pushed further
+            // into the dark while the order's Alignment Status is at or above it. Drive Alignment down first.
+            bool alignmentBlocks = !(t is H_Alignment) && !structural && alignment != null
+                                   && t.status <= 0 && t.status <= alignment.status;
+
+            towardElder = t.status > min && !alignmentBlocks;
+            towardHuman = t.status < max;
+
+            if (towardElder || towardHuman) return;
+            if (alignmentBlocks)
+                blockedReason = "Alignment Status is " + (alignment.status >= 0 ? "+" : "") + alignment.status
+                    + ": drive it toward_elder (below " + t.status + ") before this tenet can be darkened"
+                    + (t.status >= max ? ", and it is already at its most human (" + max + ")" : "");
+            else if (t.status <= min && t.status >= max)
+                blockedReason = "fixed at " + t.status + " (range " + min + " to " + max + ")";
+            else if (t.status <= min)
+                blockedReason = "already at its most negative (" + min + ")";
+            else
+                blockedReason = "already at its most positive (" + max + ")";
+        }
+
+        /// <summary>The divine entity behind a holy order, with the two actions the holy-order screen offers
+        /// against it (oppose_divinity). Null when the order has none (opt_divineEntities off, or Ophanim).</summary>
+        public static JsonValue DivinityBlock(GameContext ctx, HolyOrder ho)
+        {
+            if (ho == null || ho.divinity == null) return JsonValue.Null;
+            DivineEntity d = ho.divinity;
+
+            int corrupted = 0, total = 0;
+            if (d.presences != null)
+                foreach (Pr_EntityPresence p in d.presences)
+                {
+                    total++;
+                    if (p != null && p.corrupted) corrupted++;
+                }
+
+            double power = ctx != null && ctx.Map != null && ctx.Map.overmind != null ? ctx.Map.overmind.power : 0.0;
+            bool canUndermine = !d.exiled && power >= 1.0;
+            bool canExile = !d.exiled && d.strength == 0 && total > 0 && corrupted == total;
+
+            JsonValue o = JsonValue.NewObject()
+                .Set("name", SafeName(() => d.getName()))
+                .Set("mood", d.exiled ? "EXILED" : SafeName(() => d.getMoodDesc()))
+                .Set("strength", d.strength)
+                .Set("anger", Round2(d.anger))
+                .Set("exiled", d.exiled)
+                .Set("presencesCorrupted", corrupted)
+                .Set("presencesTotal", total)
+                .Set("canUndermine", canUndermine)
+                .Set("canExile", canExile);
+
+            if (d.exiled)
+                o.Set("blockedReason", "already exiled - its opinions no longer matter");
+            else if (!canUndermine)
+                o.Set("blockedReason", "undermining costs 1 power (you have " + Round2(power) + ")");
+            else if (!canExile)
+                o.Set("exileNeeds", "strength 0 (now " + d.strength + ") and every presence corrupted ("
+                    + corrupted + "/" + total + ") - undermine it and corrupt its presences first");
+            return o;
         }
 
         // ---------- agent minions ----------

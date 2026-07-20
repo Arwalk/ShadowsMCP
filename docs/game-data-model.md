@@ -176,6 +176,12 @@ agents), `SG_ActionTakingMonster` subclasses (`SG_DeepOnes`, `SG_Orcs_*`…), `H
 (+`HolyOrder_*`) — religions with tenets (`H_*` HolyTenet subclasses) that mods can
 influence via `adjustHolyInfluenceGood/Dark`.
 
+An order's `tenets` list is **per-order and mutable**, not a fixed table: `opt_holyOrderSubsetting`
+deletes half the non-structural tenets at worldgen, the player's god adds its own
+(`H_SectOfTheSerpent` for God_Snake, `H_Indulgences` for God_Mammon, `H_MaddeningInsight` for
+God_LaughingKing), `HolyOrder_Witches` adds `H_W_Arboramancy`/`H_W_HumanSacrifice`/`H_W_ADarkerNature`,
+and `Ch_HungersPromise` appends `H_TheFeast` at runtime. Always enumerate `order.tenets` live.
+
 ## 5. People: `Person`, `Trait`, `Item`, `House`
 
 ### `Person`

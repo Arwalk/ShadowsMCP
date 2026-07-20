@@ -250,6 +250,26 @@ namespace ShadowsMcp.Tips
                 "religious tenet or politics. Their Crystalsmiths make anti-shadow crystals but can be driven " +
                 "insane if the Arcane Secrets they rely on are corrupted into Dangerous Knowledge."),
 
+            Ctx("holy_tenets", "A religion's doctrine can be rewritten", "faction", CanInfluenceHolyOrder,
+                "A holy order has enough Elder influence to change a tenet - spend it, it stops accruing.",
+                "One of the world's religions has filled its Elder influence bar, which lets you rewrite one " +
+                "of its tenets with influence_holy_order_tenet (list_holy_orders {orderId} shows each tenet's " +
+                "status, range and whether it is currently shiftable). This is the deepest lever you have over " +
+                "a faith: darkened tenets make its temples spread shadow (Dark Worship), let its acolytes strip " +
+                "wards (Candle Circles), turn its Healers into plague-spreaders, its Prophets of Doom into " +
+                "madness engines, or - via The Feast - convert the entire faith into a vampire cult whose " +
+                "acolytes raise the dead. Three rules decide the order you buy them in. First, an ordinary " +
+                "tenet cannot be pushed darker while the order's 'Alignment Status' tenet sits at or above it, " +
+                "so the opening purchases for a faith are almost always Alignment Status toward_elder (which " +
+                "also enshadows its acolytes as it falls); only the three structural tenets (Dogmatic, " +
+                "Preachers, Temple Builders) escape that gate. Second, spending " +
+                "resets that order's Elder influence to 0, and the influence it earns is CAPPED at the " +
+                "requirement - anything gained while the bar is already full is thrown away, so a change " +
+                "deferred is influence burned. Third, raising the Dogmatic tenet multiplies the cost of every " +
+                "later change to that faith, so darken it only deliberately. Elder influence itself grows from " +
+                "enshadowing the order's settlements, and an agent can also fund an order to add half the cash " +
+                "as influence."),
+
             // ---------- REFERENCE-ONLY: available via get_tips, no automatic trigger ----------
             RefDyn("tags", "Tags (NPC motivation)", "politics",
                 "Tags are likes/dislikes that add or subtract motivation for a task - the lever hierophants pull.",
@@ -492,6 +512,21 @@ namespace ShadowsMcp.Tips
             if (m == null || m.socialGroups == null) return false;
             foreach (SocialGroup sg in m.socialGroups)
                 if (sg is Soc_Elven) return true;
+            return false;
+        }
+
+        /// <summary>Any religion whose banked Elder influence has reached its requirement, i.e. a tenet
+        /// change is available right now (HolyOrder.turnTick raises the same one-off in-game message).</summary>
+        private static bool CanInfluenceHolyOrder(GameContext c)
+        {
+            Map m = c != null ? c.Map : null;
+            if (m == null || m.socialGroups == null) return false;
+            foreach (SocialGroup sg in m.socialGroups)
+            {
+                HolyOrder ho = sg as HolyOrder;
+                if (ho == null) continue;
+                try { if (ho.influenceElder >= ho.influenceElderReq) return true; } catch { }
+            }
             return false;
         }
 
