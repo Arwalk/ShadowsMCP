@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Assets.Code;
 using ShadowsMcp.Core.Json;
 using ShadowsMcp.Core.Mcp;
+using ShadowsMcp.Core.Util;
 using ShadowsMcp.Tips;
 
 namespace ShadowsMcp.Tools
@@ -690,6 +691,25 @@ namespace ShadowsMcp.Tools
             if (order != "trade" && ua.task is Task_Disrupted)
                 return ToolResult.Error(ua.getName() + " is disrupted and cannot act this turn.");
 
+            // Every branch below reads live game state (traits, tasks, minions, the popup layer). An
+            // unexpected throw in any of it used to escape to MainThreadDispatcher and come back as a bare
+            // "tool failed: Object reference not set…", naming neither the tool nor the order.
+            try
+            {
+                return CommandAgentOrder(ctx, map, a, ua, target, order);
+            }
+            catch (Exception e)
+            {
+                Log.Error("command_agent " + order + " threw", e);
+                return ToolResult.Error("command_agent " + order + " failed: " + Log.Describe(e));
+            }
+        }
+
+        /// <summary>The per-order guards and commit, split out so <see cref="CommandAgent"/> can wrap the
+        /// whole thing in one attributed try/catch. Every branch mirrors its <c>UA.playerTriesTo*</c>.</summary>
+        private static ToolResult CommandAgentOrder(GameContext ctx, Map map, JsonValue a, UA ua, UA target,
+            string order)
+        {
             switch (order)
             {
                 case "attack":
@@ -701,7 +721,7 @@ namespace ShadowsMcp.Tools
                         return ToolResult.Error(target.getName() + " is already being attacked by " +
                             target.engagedBy.getName() + "; that combat must be resolved before you can fight them.");
                     // A bodyguard on the target's tile must be beaten first (the guard's own duel).
-                    foreach (Unit other in target.location.units)
+                    foreach (Unit other in (target.location != null ? target.location.units : EmptyUnits))
                     {
                         UA guard = other as UA;
                         Task_Bodyguard bg = guard != null ? guard.task as Task_Bodyguard : null;
@@ -834,6 +854,9 @@ namespace ShadowsMcp.Tools
             }
         }
 
+        /// <summary>Stand-in for a missing tile roster, so a location-less target can't NRE a guard loop.</summary>
+        private static readonly List<Unit> EmptyUnits = new List<Unit>();
+
         /// <summary>Resolve a command_agent target and enforce that it is another live agent sharing the
         /// commander's tile (the game only builds these action boxes for units in <c>ua.location.units</c>).</summary>
         private static ToolResult ResolveAgentTarget(GameContext ctx, UA ua, string id, out UA target)
@@ -848,15 +871,17 @@ namespace ShadowsMcp.Tools
                 return ToolResult.Error(t.getName() + " is dead.");
             if (t == ua)
                 return ToolResult.Error("an agent cannot act on itself; targetUnitId must be another agent.");
-            UA other = t as UA;
-            if (other == null)
+            // Write straight into the out param (as ResolveCommandable does): a local here silently left
+            // `target` null on the success path, so EVERY command_agent order NRE'd on its first use of it.
+            target = t as UA;
+            if (target == null)
                 return ToolResult.Error(t.getName() + " is not an agent; these actions only apply to another " +
                     "hero/agent (for an enemy army use command_army on a military unit of yours).");
-            if (other.location != ua.location)
-                return ToolResult.Error(other.getName() + " is not on " + ua.getName() + "'s tile (they are at " +
-                    (other.location != null ? other.location.getName() : "?") + "). Move there first: move_unit " +
+            if (target.location != ua.location)
+                return ToolResult.Error(target.getName() + " is not on " + ua.getName() + "'s tile (they are at " +
+                    (target.location != null ? target.location.getName() : "?") + "). Move there first: move_unit " +
                     "{unitId:" + Summaries.UnitId(ctx, ua) + ", locationId:" +
-                    (other.location != null ? Summaries.LocationId(other.location) : "L?") + "}.");
+                    (target.location != null ? Summaries.LocationId(target.location) : "L?") + "}.");
             return null;
         }
 
@@ -1340,17 +1365,28 @@ namespace ShadowsMcp.Tools
         /// <summary>The UI warns before abandoning a challenge with more than ~4 turns of progress.</summary>
         private static string AbandonWarning(Unit u)
         {
-            Task_PerformChallenge pc = u.task as Task_PerformChallenge;
-            UA ua = u as UA;
-            if (pc == null || ua == null) return null;
-            double turnsOfProgress = pc.progress / Math.Max(1.0, pc.challenge.getProgressPerTurn(ua, null));
-            if (turnsOfProgress > 4.0 && !pc.challenge.ignoreInterruptionWarning())
+            // Never throws: it runs getProgressPerTurn / ignoreInterruptionWarning, arbitrary challenge (and
+            // modded-challenge) code, and it is evaluated even when the caller passed force=true - so a throw
+            // here would block the very action the warning only advises about, with no way around it.
+            try
             {
-                return u.getName() + " is performing '" + pc.challenge.getName() + "' with " +
-                    (int)Math.Ceiling(turnsOfProgress) + " turns of progress that would be lost. " +
-                    "Retry with force=true to abandon it.";
+                Task_PerformChallenge pc = u.task as Task_PerformChallenge;
+                UA ua = u as UA;
+                if (pc == null || ua == null || pc.challenge == null) return null;
+                double turnsOfProgress = pc.progress / Math.Max(1.0, pc.challenge.getProgressPerTurn(ua, null));
+                if (turnsOfProgress > 4.0 && !pc.challenge.ignoreInterruptionWarning())
+                {
+                    return u.getName() + " is performing '" + pc.challenge.getName() + "' with " +
+                        (int)Math.Ceiling(turnsOfProgress) + " turns of progress that would be lost. " +
+                        "Retry with force=true to abandon it.";
+                }
+                return null;
             }
-            return null;
+            catch (Exception e)
+            {
+                Log.Error("could not compute the abandon-progress warning", e);
+                return null;
+            }
         }
 
         /// <summary>Refresh the game's UI after a tool wrote state (the UI would otherwise keep showing

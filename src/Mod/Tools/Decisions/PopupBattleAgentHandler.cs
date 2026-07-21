@@ -262,6 +262,7 @@ namespace ShadowsMcp.Tools.Decisions
 
         private static JsonValue SideJson(BattleAgents b, UA ua, bool isYou)
         {
+            if (ua == null) return JsonValue.NewObject().Set("name", "?").Set("isYou", isYou);
             JsonValue o = JsonValue.NewObject().Set("name", Name(() => ua.getName()));
             o.Set("isYou", isYou)
              .Set("commandable", SafeBool(() => ua.isCommandable()))

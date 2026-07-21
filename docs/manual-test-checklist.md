@@ -94,6 +94,11 @@ mcp command_agent '{"unitId":"U1","order":"attack","targetUnitId":"U9"}'
       target points at `order:"trade"`; a guarded hero (`Task_Bodyguard`) names the guard to beat first
 - [ ] With two of your agents on one tile: `command_agent '{"order":"trade",...}'` opens the item window
       in-game (`popupType:"PopupItemTrading"`), and items really move between them
+- [ ] `order:"rob"` (a lower-level merchant/adventurer on the tile) opens the steal window and reports
+      `profileGained`/`menaceGained`; `order:"follow"` on a Harvester + merchant sets a follow task
+- [ ] **None of the four orders returns a `tool failed:`/`… failed: <ExceptionType>` message** — every one
+      of them dereferences the resolved target, and a target the resolver forgot to hand back crashed all
+      four identically (v0.4.0 regression). Any such message names its own frame: paste it into the report
 - [ ] `get_threats` → the agent's `agentSafety` entry lists `hostilesOnTile` with an `attackHint`
 
 ## 6c. Recruitment (enthralling new agents)

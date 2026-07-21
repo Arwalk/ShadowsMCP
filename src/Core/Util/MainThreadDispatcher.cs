@@ -43,7 +43,11 @@ namespace ShadowsMcp.Core.Util
             if (OnMainThread)
             {
                 try { return work(); }
-                catch (Exception ex) { return ToolResult.Error("tool failed: " + ex.Message); }
+                catch (Exception ex)
+                {
+                    Log.Error("main-thread tool call threw", ex);
+                    return ToolResult.Error("tool failed: " + Log.Describe(ex));
+                }
             }
 
             var job = new Job { Work = work };
@@ -72,7 +76,7 @@ namespace ShadowsMcp.Core.Util
                 catch (Exception ex)
                 {
                     Log.Error("dispatched job threw", ex);
-                    job.Result = ToolResult.Error("tool failed: " + ex.Message);
+                    job.Result = ToolResult.Error("tool failed: " + Log.Describe(ex));
                 }
                 job.Done.Set();
             }

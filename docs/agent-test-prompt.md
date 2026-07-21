@@ -58,6 +58,13 @@ resolve_decision, end_turn.
   resolve it (see section G) and continue. Some checks below are specifically testing that block behavior.
 - **Error-path checks expect a clean `isError` result, not a crash/hang.** A well-formed error message =
   PASS; a hang, stack trace, or malformed response = FAIL.
+- **An unhandled crash now names itself — always FAIL it, never work around it.** A message starting
+  `tool failed:` / `command_agent <order> failed:` / `tool '<name>' failed:` carries the exception TYPE and
+  the top stack frames (e.g. `NullReferenceException: … at ShadowsMcp.Tools.ActionTools.CommandAgent
+  (ActionTools.cs:697)`). That is a mod bug, never a game rule: quote those frames verbatim in the report —
+  they are what makes it fixable — and do NOT retry the call in the hope it passes. Retrying with `force` or
+  from a fresh turn will not help; a real rule violation reads as a sentence about the game, not as a type
+  name and a file:line.
 - **Responses are compact JSON, and any key whose value would be `null` is omitted** (absent ≡ null / none /
   not-applicable — e.g. a cleared `task`, no `pendingDecision`, an undecided `victoryMode`). Assert on
   presence-or-absence, never on a literal `null`. The one exception is `inspect`, which keeps nulls.
@@ -426,7 +433,8 @@ control (M0, M6–M9): move an agent onto a tile that holds a hostile hero — h
 - M5 (opportunistic, army field battle): if any of your military units shows `inBattle:true` in `list_units`,
   assert `get_unit` on it has a `battle` block with `attackers`/`defenders`, `commandAdvantagePct`, and
   `advantageFavours`. Army battles auto-resolve and do NOT block `end_turn`. Else SKIP.
-- M6 (strike first — the core new verb): from the M0 setup, note the target hero's `task` via `get_unit`, then
+- M6 (strike first — the core new verb; **must be attempted**, and a crash here is a FAIL, never a SKIP or a
+  retry loop — see the "unhandled crash" rule above): from the M0 setup, note the target hero's `task` via `get_unit`, then
   issue the exact call the `hint` gave (`command_agent {"unitId":"U...","order":"attack","targetUnitId":"U..."}`).
   Assert the result carries a `pendingDecision` **inline** with `popupType:"PopupBattleAgent"` (no separate
   `get_pending_decision` needed) and reports `cancelledTargetTask`; then assert `get_unit` on the target shows

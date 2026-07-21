@@ -91,7 +91,7 @@ namespace ShadowsMcp.Core.Mcp
             catch (Exception ex)
             {
                 Log.Error("internal error handling '" + req.Method + "'", ex);
-                response = JsonRpc.ErrorResponse(req.Id, RpcErrorCodes.InternalError, "internal error: " + ex.Message);
+                response = JsonRpc.ErrorResponse(req.Id, RpcErrorCodes.InternalError, "internal error: " + Log.Describe(ex));
             }
             statusCode = 200;
             return JsonWriter.Write(response, false);
@@ -162,7 +162,7 @@ namespace ShadowsMcp.Core.Mcp
             {
                 // Tool execution failures are tool-level errors, not protocol errors.
                 Log.Error("tool '" + name + "' threw", ex);
-                result = ToolResult.Error("tool '" + name + "' failed: " + ex.Message);
+                result = ToolResult.Error("tool '" + name + "' failed: " + Log.Describe(ex));
             }
 
             if (result == null)

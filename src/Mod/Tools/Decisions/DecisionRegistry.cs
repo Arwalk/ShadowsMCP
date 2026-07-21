@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Assets.Code;
 using ShadowsMcp.Core.Json;
@@ -80,11 +81,48 @@ namespace ShadowsMcp.Tools.Decisions
             if (blocker != null)
             {
                 IDecisionHandler h = Find(blocker);
-                if (h != null) return h.Describe(ctx, blocker);
+                if (h != null) return SafeDescribe(ctx, h, blocker);
             }
             INonModalDecision nm = FirstNonModal(ctx);
-            if (nm != null) return nm.Describe(ctx);
+            if (nm != null)
+            {
+                try { return nm.Describe(ctx); }
+                catch (Exception e) { return Undescribable(SafeKind(nm), e); }
+            }
             return JsonValue.NewObject().Set("pending", false);
+        }
+
+        /// <summary>Describe a modal, never throwing. A blocker IS open at this point, so a handler that
+        /// blows up must still report <c>pending:true</c> — swallowing it would tell the caller nothing is
+        /// waiting while the game sits frozen behind a popup, and this runs on the commit path
+        /// (<c>ActionTools.AttachPending</c>), where it would also mis-report a battle that did open.</summary>
+        private static JsonValue SafeDescribe(GameContext ctx, IDecisionHandler h, GameObject blocker)
+        {
+            try { return h.Describe(ctx, blocker); }
+            catch (Exception e)
+            {
+                JsonValue o = Undescribable(SafeKind(h, blocker), e);
+                try { if (blocker != null) o.Set("popupType", blocker.name); } catch { }
+                return o;
+            }
+        }
+
+        /// <summary>A decision we know is pending but could not read: still actionable via force.</summary>
+        private static JsonValue Undescribable(string kind, Exception e)
+        {
+            Log.Error("could not describe the pending decision", e);
+            return JsonValue.NewObject()
+                .Set("pending", true)
+                .Set("kind", kind ?? "unknown")
+                .Set("options", JsonValue.NewArray())
+                .Set("note", "a decision is open but its details could not be read (" + Log.Describe(e, 1) +
+                    "); resolve_decision with force=true, or handle it in the game window.")
+                .Set("resolveWith", "resolve_decision with force=true");
+        }
+
+        private static string SafeKind(INonModalDecision d)
+        {
+            try { return d.Kind(); } catch { return null; }
         }
 
         /// <summary>
@@ -106,17 +144,23 @@ namespace ShadowsMcp.Tools.Decisions
             if (blocker != null)
             {
                 IDecisionHandler h = Find(blocker);
-                if (h != null) return CompactOf(h.Describe(ctx, blocker), h.Kind(blocker), true);
+                if (h != null) return CompactOf(SafeDescribe(ctx, h, blocker), SafeKind(h, blocker), true);
             }
             INonModalDecision nm = FirstNonModal(ctx);
-            if (nm != null) return CompactOf(nm.Describe(ctx), nm.Kind(), false);
+            if (nm != null)
+            {
+                JsonValue full;
+                try { full = nm.Describe(ctx); }
+                catch (Exception e) { full = Undescribable(SafeKind(nm), e); }
+                return CompactOf(full, SafeKind(nm), false);
+            }
             return JsonValue.Null;
         }
 
         private static JsonValue CompactOf(JsonValue full, string kind, bool isModal)
         {
             JsonValue compact = JsonValue.NewObject()
-                .Set("kind", kind)
+                .Set("kind", kind ?? "unknown")   // SafeKind returns null if a handler's Kind() threw
                 .Set("optionCount", full["options"].Count)
                 .Set("hint", "call get_pending_decision, then resolve_decision");
             if (isModal) compact.Set("popupType", full["popupType"]);
@@ -132,12 +176,22 @@ namespace ShadowsMcp.Tools.Decisions
             {
                 IDecisionHandler h = Find(blocker);
                 if (h != null)
-                    return "⚠ A decision is pending (" + h.Headline(ctx, blocker) +
+                {
+                    string headline;
+                    try { headline = h.Headline(ctx, blocker); }
+                    catch { headline = SafeKind(h, blocker) ?? "unreadable"; }
+                    return "⚠ A decision is pending (" + headline +
                         "). Call get_pending_decision, then resolve_decision.";
+                }
             }
             INonModalDecision nm = FirstNonModal(ctx);
             if (nm != null)
-                return "⚠ " + nm.Headline(ctx) + ". Call get_pending_decision, then resolve_decision.";
+            {
+                string headline;
+                try { headline = nm.Headline(ctx); }
+                catch { headline = "a decision is pending"; }
+                return "⚠ " + headline + ". Call get_pending_decision, then resolve_decision.";
+            }
             return null;
         }
 
