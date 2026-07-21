@@ -1084,8 +1084,11 @@ namespace ShadowsMcp
 
         // ---------- player / god ----------
 
-        public static JsonValue PowerSummary(Map map, Power p, int index)
+        public static JsonValue PowerSummary(Map map, Power p)
         {
+            // Id from the god's master power list, not the seal-filtered getPowers() list —
+            // that list gains members as seals break, which would shift positional ids.
+            int index = Safe(() => map.overmind.god.powers.IndexOf(p), -1);
             bool passive = Safe(() => p.isPassiveOnly(), false);
             int cost = Safe(() => p.getCost(), 0);
             JsonValue o = JsonValue.NewObject()

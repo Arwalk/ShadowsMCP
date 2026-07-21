@@ -131,12 +131,18 @@ resolve_decision, end_turn.
   challenge ids+names to retry with.
 
 **E. Powers**
-- E1: `list_powers` returns powers with `cost` and a castable flag.
+- E1: `list_powers` returns powers with `cost` and a castable flag. Power ids are stable across turns
+  and seal breaks (they index the god's full power roster, not just the unlocked subset) and MAY be
+  non-sequential — do not assert contiguous numbering.
 - E2: pick a castable power with a valid target (a unit or location per its restriction); snapshot
   `get_player_state.power`; `use_power`; assert `remainingPower == before - cost`. If no power is castable
   right now, SKIP with reason.
 - E3 (error): calling `use_power` on a passive power, or with insufficient power, or with both/neither
   target, errors cleanly.
+- E4 (unlisted power, conditional): if `list_powers` ids have a gap (e.g. PW4 listed but PW3 absent — the
+  missing power is either behind an unbroken seal or passive-only), `use_power` on the missing id must
+  return a "locked until N seals are broken" or "is passive" error, not "unknown power". SKIP if no gap
+  exists.
 
 **F. Recruitment**
 - F1: `list_recruitable_agents` returns `capacity` (availableEnthrallments, nEnthralled, agentCap,

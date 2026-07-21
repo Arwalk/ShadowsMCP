@@ -413,7 +413,7 @@ namespace ShadowsMcp.Tools
                         List<Power> list = om.god.getPowers();
                         for (int i = 0; i < list.Count; i++)
                         {
-                            powers.Add(Summaries.PowerSummary(map, list[i], i));
+                            powers.Add(Summaries.PowerSummary(map, list[i]));
                         }
                     }
                     return ToolResult.Ok(JsonValue.NewObject()
@@ -511,7 +511,8 @@ namespace ShadowsMcp.Tools
 
             host.Register(new ToolDefinition(
                 "list_powers",
-                "Your god's powers with cost and whether each is castable right now.",
+                "Your god's powers with cost and whether each is castable right now. Ids are stable across " +
+                "turns and seal breaks, and may be non-sequential.",
                 Schema.Object(),
                 a => WithMap(ctx, map =>
                 {
@@ -520,7 +521,7 @@ namespace ShadowsMcp.Tools
                     List<Power> list = map.overmind.god.getPowers();
                     for (int i = 0; i < list.Count; i++)
                     {
-                        powers.Add(Summaries.PowerSummary(map, list[i], i));
+                        powers.Add(Summaries.PowerSummary(map, list[i]));
                     }
                     return ToolResult.Ok(JsonValue.NewObject()
                         .Set("power", Summaries.Round2(map.overmind.power))

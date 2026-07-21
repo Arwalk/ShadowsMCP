@@ -63,7 +63,7 @@ namespace ShadowsMcp.Tools
                 "Cast one of your god's powers (see list_powers) on a target unit or location. The cost is " +
                 "deducted from your power resource.",
                 Schema.Object(
-                    Schema.Prop("power", Schema.String("Power id (PW2) or name (case-insensitive)"), required: true),
+                    Schema.Prop("power", Schema.String("Power id from list_powers, e.g. PW2 (stable across turns and seal breaks; ids may be non-sequential) or name (case-insensitive)"), required: true),
                     Schema.Prop("targetUnitId", Schema.String("Target unit id, e.g. U17")),
                     Schema.Prop("targetLocationId", Schema.String("Target location id, e.g. L3"))),
                 a => QueryTools.WithMap(ctx, map => UsePower(ctx, map, a))));
@@ -367,7 +367,9 @@ namespace ShadowsMcp.Tools
         private static ToolResult UsePower(GameContext ctx, Map map, JsonValue a)
         {
             if (map.overmind.god == null) return ToolResult.Error("no god selected yet");
-            List<Power> powers = map.overmind.god.getPowers();
+            // Resolve against the master power list, whose indices match the PW ids emitted by
+            // PowerSummary. The seal-filtered getPowers() list shifts as seals break.
+            List<Power> powers = map.overmind.god.powers;
 
             string wanted = a["power"].AsString();
             if (string.IsNullOrEmpty(wanted)) return ToolResult.Error("missing 'power'");
@@ -395,6 +397,10 @@ namespace ShadowsMcp.Tools
 
             if (power.isPassiveOnly())
                 return ToolResult.Error("'" + power.getName() + "' is passive and cannot be cast.");
+            List<int> reqs = map.overmind.god.powerLevelReqs;
+            if (index < reqs.Count && reqs[index] > map.overmind.sealsBroken)
+                return ToolResult.Error("'" + power.getName() + "' is locked until " + reqs[index] +
+                    " seals are broken (currently " + map.overmind.sealsBroken + ").");
             int cost = power.getCost();
             if (map.overmind.power < (double)cost)
                 return ToolResult.Error("not enough power: '" + power.getName() + "' costs " + cost +
