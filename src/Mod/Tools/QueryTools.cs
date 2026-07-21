@@ -92,8 +92,11 @@ namespace ShadowsMcp.Tools
                     JsonValue o = JsonValue.NewObject()
                         .Set("modVersion", ModCore.ModVersion)
                         .Set("turn", map.turn)
-                        .Set("maxTurns", maxTurns)
-                        // How long until the game's turn limit (null in an endless game).
+                        // In an endless game there is no turn limit: getMaxTurns() still returns a number
+                        // (the game ignores it), so surface null there or an agent reads it as a deadline.
+                        // Mirrors the game UI's "Turn: X (Endless)".
+                        .Set("endless", map.opt_endless)
+                        .Set("maxTurns", map.opt_endless ? JsonValue.Null : JsonValue.Of(maxTurns))
                         .Set("turnsRemaining", map.opt_endless ? JsonValue.Null : JsonValue.Of(Math.Max(0, maxTurns - map.turn)))
                         .Set("god", JsonValue.NewObject()
                             .Set("name", map.overmind.god != null ? map.overmind.god.getName() : null)

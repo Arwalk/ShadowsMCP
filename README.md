@@ -35,7 +35,7 @@ See `docs/manual-test-checklist.md` for a full end-to-end test script.
 
 | Tool | What it does |
 |---|---|
-| `game_overview` | Turn & **time budget** (maxTurns / turnsRemaining), your god, victory mode & progress, **panic breakdown**, war & investigation counts, world counts, pending decision |
+| `game_overview` | Turn & **time budget** (endless flag, maxTurns / turnsRemaining — null in an endless game), your god, victory mode & progress, **panic breakdown**, war & investigation counts, world counts, pending decision |
 | `get_threats` | The game's Threats panel: heroes hunting your agents, the Chosen One's prophecy, incoming wars, holy-order mood (sorted by severity) |
 | `list_locations` / `get_location` | The world map. Detail adds **settlement economy** (population, prosperity, food, ruler/heir, holy order, current action), property influences, and the **clues** heroes hold there |
 | `list_units` / `get_unit` | Units (default scope: yours); kind, position, hp, task. Detail adds menace/profile (with their **sticky floors** and **hunt radius**), **agent internals** (minions, combat, corruption/fatigue) and the **investigation** building against it |

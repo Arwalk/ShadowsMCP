@@ -313,12 +313,15 @@ resolve_decision, end_turn.
   you have no agents in the field — note it.)
 
 **K. Analysis surfaces (enriched detail views + new tools)**
-- K1 (time budget & panic): `game_overview` includes `maxTurns`, `turnsRemaining` (omitted in an endless
-  game), a `victoryMode` (a label once the game is decided, else omitted), and a `panic` object with numeric
-  `total`/`fromPowerUse`/`fromCluesDiscovered`/`heroesFallen`/`temporaryChange`. Assert `maxTurns`, `panic`
-  are present and that `panic.total` equals `worldPanic`.
-- K2 (win-condition sheet): `get_player_state.progression` has `maxTurns`, `sealLevels` (array),
-  `agentCaps` (array) and `powerLevelReqs` (array). Assert present.
+- K1 (time budget & panic): `game_overview` includes an `endless` boolean, `maxTurns`, `turnsRemaining`
+  (both numbers when `endless` is false, both null in an endless game — there is no turn limit then), a
+  `victoryMode` (a label once the game is decided, else omitted), and a `panic` object with numeric
+  `total`/`fromPowerUse`/`fromCluesDiscovered`/`heroesFallen`/`temporaryChange`. Assert `endless`, `panic`
+  are present, that `maxTurns`/`turnsRemaining` match the `endless` flag, and that `panic.total` equals
+  `worldPanic`.
+- K2 (win-condition sheet): `get_player_state.progression` has `endless`, `maxTurns` (null when `endless`
+  is true, consistent with K1), `sealLevels` (array), `agentCaps` (array) and `powerLevelReqs` (array).
+  Assert present.
 - K3 (settlement economy): find a human settlement (`list_locations`, then a `get_location` whose
   `settlement.isHuman` is true) and assert `settlement.population` (number) and `settlement.food` (object)
   are present. If no human settlement turns up, SKIP.

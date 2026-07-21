@@ -1116,7 +1116,10 @@ namespace ShadowsMcp
             if (god == null) return JsonValue.Null;
             int maxTurns = Safe(() => god.getMaxTurns(), 0);
             return JsonValue.NewObject()
-                .Set("maxTurns", maxTurns)
+                // getMaxTurns() returns a number even in an endless game (the game ignores it),
+                // so null both time-budget fields there or an agent reads a deadline that isn't real.
+                .Set("endless", map.opt_endless)
+                .Set("maxTurns", map.opt_endless ? JsonValue.Null : JsonValue.Of(maxTurns))
                 .Set("turnsRemaining", map.opt_endless ? JsonValue.Null : JsonValue.Of(Math.Max(0, maxTurns - map.turn)))
                 .Set("maxPower", Safe(() => god.getMaxPower(), 0))
                 .Set("sealLevels", IntArray(Safe(() => god.getSealLevels(), null)))

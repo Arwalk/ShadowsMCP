@@ -492,7 +492,9 @@ bodies in `QueryTools.cs`.
     condition.
 - **God win-condition sheet** — `God`: `getMaxTurns()`, `getMaxPower()`, `getSealLevels()`,
   `getAgentCaps()`, `powerLevelReqs`, `getDetailedMechanics()`, `getSealDesc()`, `powerIncreaseText()`,
-  and `getVictoryMessage(mode)`. `Map.opt_endless` gates `turnsRemaining`. `Overmind.victoryMode` is `-1`
+  and `getVictoryMessage(mode)`. `Map.opt_endless` gates `maxTurns` and `turnsRemaining` (both null when endless —
+  `getMaxTurns()` still returns a number the game ignores; `Overmind.computeVictoryProgress` only ends the game by
+  time-out when `!opt_endless`) and is surfaced as the `endless` boolean. `Overmind.victoryMode` is `-1`
   until a win is recorded (set 0–5 in `victory()`), so both it and the mode-keyed victory message are
   surfaced **only** once `endOfGameAchieved`.
 - **Panic breakdown** — `Overmind`: `panicFromPowerUse`, `panicFromCluesDiscovered`, `panicHeroesFallen`,
