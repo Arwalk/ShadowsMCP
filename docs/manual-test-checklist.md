@@ -205,13 +205,15 @@ mcp list_recruitable_agents
       `stopReason:"unitLost"`, `advancedBy < 10`, and `digest.lost` naming the unit and its
       `lastLocation`. Works for `UM` army units too, not only agents
 - [ ] **Real choices are preserved:** when a narrative event (`kind:"event"`) is the pending popup,
-      `end_turn '{"force":true}'` does **not** auto-dismiss it — the result/`pendingDecision` still flags
-      it for `get_pending_decision` / `resolve_decision`
-- [ ] **Level-up under force is resolved, not left dangling:** open a level-up (a prior non-force
-      `end_turn` pops it), then `end_turn '{"force":true}'` — `bEndTurn(force)` auto-spends the skill
-      point (a trait is auto-picked, nothing lost) and the now-stale level-up popup is auto-dismissed
-      (`autoDismissed.dismissed` includes `"levelUp"`); the banner clears and it does **not** reappear on
-      the next forced `end_turn`. (Regression: it used to linger across every forced end-turn.)
+      `end_turn '{"force":true}'` does **not** advance (`advanced:false`, `blockedBy:"decision"`) and does
+      **not** auto-dismiss it — the result/`pendingDecision` still flags it for `get_pending_decision` /
+      `resolve_decision`. (Regression: force used to tick the turn with the event still open.) The same
+      holds for ANY open choice popup — force may only pass purely-informational "Dismiss" notices.
+- [ ] **Open level-up blocks force; skill points still auto-spend when no popup is open:** open a
+      level-up (a prior non-force `end_turn` pops it), then `end_turn '{"force":true}'` — it does **not**
+      advance (`blockedBy:"decision"`, `kind:"levelUp"`); pick a trait (or `resolve_decision
+      '{"force":true}'` to skip and keep the point), then the turn ends. With an unspent point and NO
+      popup open, `end_turn '{"force":true}'` still auto-spends it (a trait is AI-picked) and advances.
 
 **Idle-agent alert (non-modal — no popup, but blocks end turn):**
 

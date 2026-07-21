@@ -279,6 +279,22 @@ namespace ShadowsMcp.Tools.Decisions
             return rr;
         }
 
+        /// <summary>True when the open modal carries a real choice — anything NOT marked informational
+        /// (a pure "Dismiss" notification). end_turn(force) must never tick past one of these: force's
+        /// contract is to clear notices, not to blow through decisions. An unreadable popup counts as a
+        /// real choice (never bypass blindly), matching <see cref="AutoDismissInformational"/>'s stop rule.</summary>
+        public static bool HardChoiceBlockerOpen(GameContext ctx)
+        {
+            GameObject blocker = CurrentBlocker(ctx);
+            if (blocker == null) return false;
+            try
+            {
+                IDecisionHandler h = Find(blocker);
+                return h == null || !h.IsInformational(blocker);
+            }
+            catch { return true; }
+        }
+
         /// <summary>
         /// Force-dismiss every purely-informational popup currently blocking (agent deaths, message
         /// boxes, autosave notices), so a headless <c>end_turn(force:true)</c> loop never stalls on a

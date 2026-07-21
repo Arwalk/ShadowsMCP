@@ -8,7 +8,7 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <RootNamespace>ShadowsMcp</RootNamespace>
     <AssemblyName>ShadowsMCP</AssemblyName>
-    <Version>0.4.2</Version>
+    <Version>0.4.3</Version>
     <!-- Embedded portable PDB: readable stack traces in Player.log with a single-file mod. -->
     <DebugType>embedded</DebugType>
     <Deterministic>true</Deterministic>

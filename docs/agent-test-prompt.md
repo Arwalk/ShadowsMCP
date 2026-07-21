@@ -201,7 +201,8 @@ resolve_decision, end_turn.
   `"death"`) and NAMES it: `digest.dismissed` contains an entry with `kind:"death"`, a `turn`, and a
   non-empty `title` mentioning the agent. A lost **battle** instead raises a `kind:"event"` "Defeat" popup (`PopupEvent`): assert
   `force` does NOT auto-dismiss it (narrative events are never auto-answered, so no `autoDismissed` entry
-  for it) yet `turn` still advances, and it clears via `resolve_decision {"optionIndex":0}` /
+  for it) — the turn that raised it mid-tick still advances, but while it stays open a FURTHER
+  `end_turn {"force":true}` does NOT advance (see G8) — and it clears via `resolve_decision {"optionIndex":0}` /
   `end_turn {"resolveOptionIndex":0}`. Test whichever path occurs; SKIP the rest.
 - G6 (opportunistic, item trading): if an item-trade popup ever blocks (`game_overview.pendingDecision` /
   `get_pending_decision` shows `kind:"itemTrading"`, `popupType:"PopupItemTrading"`), assert it exposes a
@@ -212,6 +213,15 @@ resolve_decision, end_turn.
 - G7 (permanent-silence warning): if any popup ever offers a "No longer show message of type…" option (e.g.
   a `PopupMsgUnified`), assert that option's label carries the explicit WARNING that it PERMANENTLY hides the
   type for the whole game (persists across reload) — so an agent won't blind itself. SKIP if none appears.
+- G8 (opportunistic, force never ticks past an open choice popup): whenever a popup carrying a real choice
+  is ALREADY open when you call `end_turn` — a narrative `kind:"event"` (including the "Defeat" popup), an
+  open level-up trait pick (`kind:"levelUp"` with traits to choose), `kind:"itemTrading"`, or a list
+  selection (`kind:"scrollSet"`) — assert `end_turn {"force":true}` does NOT advance: `advanced:false`,
+  `blockedBy:"decision"`, and `pendingDecision` still shows the same popup (force may only pass
+  purely-informational "Dismiss" notices). Then answer it (`resolveOptionIndex` / `resolve_decision`) and
+  assert the next `end_turn` advances. Skill points are unaffected when no popup is open: with an unspent
+  point and no open level-up popup, `end_turn {"force":true}` still auto-spends and advances. SKIP kinds
+  that never appear.
 
 - G8 (opportunistic, selection carousel): if a list picker ever blocks (`game_overview.pendingDecision` /
   `get_pending_decision` shows `kind:"carousel"`, `popupType:"PopupScrollSet"` — e.g. Cause Scandal's victim,

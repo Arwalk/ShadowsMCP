@@ -359,13 +359,17 @@ The game is single-threaded UI: it "waits for the player" whenever a **modal blo
   ticks during the same-job create+destroy, so the mod runs that save synchronously before dismissing —
   otherwise every forced batch would skip the game's 15-turn autosave. It stops at the first popup carrying a real choice (`PopupEvent`, or a
   `PopupAgentLevelup` *that still has an unspent skill point and traits to pick*) or any unknown popup,
-  leaving it open and flagged for `resolve_decision` — never silently answered. Note the level-up
-  subtlety: `bEndTurn(forceThrough=true)` bypasses the `ui.blocker` guard and **auto-spends** each
-  commandable agent's skill point (`spendSkillPoint()` AI-picks a trait; `World.cs:688-691`) but does
-  **not** close a level-up popup a prior non-force `end_turn` already opened. So by the time
-  `AutoDismissInformational` runs, that popup's unit has `skillPoints == 0` →
-  `PopupLevelupHandler.IsInformational` returns true → it is dismissed (rather than lingering
-  banner-flagged across every subsequent forced end-turn, which was the pre-fix behaviour). Note the Unity gotcha the handlers guard against: after `removeBlocker`
+  leaving it open and flagged for `resolve_decision` — never silently answered. And it should rarely
+  get the chance to stop there: since v0.4.3 `end_turn` denies force to `bEndTurn` whenever a
+  non-informational popup is already open (`DecisionRegistry.HardChoiceBlockerOpen`), because
+  `bEndTurn(forceThrough=true)` bypasses its own `ui.blocker` guard (`World.cs:642`) and would tick
+  the turn with the popup still open, unanswered — which is exactly how force used to blow past a
+  live event or level-up. The rule: force only passes popups marked informational (a pure "Dismiss"
+  notice). `bEndTurn`'s force path still **auto-spends** each commandable agent's skill point when no
+  popup is open (`spendSkillPoint()` AI-picks a trait; `World.cs:689-697`), and
+  `PopupLevelupHandler.IsInformational` still flips a *stale* level-up popup (point already spent, or
+  no traits left) informational so `AutoDismissInformational` can clear it rather than leaving it
+  banner-flagged across every subsequent forced end-turn. Note the Unity gotcha the handlers guard against: after `removeBlocker`
   nulls `ui.blocker` and `DestroyImmediate`s the popup, `ui.blocker != blocker` reads **false**
   (Unity's `==` treats a destroyed object as equal to null), so success is checked as
   `blocker == null || ui.blocker != blocker`.

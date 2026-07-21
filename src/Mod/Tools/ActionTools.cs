@@ -125,17 +125,18 @@ namespace ShadowsMcp.Tools
                 "End your turn (runs the full turn processing; may take a few seconds). If a decision popup " +
                 "is blocking the turn, this returns it with its options (also in game_overview.pendingDecision) " +
                 "and does not advance; pass resolveOptionIndex to pick an option, and it resolves that decision " +
-                "then continues ending the turn. With force=true, auto-resolves what else blocks a single " +
-                "turn's end (skill points auto-spent, and purely-informational popups dismissed: the " +
+                "then continues ending the turn. With force=true, auto-resolves only what is safely " +
+                "dismissable: skill points auto-spent, and purely-informational popups dismissed (the " +
                 "agent-death NOTICE - kind:\"death\", PopupMsgAgentsDeath - and message boxes; the periodic " +
                 "autosave is written to disk first, then its notice dismissed). " +
-                "Three things force never auto-answers: a pending agent battle (it always blocks - " +
-                "blockedBy:\"combat\" - and must be resolved: fight to the end, flee, or retreat via " +
+                "Force never skips anything carrying a real choice - all of these block even under force: " +
+                "a pending agent battle (blockedBy:\"combat\" - fight to the end, flee, or retreat via " +
                 "resolveOptionIndex / resolve_decision); the idle-agent alert (blockedBy:\"decision\", " +
-                "kind:\"idleAgents\" - like combat it blocks even under force, so an idle agent's turn is " +
-                "never silently wasted: give it an order, or pass all idle with resolveOptionIndex 0); and a " +
-                "narrative event (kind:\"event\"), INCLUDING the \"Defeat\" event a lost battle raises, because " +
-                "an event's choice can matter - answer it with resolveOptionIndex. Idle is a recurring state " +
+                "kind:\"idleAgents\" - so an idle agent's turn is never silently wasted: give it an order, " +
+                "or pass all idle with resolveOptionIndex 0); a narrative event (kind:\"event\"), INCLUDING " +
+                "the \"Defeat\" event a lost battle raises, because an event's choice can matter; and any " +
+                "other open choice popup (a level-up trait pick, trading, a list selection) - answer them " +
+                "with resolveOptionIndex. Idle is a recurring state " +
                 "(Task_PassTurn lasts one turn), so a count>1 batch stops on the first idle turn (advancedBy " +
                 "may be 0, stopReason:\"decision\", kind:\"idleAgents\") - to fast-forward unattended give every " +
                 "agent a standing order (they leave the idle set), or pass passIdleAgents:true to bulk-pass " +
@@ -158,7 +159,7 @@ namespace ShadowsMcp.Tools
                 + "explaining a mechanic that just became relevant.",
                 Schema.Object(
                     Schema.Prop("count", Schema.Integer("Advance up to this many turns (default 1, max 10). Stops early on any decision, game over, the loss of one of your units (stopReason:\"unitLost\", with digest.lost naming it), or a meaningful threat escalation (an agent becomes huntable, a hero it is not favoured against starts hunting it, or its odds worsen). The returned digest covers every turn advanced, not just the last.")),
-                    Schema.Prop("force", Schema.Boolean("Auto-resolve level-up/skill-point interruptions and dismiss purely-informational popups (the death NOTICE, message boxes). Nothing is lost by doing so: every dismissal is named in digest.dismissed and the turn's news in digest.events. Does NOT skip a pending battle OR the idle-agent alert (both always block, like combat) or a narrative event (kind:event, including a lost battle's Defeat popup) - resolve those explicitly (order the idle agents, or pass them with resolveOptionIndex 0). In a count>1 batch, idle blocks the first idle turn (advancedBy may be 0) unless agents hold standing orders or you pass passIdleAgents:true.")),
+                    Schema.Prop("force", Schema.Boolean("Auto-spend unspent skill points and dismiss purely-informational popups (the death NOTICE, message boxes). Nothing is lost by doing so: every dismissal is named in digest.dismissed and the turn's news in digest.events. Does NOT skip anything carrying a real choice: a pending battle, the idle-agent alert, a narrative event (kind:event, including a lost battle's Defeat popup), and any open choice popup (a level-up trait pick, trading, a list selection) all block even under force - resolve them explicitly (pick with resolveOptionIndex, order the idle agents, or pass all idle with resolveOptionIndex 0). In a count>1 batch, idle blocks the first idle turn (advancedBy may be 0) unless agents hold standing orders or you pass passIdleAgents:true.")),
                     Schema.Prop("passIdleAgents", Schema.Boolean("Deliberate fast-forward opt-in: bulk-pass every idle agent (a visible 'Passing Turn') each turn so a multi-turn advance doesn't stop on the recurring idle-agent alert. Unlike force this is a conscious choice to waste those agents' turns - prefer giving them standing orders instead. Only affects idle; combat and narrative events still block.")),
                     Schema.Prop("resolveOptionIndex", Schema.Integer("If a decision popup is blocking the turn, choose this option (index from the pendingDecision options) to resolve it, then continue ending the turn")),
                     Schema.Prop("stopOnThreatMotivation", Schema.Integer("Opt-in caution: stop the batch on the first turn a hunter's motivation toward one of your agents is AT OR ABOVE this percent, even while the agent is still favoured - catches threat building up before an agent becomes huntable. Level-triggered: fires whether the hunter rose to it mid-batch OR was already there at batch start. Motivation can exceed 100 for a strongly-inclined hunter, so a threshold above 100 is valid (e.g. 150 = only when strongly inclined). Omit or 0 to disable (default)."))),
@@ -1178,14 +1179,23 @@ namespace ShadowsMcp.Tools
             }
             bool idleBlocks = AnyAgentIdle(map, world); // passIdleAgents just gave those agents a task ⇒ not idle
 
+            // Any OPEN popup carrying a real choice (narrative event, trading, a list selection, an
+            // already-open level-up trait pick…) is a hard block too: force may only pass popups marked
+            // informational (a pure "Dismiss" notice). Without this, bEndTurn(force) would bypass its own
+            // ui.blocker guard (World.cs:642) and tick the turn with the popup still open, unanswered.
+            // bEndTurn's force path still auto-spends unspent skill points when no popup is open — this
+            // only stops force once a choice popup has actually been raised.
+            bool hardChoiceOpen = Decisions.DecisionRegistry.HardChoiceBlockerOpen(ctx);
+
             int before = map.turn;
             int after;
             JsonValue autoDismiss;
             try
             {
-                // Deny force while combat OR the idle-agent alert is pending, so bEndTurn stops (pops the
-                // battle / selects the idle unit) instead of auto-resolving or silently wasting them.
-                world.bEndTurn(force && !combatEngaged && !idleBlocks);
+                // Deny force while combat, the idle-agent alert, or a real-choice popup is pending, so
+                // bEndTurn stops (pops the battle / selects the idle unit / leaves the popup blocking)
+                // instead of auto-resolving, silently wasting, or ticking past them.
+                world.bEndTurn(force && !combatEngaged && !idleBlocks && !hardChoiceOpen);
                 after = map.turn;
 
                 // Capture this turn's status messages (idle agents, wars, seals, hero actions) into the
