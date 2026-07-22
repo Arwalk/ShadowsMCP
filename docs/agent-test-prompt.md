@@ -135,8 +135,8 @@ resolve_decision, end_turn.
   and seal breaks (they index the god's full power roster, not just the unlocked subset) and MAY be
   non-sequential — do not assert contiguous numbering.
 - E2: pick a castable power with a valid target (a unit or location per its restriction); snapshot
-  `get_player_state.power`; `use_power`; assert `remainingPower == before - cost`. If no power is castable
-  right now, SKIP with reason.
+  `get_player_state.power`; `use_power {"powerId":"PW...", ...}` (the param is `powerId`, not `power`);
+  assert `remainingPower == before - cost`. If no power is castable right now, SKIP with reason.
 - E3 (error): calling `use_power` on a passive power, or with insufficient power, or with both/neither
   target, errors cleanly.
 - E4 (unlisted power, conditional): if `list_powers` ids have a gap (e.g. PW4 listed but PW3 absent — the
@@ -297,6 +297,12 @@ resolve_decision, end_turn.
 - I2 (error): a malformed call (e.g. `perform_challenge {"unitId":"U1"}` with no challengeId, or a bogus
   challengeId like `C-nope`) returns a clean error, not a hang. (Challenge ids no longer go stale over
   turns, so a genuinely-invalid id is the way to exercise this.)
+- I3 (validation, missing params): `move_unit {}` returns a clean isError naming ALL missing params at
+  once (`missing required parameter(s): unitId, locationId`) plus the valid-parameter list — not a blank
+  "unknown location id:" error.
+- I4 (validation, unknown params): `move_unit {"unitId":"U...","destination":"L..."}` returns
+  `unknown parameter 'destination'` listing the valid parameters (so a wrong guess is self-correcting in
+  one call); a zero-param tool (e.g. `list_wars {"foo":1}`) errors with "takes no parameters".
 
 **J. Threats & enemy intent**
 - J1: `get_threats` returns a `count` and a `threats` array. Each entry has `message` (string),
@@ -417,6 +423,10 @@ resolve_decision, end_turn.
 - L6 (error, on-tile target): if you have a commandable military unit, `command_army
   {"unitId":"U...","order":"attack"}` with no `targetUnitId` (or a `targetUnitId` for a unit not on its tile)
   returns a clean error asking for an on-tile target. Else SKIP.
+- L7 (opportunistic, battle commitment): if a commandable military unit is `inBattle:true` (e.g. after L5/M5
+  provokes a fight), `command_army` on it returns the committed/no-retreat error (armies accept no orders and
+  cannot disengage once a battle starts; it auto-resolves each `end_turn`), and `get_unit`'s `battle` block
+  carries a `note` saying so. Else SKIP.
 
 **M. Agent combat (`command_agent`, `get_pending_decision` / `resolve_decision`)** — being *attacked* requires
 a hostile hero to reach one of your agents, which is **not forcible** on a short run, so M1–M5 are

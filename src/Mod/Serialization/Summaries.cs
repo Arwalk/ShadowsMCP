@@ -567,6 +567,7 @@ namespace ShadowsMcp
             double adv = Safe(() => b.computeAdvantage(), 0.0); // engine range -2..2
             JsonValue o = JsonValue.NewObject()
                 .Set("done", b.done)
+                .Set("note", "committed: auto-resolves one cycle per end_turn; no retreat")
                 // Signed percent the human sees on PopupBattleArmy (computeAdvantage * 100); sign = who leads.
                 .Set("commandAdvantagePct", Round2(adv * 100.0))
                 .Set("advantageFavours", adv > 0 ? "attackers" : (adv < 0 ? "defenders" : "neither"))

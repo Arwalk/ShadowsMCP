@@ -73,6 +73,21 @@ assert_contains "tools/call echo isError false" "$BODY" '"isError":false'
 post '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"fail_tool","arguments":{}}}'
 assert_contains "tools/call failure sets isError" "$BODY" '"isError":true'
 
+post '{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"echo","arguments":{}}}'
+assert_contains "missing required param -> isError" "$BODY" '"isError":true'
+assert_contains "missing required param named" "$BODY" 'missing required parameter(s): text'
+
+post '{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"echo","arguments":{"text":"hi","txt":"x"}}}'
+assert_contains "unknown param -> isError" "$BODY" '"isError":true'
+assert_contains "unknown param named" "$BODY" "unknown parameter 'txt'"
+assert_contains "unknown param lists valid params" "$BODY" 'Valid parameters: text (required)'
+
+post '{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"fake_overview","arguments":{"foo":1}}}'
+assert_contains "no-param tool rejects args" "$BODY" "'fake_overview' takes no parameters (got 'foo')"
+
+post '{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"echo","arguments":{"text":"hi","_meta":{"x":1}}}}'
+assert_contains "underscore metadata keys tolerated" "$BODY" '"text":"echo: hi"'
+
 post '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"no_such_tool"}}'
 assert_contains "unknown tool -> -32602" "$BODY" '"code":-32602'
 

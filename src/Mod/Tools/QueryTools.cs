@@ -660,7 +660,10 @@ namespace ShadowsMcp.Tools
                         arr.Add(Summaries.SocialGroupSummary(ctx, sg)
                             .Set("holyOrder", Summaries.HolyOrderBlock(ctx, ho, detail)));
                     }
-                    return ToolResult.Ok(JsonValue.NewObject().Set("total", arr.Count).Set("items", arr));
+                    JsonValue result = JsonValue.NewObject().Set("total", arr.Count).Set("items", arr);
+                    if (!detail)
+                        result.Set("hint", "pass orderId (one order) or verbose:true for each tenet's description and a ready-to-paste influence_holy_order_tenet call");
+                    return ToolResult.Ok(result);
                 })));
 
             host.Register(new ToolDefinition(

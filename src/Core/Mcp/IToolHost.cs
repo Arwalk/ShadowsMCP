@@ -34,7 +34,10 @@ namespace ShadowsMcp.Core.Mcp
             ToolDefinition tool;
             if (!_byName.TryGetValue(name, out tool))
                 return null; // McpServer turns null into "unknown tool" -32602
-            return tool.Handler(args ?? JsonValue.NewObject());
+            JsonValue safeArgs = args ?? JsonValue.NewObject();
+            ToolResult invalid = tool.ValidateArguments(safeArgs);
+            if (invalid != null) return invalid;
+            return tool.Handler(safeArgs);
         }
 
         public bool HasTool(string name) { return _byName.ContainsKey(name); }

@@ -63,7 +63,7 @@ namespace ShadowsMcp.Tools
                 "Cast one of your god's powers (see list_powers) on a target unit or location. The cost is " +
                 "deducted from your power resource.",
                 Schema.Object(
-                    Schema.Prop("power", Schema.String("Power id from list_powers, e.g. PW2 (stable across turns and seal breaks; ids may be non-sequential) or name (case-insensitive)"), required: true),
+                    Schema.Prop("powerId", Schema.String("Power id from list_powers, e.g. PW2 (stable across turns and seal breaks; ids may be non-sequential) or name (case-insensitive)"), required: true),
                     Schema.Prop("targetUnitId", Schema.String("Target unit id, e.g. U17")),
                     Schema.Prop("targetLocationId", Schema.String("Target location id, e.g. L3"))),
                 a => QueryTools.WithMap(ctx, map => UsePower(ctx, map, a))));
@@ -89,7 +89,10 @@ namespace ShadowsMcp.Tools
                 "city first; the city's defences fall each turn until it is destroyed); order=drive_back forces an " +
                 "enemy hero sharing the unit's tile to retreat and drop its task; order=attack starts a battle with " +
                 "an enemy army sharing the tile. A unit's currently-available orders (with the exact call) appear " +
-                "under 'orders' in get_unit / list_units.",
+                "under 'orders' in get_unit / list_units. NOTE: once a battle starts the army is COMMITTED - " +
+                "there is no retreat/withdraw order; the battle auto-resolves one cycle per end_turn until one " +
+                "side is destroyed or routs, and the unit accepts no orders meanwhile (only agent duels can " +
+                "flee, via their popup).",
                 Schema.Object(
                     Schema.Prop("unitId", Schema.String("Your military unit's id, e.g. U17"), required: true),
                     Schema.Prop("order", Schema.StringEnum("Which order to issue", "raze", "drive_back", "attack"), required: true),
@@ -372,8 +375,8 @@ namespace ShadowsMcp.Tools
             // PowerSummary. The seal-filtered getPowers() list shifts as seals break.
             List<Power> powers = map.overmind.god.powers;
 
-            string wanted = a["power"].AsString();
-            if (string.IsNullOrEmpty(wanted)) return ToolResult.Error("missing 'power'");
+            string wanted = a["powerId"].AsString();
+            if (string.IsNullOrEmpty(wanted)) return ToolResult.Error("missing 'powerId'");
             Power power = null;
             int index = -1;
             if (wanted.StartsWith("PW", StringComparison.OrdinalIgnoreCase) &&
@@ -577,7 +580,9 @@ namespace ShadowsMcp.Tools
 
             // Shared guard: none of the three orders can be issued while in battle (each method pops this).
             if (um.task is Task_InBattle)
-                return ToolResult.Error(um.getName() + " cannot be given orders while in battle.");
+                return ToolResult.Error(um.getName() + " cannot be given orders while in battle: armies are " +
+                    "committed once a battle starts - there is no retreat order; the battle auto-resolves one " +
+                    "cycle per end_turn (see get_unit's battle block). Only agent duels can flee.");
 
             switch (order)
             {

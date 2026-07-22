@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Text;
 using ShadowsMcp.Core.Json;
 
 namespace ShadowsMcp.Core.Mcp
@@ -11,12 +13,72 @@ namespace ShadowsMcp.Core.Mcp
         public readonly JsonValue InputSchema;
         public readonly Func<JsonValue, ToolResult> Handler;
 
+        private readonly HashSet<string> _propSet = new HashSet<string>(StringComparer.Ordinal);
+        private readonly List<string> _requiredNames = new List<string>();
+        /// <summary>e.g. "unitId (required), locationId (required), force"</summary>
+        private readonly string _paramsDescription;
+
         public ToolDefinition(string name, string description, JsonValue inputSchema, Func<JsonValue, ToolResult> handler)
         {
             Name = name;
             Description = description;
             InputSchema = inputSchema ?? Schema.Object();
             Handler = handler;
+
+            foreach (JsonValue req in InputSchema["required"].Items) _requiredNames.Add(req.AsString());
+            StringBuilder desc = new StringBuilder();
+            foreach (KeyValuePair<string, JsonValue> prop in InputSchema["properties"].Members)
+            {
+                _propSet.Add(prop.Key);
+                if (desc.Length > 0) desc.Append(", ");
+                desc.Append(prop.Key);
+                if (_requiredNames.Contains(prop.Key)) desc.Append(" (required)");
+            }
+            _paramsDescription = desc.ToString();
+        }
+
+        /// <summary>Null when args are acceptable; a ToolResult.Error naming the problem otherwise.</summary>
+        public ToolResult ValidateArguments(JsonValue args)
+        {
+            // Non-object args are treated as empty, so only the missing-required branch can fire.
+            bool isObject = args != null && args.Kind == JsonKind.Object;
+
+            List<string> missing = null;
+            foreach (string req in _requiredNames)
+            {
+                if (isObject && args.ContainsKey(req) && !args[req].IsNull) continue;
+                if (missing == null) missing = new List<string>();
+                missing.Add(req);
+            }
+
+            List<string> unknown = null;
+            if (isObject)
+            {
+                foreach (KeyValuePair<string, JsonValue> kv in args.Members)
+                {
+                    // Keys starting with '_' are reserved for client metadata (e.g. _meta).
+                    if (_propSet.Contains(kv.Key) || kv.Key.StartsWith("_", StringComparison.Ordinal)) continue;
+                    if (unknown == null) unknown = new List<string>();
+                    unknown.Add(kv.Key);
+                }
+            }
+
+            if (missing == null && unknown == null) return null;
+
+            if (_propSet.Count == 0)
+                return ToolResult.Error("'" + Name + "' takes no parameters (got '" + string.Join("', '", unknown) + "')");
+
+            StringBuilder msg = new StringBuilder();
+            if (missing != null)
+                msg.Append("missing required parameter(s): ").Append(string.Join(", ", missing));
+            if (unknown != null)
+            {
+                if (msg.Length > 0) msg.Append("; ");
+                msg.Append(unknown.Count == 1 ? "unknown parameter " : "unknown parameter(s): ");
+                msg.Append("'").Append(string.Join("', '", unknown)).Append("'");
+            }
+            msg.Append(". Valid parameters: ").Append(_paramsDescription);
+            return ToolResult.Error(msg.ToString());
         }
     }
 
