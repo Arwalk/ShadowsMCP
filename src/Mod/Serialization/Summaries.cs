@@ -91,7 +91,13 @@ namespace ShadowsMcp
             }
 
             if (kind == 'U' || kind == 'C')
-                return ctx.Registry.Resolve(id.ToUpperInvariant());
+            {
+                object hit = ctx.Registry.Resolve(id.ToUpperInvariant());
+                if (hit != null) return hit;
+                // Deterministic challenge ids ("C31-Ch_...-hash" / "Cr-...") are re-derived rather
+                // than registered, so the registry never holds them - re-scan the game instead.
+                return kind == 'C' ? (object)ResolveChallengeGlobal(ctx, id) : null;
+            }
 
             return null;
         }
@@ -567,7 +573,9 @@ namespace ShadowsMcp
             double adv = Safe(() => b.computeAdvantage(), 0.0); // engine range -2..2
             JsonValue o = JsonValue.NewObject()
                 .Set("done", b.done)
-                .Set("note", "committed: auto-resolves one cycle per end_turn; no retreat")
+                .Set("note", "committed: auto-resolves one cycle per end_turn; no retreat. To sway it, move a " +
+                    "hero/agent onto the battle's tile and perform 'Command Battle (Attacking)' / 'Command Battle " +
+                    "(Defending)' - they appear in list_challenges only for a unit co-located with the battle")
                 // Signed percent the human sees on PopupBattleArmy (computeAdvantage * 100); sign = who leads.
                 .Set("commandAdvantagePct", Round2(adv * 100.0))
                 .Set("advantageFavours", adv > 0 ? "attackers" : (adv < 0 ? "defenders" : "neither"))
@@ -984,20 +992,8 @@ namespace ShadowsMcp
             }
             else
             {
-                // Location id "C{idx}-...": scan that location's freshly-populated challenge list.
-                int dash = id.IndexOf('-');
-                int idx;
-                if (dash > 1 && (id[0] == 'C' || id[0] == 'c') &&
-                    int.TryParse(id.Substring(1, dash - 1), out idx))
-                {
-                    Location loc = LocationByIndex(map, idx);
-                    if (loc != null)
-                    {
-                        try { loc.populateStandardChallenges(); } catch { }
-                        Challenge hit = FindByCanonicalId(ctx, SafeChallenges(loc), id);
-                        if (hit != null) return hit;
-                    }
-                }
+                Challenge hit = ResolveLocationChallengeId(ctx, map, id);
+                if (hit != null) return hit;
             }
 
             // Last resort: the unit's own tile + rituals (covers an id whose encoded location changed).
@@ -1012,6 +1008,52 @@ namespace ShadowsMcp
                 }
                 Challenge rit = FindByCanonicalId(ctx, unit.rituals, id);
                 if (rit != null) return rit;
+            }
+            return null;
+        }
+
+        /// <summary>Resolve a deterministic challenge id WITHOUT a performing-unit context (used by the
+        /// generic ResolveId, e.g. for inspect roots). Location ids ("C{idx}-...") re-scan the encoded
+        /// location; ritual ids ("Cr-...") carry no location, so every commandable unit's rituals are
+        /// scanned instead (rituals are per-unit and player units are few).</summary>
+        public static Challenge ResolveChallengeGlobal(GameContext ctx, string id)
+        {
+            Map map = ctx != null ? ctx.Map : null;
+            if (map == null || string.IsNullOrEmpty(id)) return null;
+
+            if (id.StartsWith("Cr-", StringComparison.OrdinalIgnoreCase))
+            {
+                if (map.units == null) return null;
+                foreach (Unit u in map.units)
+                {
+                    if (u == null || !SafeIsCommandable(u)) continue;
+                    Challenge rit = FindByCanonicalId(ctx, u.rituals, id);
+                    if (rit != null) return rit;
+                }
+                return null;
+            }
+            return ResolveLocationChallengeId(ctx, map, id);
+        }
+
+        private static bool SafeIsCommandable(Unit u)
+        {
+            try { return u.isCommandable(); } catch { return false; }
+        }
+
+        /// <summary>Scan the location encoded in a "C{idx}-..." id for a challenge matching it.</summary>
+        private static Challenge ResolveLocationChallengeId(GameContext ctx, Map map, string id)
+        {
+            int dash = id.IndexOf('-');
+            int idx;
+            if (dash > 1 && (id[0] == 'C' || id[0] == 'c') &&
+                int.TryParse(id.Substring(1, dash - 1), out idx))
+            {
+                Location loc = LocationByIndex(map, idx);
+                if (loc != null)
+                {
+                    try { loc.populateStandardChallenges(); } catch { }
+                    return FindByCanonicalId(ctx, SafeChallenges(loc), id);
+                }
             }
             return null;
         }

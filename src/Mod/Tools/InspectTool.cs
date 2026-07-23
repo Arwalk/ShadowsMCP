@@ -15,16 +15,27 @@ namespace ShadowsMcp.Tools
             {
                 MapProvider = () => ctx.Map,
                 EntityResolver = id => ctx.ResolveEntity(id),
-                EntityStub = obj => ctx.EntityStub(obj)
+                EntityStub = obj => ctx.EntityStub(obj),
+                // Nearly every game object back-references the world (u.map, sg.map, ...); expanding
+                // those inline dumps the entire game state, so collapse them below the root.
+                BackRefLabel = obj =>
+                {
+                    if (obj is Assets.Code.Map) return "<Map: back-reference suppressed - inspect the 'map' root directly>";
+                    if (obj is UnityEngine.Object) return "<Unity:" + obj.GetType().Name + ">";
+                    return null;
+                }
             };
 
             host.Register(new ToolDefinition(
                 "inspect",
                 "Inspect ANY element of the game's object graph by path, via reflection (read-only). " +
-                "Roots: 'map', an entity id (L3, U17, P42, SG5, C8), or any field of map (e.g. 'overmind'). " +
+                "Roots: 'map', an entity id (L3, U17, P42, SG5, or a challenge id from list_challenges " +
+                "like C31-Ch_Elf_ElderBirthright-92486fbb), or any field of map (e.g. 'overmind'). " +
                 "Segments: .field, [index] for lists, [\"key\"] for dictionaries. " +
                 "Examples: map.locations[4].settlement | U17.person.traits | overmind.god | map.turn. " +
-                "Expansion dumps fields only; entities beyond 'depth' collapse to {$id,$type,name} stubs you can follow up on.",
+                "Expansion dumps fields only; entities beyond 'depth' collapse to {$id,$type,name} stubs you can " +
+                "follow up on, and embedded back-references to the Map or Unity engine objects always collapse " +
+                "to a short marker (inspect them via their own root instead).",
                 Schema.Object(
                     Schema.Prop("path", Schema.String("Path expression, e.g. map.locations[4].settlement"), required: true),
                     Schema.Prop("depth", Schema.Integer("Expansion depth, 1-" + MaxDepth + " (default 1)")),

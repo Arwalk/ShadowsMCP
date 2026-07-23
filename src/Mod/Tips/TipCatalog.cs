@@ -165,9 +165,11 @@ namespace ShadowsMcp.Tips
                 "combat.isHuntable and get_threats). Hostile heroes within about profile/5 hexes can now find and " +
                 "attack it, and human rulers may send assassins. Options: pull it out of hunter range; run the Lay " +
                 "Low challenge or leave it In Hiding (combat.inHiding) to bleed profile and menace toward their " +
-                "floors (a floor ratchets up permanently, so it will never return to zero); enshadow the local " +
-                "ruler, who then ignores the menace; or store the agent, which halves both and clears the floors. " +
-                "Acting before it is fully huntable is far cheaper than reviving a hunted agent."),
+                "floors; or enshadow the local ruler, who then ignores the menace. The floors themselves ratchet " +
+                "up permanently and nothing resets them, so exposure management is preventive: act BEFORE the " +
+                "floor rises, and treat a badly over-exposed veteran as your candidate for risky, high-value work " +
+                "rather than expecting it to ever go quiet again. Acting before it is fully huntable is far " +
+                "cheaper than reviving a hunted agent."),
 
             Ctx("agent_under_attack", "An agent is under attack - resolve the battle", "tactics", AgentUnderAttack,
                 "An agent was attacked this turn and a battle is pending. Fight, flee, or retreat via get_pending_decision - it blocks end_turn.",
@@ -210,8 +212,10 @@ namespace ShadowsMcp.Tips
                 "get_unit shows a 'battle' block with both sides, the command-advantage %, and this cycle's combat " +
                 "log). Unlike an agent duel this resolves automatically, one cycle per turn - there is no menu to " +
                 "drive and it does not block end_turn. You sway it indirectly: bring more armies to the tile " +
-                "(command_army attack), or command as a hero via the battle-command challenges, which add command " +
-                "advantage. commandAdvantagePct's sign shows who is currently favoured."),
+                "(command_army attack), or move an agent onto the battle's tile and perform 'Command Battle " +
+                "(Attacking)' or 'Command Battle (Defending)' - these appear in list_challenges only while the " +
+                "unit shares the battle's tile, and completing one adds command advantage to that side. " +
+                "commandAdvantagePct's sign shows who is currently favoured."),
 
             Ctx("politics", "War & civil war", "politics", AnyWar,
                 "Wars devastate human nations; hierophants in an infiltrated capital can start them and civil wars.",

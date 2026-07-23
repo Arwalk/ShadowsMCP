@@ -128,7 +128,9 @@ namespace ShadowsMcp.Tools
                 "End your turn (runs the full turn processing; may take a few seconds). If a decision popup " +
                 "is blocking the turn, this returns it with its options (also in game_overview.pendingDecision) " +
                 "and does not advance; pass resolveOptionIndex to pick an option, and it resolves that decision " +
-                "then continues ending the turn. With force=true, auto-resolves only what is safely " +
+                "then continues ending the turn (if the index could not be applied - nothing was pending, or " +
+                "the resolve failed - the result says so in resolveWarning; it is never silently ignored). " +
+                "With force=true, auto-resolves only what is safely " +
                 "dismissable: skill points auto-spent, and purely-informational popups dismissed (the " +
                 "agent-death NOTICE - kind:\"death\", PopupMsgAgentsDeath - and message boxes; the periodic " +
                 "autosave is written to disk first, then its notice dismissed). " +
@@ -1137,18 +1139,44 @@ namespace ShadowsMcp.Tools
                         : "You have been defeated - the game is over. Further turns do nothing.");
             }
 
+            // A popup the game raised late last call (e.g. a battle notice created after bEndTurn returned)
+            // may still be sitting in the delayed queue rather than being the live blocker. Promote it now so
+            // every guard below - the resolve check, the combat probe, HardChoiceBlockerOpen - sees it; the
+            // old ordering read ui.blocker directly and silently skipped a queued decision's resolve.
+            Decisions.DecisionRegistry.PumpQueue(ctx);
+
+            // Under force, also clear leftover informational popups before the guards run, so a stale notice
+            // can't block this call (last turn's sweep ran before the game raised it) or swallow a
+            // resolveOptionIndex meant for the real choice underneath.
+            JsonValue preDismiss = force
+                ? Decisions.DecisionRegistry.AutoDismissInformational(ctx)
+                : JsonValue.Null;
+            if (digest != null && !preDismiss.IsNull) digest.Absorb(preDismiss["items"], JsonValue.Null);
+
             // If the caller passed a choice for a blocking decision, answer it before advancing (first
             // iteration of a batch only). This lets an agent resolve popups through end_turn alone, without
             // loading the get_pending_decision / resolve_decision tools (which some MCP clients never load).
+            // A resolve that had nothing to act on or failed is reported (resolveWarning), never silent:
+            // "advancedBy:0 with the same decision re-presented" is indistinguishable from a no-op otherwise.
             JsonValue resolved = JsonValue.Null;
-            if (applyResolve && !args["resolveOptionIndex"].IsNull &&
-                !Decisions.DecisionRegistry.FullOrNull(ctx).IsNull)
+            string resolveWarning = null;
+            if (applyResolve && !args["resolveOptionIndex"].IsNull)
             {
-                JsonValue rargs = JsonValue.NewObject().Set("optionIndex", args["resolveOptionIndex"]);
-                ToolResult rr = Decisions.DecisionRegistry.Resolve(ctx, rargs);
-                resolved = JsonValue.NewObject()
-                    .Set("ok", rr != null && !rr.IsError)
-                    .Set("detail", rr != null ? rr.Text : null);
+                if (Decisions.DecisionRegistry.FullOrNull(ctx).IsNull)
+                {
+                    resolveWarning = "resolveOptionIndex was provided but no decision was pending - it was ignored.";
+                }
+                else
+                {
+                    JsonValue rargs = JsonValue.NewObject().Set("optionIndex", args["resolveOptionIndex"]);
+                    ToolResult rr = Decisions.DecisionRegistry.Resolve(ctx, rargs);
+                    resolved = JsonValue.NewObject()
+                        .Set("ok", rr != null && !rr.IsError)
+                        .Set("detail", rr != null ? rr.Text : null);
+                    if (rr == null || rr.IsError)
+                        resolveWarning = "resolving the pending decision failed: " +
+                            (rr != null ? rr.Text : "no result");
+                }
             }
 
             // Pending agent combat must NEVER be auto-resolved — even under force=true. Unlike unspent skill
@@ -1228,6 +1256,9 @@ namespace ShadowsMcp.Tools
 
             // Name every popup force just cleared into the digest, whether or not the turn advanced.
             if (digest != null) digest.Absorb(autoDismiss["items"], JsonValue.Null);
+            // One combined report for the caller: the pre-advance sweep and the post-advance sweep are a
+            // single logical "force cleared the notices" operation. (Digest items were absorbed per-sweep.)
+            autoDismiss = MergeDismiss(preDismiss, autoDismiss);
 
             if (after > before)
             {
@@ -1241,6 +1272,7 @@ namespace ShadowsMcp.Tools
                     .Set("turn", after)
                     .Set("advancedBy", after - before);
                 if (!resolved.IsNull) result.Set("resolved", resolved);
+                if (resolveWarning != null) result.Set("resolveWarning", resolveWarning);
                 if (!autoDismiss.IsNull && autoDismiss["count"].AsInt(0) > 0)
                     result.Set("autoDismissed", CompactDismiss(autoDismiss));
                 // A fresh decision may have popped during processing (e.g. an event's follow-up). When the
@@ -1272,6 +1304,7 @@ namespace ShadowsMcp.Tools
                     .Set("blockedBy", pending["kind"].AsString() == "combat" ? "combat" : "decision")
                     .Set("pendingDecision", DecorateResolveHint(pending));
                 if (!resolved.IsNull) result.Set("resolved", resolved);
+                if (resolveWarning != null) result.Set("resolveWarning", resolveWarning);
                 return result;
             }
 
@@ -1280,18 +1313,40 @@ namespace ShadowsMcp.Tools
             if (!resolved.IsNull)
             {
                 status = StepStatus.NotAdvanced;
-                return JsonValue.NewObject()
+                JsonValue result = JsonValue.NewObject()
                     .Set("advanced", false)
                     .Set("turn", after)
                     .Set("reason", "decisionAnswered")
                     .Set("resolved", resolved)
                     .Set("hint", "decision answered, but the turn has not advanced yet - call end_turn again to continue.");
+                if (resolveWarning != null) result.Set("resolveWarning", resolveWarning);
+                return result;
             }
 
             // Some other guard fired: report which one.
             status = StepStatus.Error;
             string diag = DiagnoseEndTurnBlock(map, world);
-            return JsonValue.NewObject().Set("error", "the turn did not advance: " + diag);
+            JsonValue err = JsonValue.NewObject().Set("error", "the turn did not advance: " + diag);
+            if (resolveWarning != null) err.Set("resolveWarning", resolveWarning);
+            return err;
+        }
+
+        /// <summary>Combine the pre-advance and post-advance informational sweeps into one report:
+        /// counts sum, dismissed-kind lists concatenate, cappedOut ORs, and `remaining` (what stopped
+        /// the sweep) comes from the later pass, which saw the final state.</summary>
+        private static JsonValue MergeDismiss(JsonValue a, JsonValue b)
+        {
+            if (a.IsNull || a["count"].AsInt(0) == 0) return b;
+            if (b.IsNull || b["count"].AsInt(0) == 0) return a;
+            JsonValue kinds = JsonValue.NewArray();
+            foreach (JsonValue k in a["dismissed"].Items) kinds.Add(k);
+            foreach (JsonValue k in b["dismissed"].Items) kinds.Add(k);
+            JsonValue o = JsonValue.NewObject()
+                .Set("count", a["count"].AsInt(0) + b["count"].AsInt(0))
+                .Set("dismissed", kinds);
+            if (!b["remaining"].IsNull) o.Set("remaining", b["remaining"]);
+            if (a["cappedOut"].AsBool() || b["cappedOut"].AsBool()) o.Set("cappedOut", true);
+            return o;
         }
 
         /// <summary>The auto-dismiss summary minus its <c>items</c> array — the counts stay on

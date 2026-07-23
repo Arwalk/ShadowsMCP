@@ -106,6 +106,10 @@ namespace ShadowsMcp.Tools.Decisions
                 string title = Title(blocker);
                 string dismissed = !string.IsNullOrEmpty(title) ? title : PopupType(blocker);
                 Dismiss(ui, blocker);
+                // Same destroyed-object idiom as the optionIndex path below: AutoDismissInformational's
+                // stop-on-error rule relies on Ok meaning "the blocker actually cleared".
+                if (!(blocker == null || ui == null || ui.blocker != blocker))
+                    return ToolResult.Error("could not dismiss popup " + dismissed + " - it is still open.");
                 return ToolResult.Ok(JsonValue.NewObject()
                     .Set("resolved", true)
                     .Set("kind", "popup")

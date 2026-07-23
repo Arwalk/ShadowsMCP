@@ -11,7 +11,10 @@ namespace ShadowsMcp.Tools
     /// the engine behind the `inspect` tool ("query ANY element").
     ///
     /// Path grammar:  root ( "." ident | "[" int "]" | "[" quoted-string "]" )*
-    ///   root = "map" | an entity id (L3, U17, P42, SG5, C8) | any member of map (e.g. "overmind")
+    ///   root = "map" | an entity id (L3, U17, P42, SG5, or a challenge id like
+    ///          C31-Ch_Elf_ElderBirthright-92486fbb) | any member of map (e.g. "overmind")
+    ///   The root token additionally accepts '-' so deterministic challenge ids parse;
+    ///   member names after '.' stay strict ([A-Za-z0-9_]).
     ///
     /// Safety rules:
     ///   - Navigation reads fields first, then property getters, only when NAMED in the path.
@@ -26,6 +29,11 @@ namespace ShadowsMcp.Tools
         public Func<string, object> EntityResolver;
         /// <summary>Returns a {$id,$type,name} stub for registered entity types, or null for plain objects.</summary>
         public Func<object, JsonValue> EntityStub;
+        /// <summary>Returns a short label for objects that must never be expanded when embedded in
+        /// another object's fields (world-sized back-references like Map, or Unity engine objects);
+        /// null to serialize normally. Only consulted below the serialization root, so navigating
+        /// TO such an object (e.g. path "map") still dumps it.</summary>
+        public Func<object, string> BackRefLabel;
 
         private const int MaxFieldsPerObject = 200;
 
@@ -167,7 +175,7 @@ namespace ShadowsMcp.Tools
             if (string.IsNullOrEmpty(path)) { error = "empty path"; return false; }
 
             int pos = 0;
-            rootName = ReadIdent(path, ref pos);
+            rootName = ReadRootIdent(path, ref pos);
             if (rootName == null) { error = "path must start with an identifier"; return false; }
 
             while (pos < path.Length)
@@ -224,6 +232,15 @@ namespace ShadowsMcp.Tools
             return pos > start ? s.Substring(start, pos - start) : null;
         }
 
+        /// <summary>Root tokens also accept '-' so deterministic challenge ids
+        /// ("C31-Ch_Elf_ElderBirthright-92486fbb") can be inspected directly.</summary>
+        private static string ReadRootIdent(string s, ref int pos)
+        {
+            int start = pos;
+            while (pos < s.Length && (char.IsLetterOrDigit(s[pos]) || s[pos] == '_' || s[pos] == '-')) pos++;
+            return pos > start ? s.Substring(start, pos - start) : null;
+        }
+
         // ---------- member access ----------
 
         private const BindingFlags MemberFlags =
@@ -254,12 +271,21 @@ namespace ShadowsMcp.Tools
 
         public JsonValue Serialize(object obj, int depth, int maxItems)
         {
-            return SerializeInner(obj, depth, maxItems, new HashSet<object>(ReferenceComparer.Instance));
+            return SerializeInner(obj, depth, maxItems, new HashSet<object>(ReferenceComparer.Instance), isRoot: true);
         }
 
-        private JsonValue SerializeInner(object obj, int depth, int maxItems, HashSet<object> visited)
+        private JsonValue SerializeInner(object obj, int depth, int maxItems, HashSet<object> visited, bool isRoot = false)
         {
             if (obj == null) return JsonValue.Null;
+
+            // World-sized back-references (Map, Unity engine objects) embedded in another object's
+            // fields would dump the entire game state; collapse them regardless of remaining depth.
+            // The evaluated path result itself (isRoot) is exempt so navigating to them still works.
+            if (!isRoot && BackRefLabel != null)
+            {
+                string backRef = BackRefLabel(obj);
+                if (backRef != null) return JsonValue.Of(backRef);
+            }
 
             Type type = obj.GetType();
             if (obj is string) return JsonValue.Of((string)obj);

@@ -78,6 +78,13 @@ resolve_decision, end_turn.
 - A3: `list_units {"scope":"mine"}` count equals `game_overview.counts.commandableUnits`.
 - A4: `get_player_state` returns a `god`, `agents` array, and `power`.
 - A5: `inspect {"path":"map.locations[0]","depth":2}` returns a nested object (round-trip works).
+- A5b (challenge-id roots): take a `challengeId` from `list_challenges` on one of your units (the full
+  deterministic form, e.g. `C31-Ch_Elf_ElderBirthright-92486fbb`) and `inspect {"path":"<thatId>","depth":1}`.
+  Assert it resolves to the challenge object (a `$type` starting `Ch_`), NOT a parse error about `-`.
+- A5c (back-reference suppression): `inspect {"path":"SG0","depth":2}` (any social group id) — assert its
+  `map` field is a short string marker (`<Map: back-reference suppressed …>`), not thousands of tokens of
+  expanded world state; Unity-engine objects likewise collapse to `<Unity:TypeName>`. The root itself is
+  exempt: `inspect {"path":"map","depth":1}` still returns the map's own fields.
 - A6 (error): `get_unit {"unitId":"U9999"}` and `get_location {"locationId":"L9999"}` both return clean
   "unknown/stale id" errors.
 - A7 (people): `list_persons` returns a list; `get_person` on the first person's id (`P*`) returns a detail
@@ -185,6 +192,10 @@ resolve_decision, end_turn.
   banner clears / pending becomes false), and once via `end_turn {"resolveOptionIndex":0}` (assert it
   answers and then advances or surfaces the next decision). If only one decision type ever appears, do it
   the once and SKIP the other with a note.
+- G3b (resolve is never silent): call `end_turn {"resolveOptionIndex":0}` when NOTHING is pending (no ⚠
+  banner). Assert the result carries `resolveWarning` saying the index was ignored (and no `resolved`
+  object) — a provided resolve that had nothing to act on, or that failed, must always be reported, never
+  silently dropped.
 - G4 (idle-agent alert): if `end_turn` reports `blockedBy:"decision"` with an idle-agents kind, resolve it
   with `resolve_decision {"optionIndex":0}` (pass all) OR by ordering an agent, then `end_turn` advances.
   `force` does NOT skip idle: like combat, the idle alert blocks even under `force` — assert
@@ -231,6 +242,22 @@ resolve_decision, end_turn.
   option has `enabled`. Then `resolve_decision {"optionIndex":N}` with an N **different** from
   `selectedIndex`: assert the result's `chose` equals that option's `label` (i.e. you got the entry you
   asked for, not the highlighted one), `closed:true`, and the ⚠ banner clears. SKIP if none appears.
+
+- G9 (opportunistic, minion management): if recruiting a minion past an agent's capacity raises the
+  "Minion Management" popup (`get_pending_decision` shows `kind:"minionDismissal"`,
+  `popupType:"PopupMinionDismissal"`), assert the options NAME each minion with HP and command cost
+  ("Dismiss <name> (HP …, command cost …)" / "Keep <name> …" — NOT "Button (Previous)" or "[Invalid]"),
+  the just-recruited one is flagged `newlyAcquired`, a final "Accept current selection" option carries
+  `enabled` matching the `state.acceptEnabled` flag, and `state` shows `commandUsed`/`commandLimit`/
+  `keptCount`. Toggle one minion via `resolve_decision {"optionIndex":N}`: assert `stillOpen:true` with a
+  refreshed `state` and a NEW `options` list. Assert `resolve_decision {"force":true}` is REFUSED (this is
+  a real, permanent choice), then pick a valid kept set and accept: assert the popup closes reporting
+  `kept`/`dismissed` name lists, and `get_unit` on the agent matches. SKIP if it never appears.
+- G10 (opportunistic, trailing battle notices never stall a force loop): during a multi-army field battle
+  (several units `inBattle:true` on one tile), run `end_turn {"force":true}` repeatedly. Assert no call is
+  ever blocked by a "Battle" notice (`PopupMsgUnified`): a battle popup the game raises late in one call is
+  swept at the START of the next force call (its content still reaches `digest.events` / `get_recent_events`,
+  so nothing is lost). Only real choices (events, combat) may block. SKIP if no multi-army battle occurs.
 
 **H. End turn & game-over**
 - H1: snapshot `game_overview.turn`; `end_turn` (no force); assert the returned/`game_overview` turn
@@ -426,7 +453,8 @@ resolve_decision, end_turn.
 - L7 (opportunistic, battle commitment): if a commandable military unit is `inBattle:true` (e.g. after L5/M5
   provokes a fight), `command_army` on it returns the committed/no-retreat error (armies accept no orders and
   cannot disengage once a battle starts; it auto-resolves each `end_turn`), and `get_unit`'s `battle` block
-  carries a `note` saying so. Else SKIP.
+  carries a `note` saying so AND pointing at the 'Command Battle (Attacking)' / 'Command Battle (Defending)'
+  challenges (which appear in `list_challenges` only for a unit co-located with the battle). Else SKIP.
 
 **M. Agent combat (`command_agent`, `get_pending_decision` / `resolve_decision`)** — being *attacked* requires
 a hostile hero to reach one of your agents, which is **not forcible** on a short run, so M1–M5 are

@@ -575,3 +575,17 @@ bodies in `QueryTools.cs`.
   (`ToolResult.Ok(payload, omitNull:false)`) so reflection still shows a field that is null.
 - `ReasonMsg` has `msg`/`value` fields — used for utility breakdowns.
 - Player's faction: `map.soc_dark`; commandable check is `unit.isCommandable()`.
+
+## Agent "storing" does NOT exist as a game action (UAE_StoredAgent.cs, verified v2.0)
+
+- `UAE_StoredAgent` is only the SUMMON-BACK side: `createAgent()` (UAE_StoredAgent.cs:17-27) returns a
+  stored agent to the map with `inner_menace /= 2`, `inner_profile /= 2` and both floors
+  (`inner_menaceMin`/`inner_profileMin`) zeroed. Stored agents would sit in
+  `map.overmind.agentsUnique`/`agentsGeneric` (the recruit pool) and be summoned via the generic
+  `UIE_AgentSelect.bCast` code==0 path.
+- **No store trigger exists anywhere**: no `bStore` UI handler in Assembly-CSharp.dll (strings-heap scan;
+  the only `bStore` hits are substrings of `PrefabStore` etc.), and no caller of `new UAE_StoredAgent`
+  in the full decompiled `Assets.Code`. It is dormant/cut content.
+- Consequence: the mod's `agent_exposed` tip (TipCatalog.cs) must NOT recommend "store the agent" — that
+  was a false promise (fixed in 0.4.5; menace/profile floors are permanent, exposure management is
+  preventive only). Decision on 0.4.5: do NOT synthesize a `store_agent` tool from first principles.
