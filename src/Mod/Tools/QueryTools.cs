@@ -27,133 +27,7 @@ namespace ShadowsMcp.Tools
                 "non-zero. A 'tips' array may appear here to " +
                 "explain a mechanic the moment it becomes relevant (get_tips is the full reference).",
                 Schema.Object(),
-                a => WithMap(ctx, map =>
-                {
-                    int commandable = 0;
-                    int agentsUnderAttack = 0, armiesInBattle = 0;
-                    JsonValue underAttack = JsonValue.NewArray();
-                    foreach (Unit u in map.units)
-                    {
-                        if (u.isCommandable()) commandable++;
-                        if (u.isDead || !u.isCommandable()) continue;
-                        // Active combat (distinct from the predictive danger below): an agent attacked THIS turn
-                        // has a battle pending; an army may be mid field-battle. Surfaced so an agent reading only
-                        // game_overview cannot miss a fight it must resolve before the turn can end.
-                        // Match the actual end_turn block condition (UA engaged by a live UA this turn) so this
-                        // "battle pending / end_turn blocked" signal can never contradict end_turn's behaviour.
-                        if (u is UA && u.engagedBy is UA atk && !atk.isDead && u.turnLastEngaged == map.turn)
-                        {
-                            agentsUnderAttack++;
-                            underAttack.Add(Summaries.UnitRef(ctx, u));
-                        }
-                        if (u.task is Task_InBattle) armiesInBattle++;
-                    }
-                    Overmind om = map.overmind;
-                    om.calculateAgentsUsed();
-                    int agentCap = om.god != null ? om.getAgentCap() : 0;
-                    bool canRecruit = om.availableEnthrallments > 0 && om.nEnthralled < agentCap;
-                    int maxTurns = om.god != null ? om.god.getMaxTurns() : 0;
-
-                    // Combat-danger breadcrumb: an agent that only ever reads game_overview should still
-                    // notice heroes closing on its agents. agentsInDanger > 0 => open get_threats.
-                    var safety = Summaries.ComputeAgentSafety(ctx, map);
-                    int agentsInDanger = 0, agentsHuntable = 0;
-                    Summaries.AgentSafetyInfo worstThreat = null;
-                    foreach (var s in safety)
-                    {
-                        if (s.IsHuntable) agentsHuntable++;
-                        if (!s.InDanger()) continue;
-                        agentsInDanger++;
-                        if (worstThreat == null || s.TopMotivation > worstThreat.TopMotivation) worstThreat = s;
-                    }
-                    JsonValue threatsBlock = JsonValue.NewObject()
-                        .Set("agentsInField", safety.Count)
-                        .Set("agentsInDanger", agentsInDanger)
-                        // Huntable = profile>=50 AND menace>25: exposed to a ruler's assassination even before
-                        // a hunter is in range. The signal that most predicts losing an agent (surfaced here so
-                        // an agent reading only game_overview sees it, not just get_threats.agentSafety).
-                        .Set("agentsHuntable", agentsHuntable);
-                    if (worstThreat != null)
-                        threatsBlock.Set("mostUrgent", Summaries.AgentSafetyLine(ctx, worstThreat));
-                    else if (agentsHuntable > 0)
-                        threatsBlock.Set("mostUrgent", agentsHuntable + " agent(s) huntable (profile>=50 & menace>25) - " +
-                            "exposed to assassination; get_threats shows which and how to hide");
-                    if (agentsInDanger > 0 || agentsHuntable > 0)
-                        threatsBlock.Set("hint", "call get_threats for per-agent odds (isHuntable, verdict, top hunter)");
-                    // Active combat takes priority over predictive danger: a pending battle blocks end_turn.
-                    if (agentsUnderAttack > 0)
-                        threatsBlock.Set("agentsUnderAttack", agentsUnderAttack)
-                                    .Set("underAttack", underAttack)
-                                    .Set("combatHint", "a battle is pending - resolve it with get_pending_decision / " +
-                                        "resolve_decision (fight, flee, or retreat); end_turn is blocked until you do");
-                    if (armiesInBattle > 0)
-                        threatsBlock.Set("armiesInBattle", armiesInBattle);
-
-                    JsonValue o = JsonValue.NewObject()
-                        .Set("modVersion", ModCore.ModVersion)
-                        .Set("turn", map.turn)
-                        // In an endless game there is no turn limit: getMaxTurns() still returns a number
-                        // (the game ignores it), so surface null there or an agent reads it as a deadline.
-                        // Mirrors the game UI's "Turn: X (Endless)".
-                        .Set("endless", map.opt_endless)
-                        .Set("maxTurns", map.opt_endless ? JsonValue.Null : JsonValue.Of(maxTurns))
-                        .Set("turnsRemaining", map.opt_endless ? JsonValue.Null : JsonValue.Of(Math.Max(0, maxTurns - map.turn)))
-                        .Set("god", JsonValue.NewObject()
-                            .Set("name", map.overmind.god != null ? map.overmind.god.getName() : null)
-                            .Set("type", map.overmind.god != null ? map.overmind.god.GetType().Name : null))
-                        .Set("power", Summaries.Round2(map.overmind.power))
-                        // victoryMode is only recorded once the game is decided; null while playing.
-                        .Set("victoryMode", om.endOfGameAchieved ? Summaries.VictoryModeLabel(om.victoryMode) : null)
-                        .Set("victoryProgress", Summaries.Round2(map.data_victoryProgess))
-                        // Distinct from victoryProgress: the average enshadowment of rulers/heroes. Surfaced
-                        // so the two are not conflated. Full victory split via get_victory_breakdown.
-                        .Set("avrgEnshadowment", Summaries.Round2(map.data_avrgEnshadowment))
-                        .Set("worldPanic", Summaries.Round2(map.worldPanic))
-                        // Where the world's alarm is coming from (a player reads this in tooltips).
-                        .Set("panic", JsonValue.NewObject()
-                            .Set("total", Summaries.Round2(map.worldPanic))
-                            .Set("fromPowerUse", Summaries.Round2(om.panicFromPowerUse))
-                            .Set("fromCluesDiscovered", Summaries.Round2(om.panicFromCluesDiscovered))
-                            .Set("heroesFallen", Summaries.Round2(om.panicHeroesFallen))
-                            .Set("temporaryChange", Summaries.Round2(om.panicTemporaryChange)))
-                        .Set("awarenessOfUnderground", Summaries.Round2(map.awarenessOfUnderground))
-                        .Set("wars", map.wars != null ? map.wars.Count : 0)
-                        // Clues currently pointing at your agents/interests; drill in via list_investigations.
-                        .Set("activeInvestigations", Summaries.CountInvestigationsAgainstMe(map))
-                        .Set("threats", threatsBlock)
-                        .Set("sealsBroken", map.overmind.sealsBroken)
-                        // Seals break on a fixed turn schedule; seals.turnsToNextSeal is the countdown, and
-                        // each break raises your power cap / unlocks abilities. Do not miss it.
-                        .Set("seals", Summaries.SealTiming(map))
-                        .Set("availableEnthrallments", map.overmind.availableEnthrallments)
-                        // Losing all agents is NOT a loss (you are the god, points regenerate); recruit more
-                        // with recruit_agent. The game truly ends only when endOfGameAchieved is set.
-                        .Set("agentCap", agentCap)
-                        .Set("canRecruit", canRecruit)
-                        .Set("endOfGameAchieved", om.endOfGameAchieved)
-                        .Set("defeated", om.endOfGameAchieved && !om.victoryAchieved)
-                        .Set("victoryAchieved", map.overmind.victoryAchieved)
-                        // null unless the game is waiting on a decision popup; otherwise the full detail
-                        // (options with indices) so you can resolve it without loading get_pending_decision:
-                        // pass the chosen index to end_turn's resolveOptionIndex (or resolve_decision).
-                        .Set("pendingDecision", PendingDecisionForOverview(ctx))
-                        .Set("counts", JsonValue.NewObject()
-                            .Set("locations", map.locations.Count)
-                            .Set("units", map.units.Count)
-                            .Set("commandableUnits", commandable)
-                            .Set("persons", map.persons.Count)
-                            .Set("socialGroups", map.socialGroups.Count));
-                    // Perishable opportunity: a religion with its Elder influence bar full can have one tenet
-                    // rewritten right now, and further influence it earns is discarded until you spend it. The
-                    // game only says so once, in a message; without this an agent banks influence forever.
-                    JsonValue readyOrders = HolyOrdersReadyToInfluence(ctx, map);
-                    if (!readyOrders.IsNull) o.Set("holyOrders", readyOrders);
-                    // Contextual one-shot tips: explain a mechanic the first turn it becomes relevant, on the
-                    // tool the agent reads every turn (mirrors the game's own hint popups). See TipEngine.
-                    JsonValue tips = TipEngine.CollectContextual(ctx);
-                    if (!tips.IsNull) o.Set("tips", tips);
-                    return ToolResult.Ok(o);
-                })));
+                a => WithMap(ctx, map => ToolResult.Ok(OverviewJson(ctx, map)))));
 
             host.Register(new ToolDefinition(
                 "get_threats",
@@ -685,6 +559,138 @@ namespace ShadowsMcp.Tools
         }
 
         // ---------- helpers ----------
+
+        /// <summary>
+        /// The game_overview payload for a live map. Shared with new_game so a freshly
+        /// started game returns the same immediate context game_overview would.
+        /// </summary>
+        internal static JsonValue OverviewJson(GameContext ctx, Map map)
+        {
+            int commandable = 0;
+            int agentsUnderAttack = 0, armiesInBattle = 0;
+            JsonValue underAttack = JsonValue.NewArray();
+            foreach (Unit u in map.units)
+            {
+                if (u.isCommandable()) commandable++;
+                if (u.isDead || !u.isCommandable()) continue;
+                // Active combat (distinct from the predictive danger below): an agent attacked THIS turn
+                // has a battle pending; an army may be mid field-battle. Surfaced so an agent reading only
+                // game_overview cannot miss a fight it must resolve before the turn can end.
+                // Match the actual end_turn block condition (UA engaged by a live UA this turn) so this
+                // "battle pending / end_turn blocked" signal can never contradict end_turn's behaviour.
+                if (u is UA && u.engagedBy is UA atk && !atk.isDead && u.turnLastEngaged == map.turn)
+                {
+                    agentsUnderAttack++;
+                    underAttack.Add(Summaries.UnitRef(ctx, u));
+                }
+                if (u.task is Task_InBattle) armiesInBattle++;
+            }
+            Overmind om = map.overmind;
+            om.calculateAgentsUsed();
+            int agentCap = om.god != null ? om.getAgentCap() : 0;
+            bool canRecruit = om.availableEnthrallments > 0 && om.nEnthralled < agentCap;
+            int maxTurns = om.god != null ? om.god.getMaxTurns() : 0;
+
+            // Combat-danger breadcrumb: an agent that only ever reads game_overview should still
+            // notice heroes closing on its agents. agentsInDanger > 0 => open get_threats.
+            var safety = Summaries.ComputeAgentSafety(ctx, map);
+            int agentsInDanger = 0, agentsHuntable = 0;
+            Summaries.AgentSafetyInfo worstThreat = null;
+            foreach (var s in safety)
+            {
+                if (s.IsHuntable) agentsHuntable++;
+                if (!s.InDanger()) continue;
+                agentsInDanger++;
+                if (worstThreat == null || s.TopMotivation > worstThreat.TopMotivation) worstThreat = s;
+            }
+            JsonValue threatsBlock = JsonValue.NewObject()
+                .Set("agentsInField", safety.Count)
+                .Set("agentsInDanger", agentsInDanger)
+                // Huntable = profile>=50 AND menace>25: exposed to a ruler's assassination even before
+                // a hunter is in range. The signal that most predicts losing an agent (surfaced here so
+                // an agent reading only game_overview sees it, not just get_threats.agentSafety).
+                .Set("agentsHuntable", agentsHuntable);
+            if (worstThreat != null)
+                threatsBlock.Set("mostUrgent", Summaries.AgentSafetyLine(ctx, worstThreat));
+            else if (agentsHuntable > 0)
+                threatsBlock.Set("mostUrgent", agentsHuntable + " agent(s) huntable (profile>=50 & menace>25) - " +
+                    "exposed to assassination; get_threats shows which and how to hide");
+            if (agentsInDanger > 0 || agentsHuntable > 0)
+                threatsBlock.Set("hint", "call get_threats for per-agent odds (isHuntable, verdict, top hunter)");
+            // Active combat takes priority over predictive danger: a pending battle blocks end_turn.
+            if (agentsUnderAttack > 0)
+                threatsBlock.Set("agentsUnderAttack", agentsUnderAttack)
+                            .Set("underAttack", underAttack)
+                            .Set("combatHint", "a battle is pending - resolve it with get_pending_decision / " +
+                                "resolve_decision (fight, flee, or retreat); end_turn is blocked until you do");
+            if (armiesInBattle > 0)
+                threatsBlock.Set("armiesInBattle", armiesInBattle);
+
+            JsonValue o = JsonValue.NewObject()
+                .Set("modVersion", ModCore.ModVersion)
+                .Set("turn", map.turn)
+                // In an endless game there is no turn limit: getMaxTurns() still returns a number
+                // (the game ignores it), so surface null there or an agent reads it as a deadline.
+                // Mirrors the game UI's "Turn: X (Endless)".
+                .Set("endless", map.opt_endless)
+                .Set("maxTurns", map.opt_endless ? JsonValue.Null : JsonValue.Of(maxTurns))
+                .Set("turnsRemaining", map.opt_endless ? JsonValue.Null : JsonValue.Of(Math.Max(0, maxTurns - map.turn)))
+                .Set("god", JsonValue.NewObject()
+                    .Set("name", map.overmind.god != null ? map.overmind.god.getName() : null)
+                    .Set("type", map.overmind.god != null ? map.overmind.god.GetType().Name : null))
+                .Set("power", Summaries.Round2(map.overmind.power))
+                // victoryMode is only recorded once the game is decided; null while playing.
+                .Set("victoryMode", om.endOfGameAchieved ? Summaries.VictoryModeLabel(om.victoryMode) : null)
+                .Set("victoryProgress", Summaries.Round2(map.data_victoryProgess))
+                // Distinct from victoryProgress: the average enshadowment of rulers/heroes. Surfaced
+                // so the two are not conflated. Full victory split via get_victory_breakdown.
+                .Set("avrgEnshadowment", Summaries.Round2(map.data_avrgEnshadowment))
+                .Set("worldPanic", Summaries.Round2(map.worldPanic))
+                // Where the world's alarm is coming from (a player reads this in tooltips).
+                .Set("panic", JsonValue.NewObject()
+                    .Set("total", Summaries.Round2(map.worldPanic))
+                    .Set("fromPowerUse", Summaries.Round2(om.panicFromPowerUse))
+                    .Set("fromCluesDiscovered", Summaries.Round2(om.panicFromCluesDiscovered))
+                    .Set("heroesFallen", Summaries.Round2(om.panicHeroesFallen))
+                    .Set("temporaryChange", Summaries.Round2(om.panicTemporaryChange)))
+                .Set("awarenessOfUnderground", Summaries.Round2(map.awarenessOfUnderground))
+                .Set("wars", map.wars != null ? map.wars.Count : 0)
+                // Clues currently pointing at your agents/interests; drill in via list_investigations.
+                .Set("activeInvestigations", Summaries.CountInvestigationsAgainstMe(map))
+                .Set("threats", threatsBlock)
+                .Set("sealsBroken", map.overmind.sealsBroken)
+                // Seals break on a fixed turn schedule; seals.turnsToNextSeal is the countdown, and
+                // each break raises your power cap / unlocks abilities. Do not miss it.
+                .Set("seals", Summaries.SealTiming(map))
+                .Set("availableEnthrallments", map.overmind.availableEnthrallments)
+                // Losing all agents is NOT a loss (you are the god, points regenerate); recruit more
+                // with recruit_agent. The game truly ends only when endOfGameAchieved is set.
+                .Set("agentCap", agentCap)
+                .Set("canRecruit", canRecruit)
+                .Set("endOfGameAchieved", om.endOfGameAchieved)
+                .Set("defeated", om.endOfGameAchieved && !om.victoryAchieved)
+                .Set("victoryAchieved", map.overmind.victoryAchieved)
+                // null unless the game is waiting on a decision popup; otherwise the full detail
+                // (options with indices) so you can resolve it without loading get_pending_decision:
+                // pass the chosen index to end_turn's resolveOptionIndex (or resolve_decision).
+                .Set("pendingDecision", PendingDecisionForOverview(ctx))
+                .Set("counts", JsonValue.NewObject()
+                    .Set("locations", map.locations.Count)
+                    .Set("units", map.units.Count)
+                    .Set("commandableUnits", commandable)
+                    .Set("persons", map.persons.Count)
+                    .Set("socialGroups", map.socialGroups.Count));
+            // Perishable opportunity: a religion with its Elder influence bar full can have one tenet
+            // rewritten right now, and further influence it earns is discarded until you spend it. The
+            // game only says so once, in a message; without this an agent banks influence forever.
+            JsonValue readyOrders = HolyOrdersReadyToInfluence(ctx, map);
+            if (!readyOrders.IsNull) o.Set("holyOrders", readyOrders);
+            // Contextual one-shot tips: explain a mechanic the first turn it becomes relevant, on the
+            // tool the agent reads every turn (mirrors the game's own hint popups). See TipEngine.
+            JsonValue tips = TipEngine.CollectContextual(ctx);
+            if (!tips.IsNull) o.Set("tips", tips);
+            return o;
+        }
 
         /// <summary>
         /// The full pending-decision object for game_overview (null when nothing is pending), tagged with

@@ -128,6 +128,7 @@ namespace ShadowsMcp
                 InspectTool.RegisterAll(_host, _ctx);
                 DecisionTools.RegisterAll(_host, _ctx);
                 TipsTools.RegisterAll(_host, _ctx);
+                LifecycleTools.RegisterAll(_host, _ctx);
 
                 // The core mechanics primer becomes the MCP initialize.instructions (always-on onboarding);
                 // situational tips ride game_overview / end_turn, and get_tips is the on-demand catalog.

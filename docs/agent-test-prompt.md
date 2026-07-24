@@ -6,9 +6,10 @@ human watching the game window, the agent drives the game **through MCP tools on
 
 ## Before you run it (human setup — the agent cannot do these)
 
-1. Install & enable the mod, start the game, and load **a fresh or throwaway game** (any god, smallest map
-   is fine). The tests move units, spend recruitment points, and end turns — all irreversible, with no save
-   tool exposed — so do **not** run this on a game you care about.
+1. Install & enable the mod and start the game. Leaving it at the main menu is fine — the agent starts a
+   throwaway game itself with `new_game` (preflight). The tests start/abandon games, move units, spend
+   recruitment points, and end turns — all irreversible, with no save tool exposed — so do **not** run this
+   while a game you care about is loaded (section O will abandon it).
 2. Connect the agent to the server, e.g. `claude mcp add --transport http shadows http://<game-pc-ip>:8017/mcp`.
 3. Paste the prompt. The connected server is referred to as **`shadows`**.
 
@@ -25,18 +26,21 @@ return. Do not use any tools other than the `shadows` server's.
 The game: you play a dark god corrupting the world through agents (your commandable units). You are
 authorized to freely mutate THIS game (it is expendable). Actions are irreversible — there is no save/undo.
 
-### Tools available (34)
+### Tools available (35)
 game_overview, get_threats, world_summary, list_locations, get_location, list_units, get_unit,
 list_persons, get_person, list_social_groups, get_social_group, list_wars, list_investigations,
 list_holy_orders, get_recent_events, get_player_state, get_victory_breakdown, list_recruitable_agents,
 list_powers, list_challenges, get_tips, inspect, move_unit, cancel_task, perform_challenge, use_power,
 recruit_agent, command_army, command_agent, influence_holy_order_tenet, oppose_divinity, get_pending_decision,
-resolve_decision, end_turn.
+resolve_decision, end_turn, new_game.
 
 ### Preflight (if this fails, stop and report BLOCKED)
-1. Call `game_overview`. If it errors ("no game in progress" / not ready) or the core tools are missing,
-   stop and report a single BLOCKED row explaining what was unavailable. Otherwise record the starting
-   `turn` and note it in the report header.
+1. Call `game_overview`. If it errors with "no game in progress", start a throwaway game yourself:
+   `new_game {"god":"snake","mapSize":"small","seed":12345}` — it is SLOW (~30-120s), make ONE call and
+   wait; assert the result has `started:true`, `seed:12345` and an `overview`, and record this as check
+   **O0** (PASS/FAIL). If `game_overview` errors any other way, or the core tools are missing, stop and
+   report a single BLOCKED row explaining what was unavailable. Otherwise record the starting `turn` and
+   note it in the report header.
 
 ### Rules of engagement — READ CAREFULLY
 - **Discover ids dynamically; never hardcode.** Unit ids (`U*`) come from `list_units`, locations (`L*`)
@@ -552,6 +556,26 @@ empty, mark N1–N8 SKIP. Spending influence is irreversible; that is fine on th
   assert `strength` dropped by 10 and `powerRemaining` fell by 1; the War-in-Heaven event it raises should
   come back as a `pendingDecision` (resolve it before continuing).
 
+**O. Game lifecycle (`new_game`)** — O1 can run at any point while a game is loaded; O2/O3 ABANDON the
+current game, so run them **LAST**, after every other section is done and its evidence recorded.
+- O0 (preflight start): recorded during preflight if the run began at the main menu; otherwise SKIP with a
+  note that a game was already loaded.
+- O1 (error, refusal without confirm): while a game is in progress, call `new_game {"god":"snake"}` with NO
+  `confirm`. Assert a clean `isError` that names the current turn, names `confirm`, and warns that progress
+  would be lost — and that the running game is untouched (`game_overview.turn` unchanged).
+- O2 (restart over a live game — destructive, run last): call
+  `new_game {"god":"snake","mapSize":"small","seed":54321,"confirm":true}` and wait (ONE call, ~30-120s;
+  even if it times out, do not retry — check `game_overview` instead). Assert `started:true`,
+  `seed:54321`, `god.type:"God_Snake"`, `turn ≥ 1`, and that the payload carries a full `overview`
+  (same shape as `game_overview`, per A1).
+- O3 (post-start surface sanity): immediately after O2, assert the whole tool surface works on the new
+  map — `game_overview` matches the returned overview's `turn`, `list_units {"scope":"mine"}` is
+  non-empty (your starting agents), `list_powers` returns your god's powers, and old `U*`/`L*` ids from
+  the abandoned game now return clean stale-id errors (session ids were reset).
+- O4 (determinism, optional): a second `new_game {"god":"snake","mapSize":"small","seed":54321,
+  "confirm":true}` reproduces the same world — compare a few location names from `list_locations`
+  against O2's. SKIP if the time budget is spent.
+
 ### Reporting (required output)
 1. Print a table with columns: `id | area | result (PASS/FAIL/SKIP/BLOCKED) | expected | observed (tool +
    before→after) | notes`. One row per check above.
@@ -561,7 +585,7 @@ empty, mark N1–N8 SKIP. Spending influence is irreversible; that is fine on th
    directory (use the starting turn number from preflight so the name is stable). Confirm the file path in
    your final message.
 
-Work through A→N in order. Be concise in intermediate narration; the value is in the evidence and the final
+Work through A→N in order, then O last (it abandons the game). Be concise in intermediate narration; the value is in the evidence and the final
 report.
 ````
 

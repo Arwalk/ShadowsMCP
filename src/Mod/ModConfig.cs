@@ -17,5 +17,9 @@ namespace ShadowsMcp
 
         /// <summary>How long end_turn waits for the turn number to advance.</summary>
         public int EndTurnTimeoutMs = 60000;
+
+        /// <summary>How long new_game waits for map generation + burn-in (a large map can
+        /// take minutes; the started job runs to completion even if this expires).</summary>
+        public int NewGameTimeoutMs = 180000;
     }
 }

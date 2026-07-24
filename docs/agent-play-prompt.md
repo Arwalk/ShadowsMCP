@@ -8,12 +8,13 @@ exercises the tool surface in ways the scripted checklist never will.
 
 ## Before you run it (human setup — the agent cannot do these)
 
-1. Install & enable the mod, start the game, and load **a fresh or throwaway game** (any god). All
-   actions are irreversible from the agent's side — there is no save/undo tool.
+1. Install & enable the mod and start the game — leaving it at the main menu is fine: the agent
+   starts its own games with `new_game`. All actions are irreversible from the agent's side — there
+   is no save/undo tool, and `new_game {"confirm":true}` abandons the current game unsaved.
 2. Connect the agent, e.g. `claude mcp add --transport http shadows http://<game-pc-ip>:8017/mcp`.
 3. Paste the prompt. The connected server is referred to as **`shadows`**.
-4. When a game ends, the agent will write a retrospective and ask you to load a new game — do that,
-   tell it to continue, and it will pick up its accumulated notes.
+4. When a game ends, the agent writes a retrospective and starts the next playthrough itself,
+   picking up its accumulated notes. No human action is needed between games.
 
 ---
 
@@ -144,11 +145,14 @@ When `endOfGameAchieved` is true (win or lose — losing all agents is NOT a los
 2. Update `sofg-learnings.md` (fold in the retrospective) and close out `sofg-experiments.md`
    entries for this run.
 3. Summarize `sofg-mcp-issues.md` — new issues this run, by severity.
-4. Ask the user to load a new game, and STOP until they confirm. On the next game, reread your
-   three files first and open with a plan that uses what you learned.
+4. Start the next playthrough yourself with `new_game {"confirm":true}` (pick the god and options
+   that serve your experiment plan; it takes ~30-120s — make ONE call and wait). Reread your three
+   files first and open with a plan that uses what you learned.
 
-Begin now: read your notebook files (create them with a header if absent), call `game_overview`,
-post an opening **Turn Report** with your strategic assessment and chosen experiments, then play.
+Begin now: read your notebook files (create them with a header if absent), then call
+`game_overview`. If it says no game is in progress, start one with `new_game` (your choice of god —
+vary it across playthroughs). Post an opening **Turn Report** with your strategic assessment and
+chosen experiments, then play.
 ````
 
 ---

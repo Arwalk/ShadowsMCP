@@ -38,6 +38,35 @@ inside the mod folder, content is loaded from there instead (per-version packagi
   If the player never touched the config, the callbacks never fire → compiled-in defaults
   must equal the json defaults.
 
+## Headless new-game start (LifecycleTools.new_game; UIMainMenu.cs, World.cs, PopupGameOptions.cs)
+
+- The human path: `UIMainMenu.bStart` (guards `ui.blocker == null && starting == 0`) does
+  `world.map = new Map(world.param); World.staticMap = world.map` → `startProper()`:
+  `PopupModConfig.loadModConfigFromFile(modsLoaded, informMod: true)`, fires
+  `onStartGamePresssed(map, godList)` on every kernel (mods may add gods), appends
+  `God_Eternity`/`God_Cards`/`God_Underground`, then **`god.setup(world.map)` on every god**
+  (this builds the god's power list — skip it and `list_powers`/`use_power` break) → god click
+  sets `world.chosenGod` → `PopupGameOptions.startGame()` → `world.startup(options)`.
+- `World.startup(opts)` (World.cs:445) is fully synchronous: sets `map.mods = loadedModKernels`,
+  copies options onto the map, `map.gen()`, rewinds `map.turn` by `mapGen_burnInSteps` (150) and
+  `turnTick()`s them back (the burn-in history sim), applies difficulty multipliers,
+  `ui.setToWorld()`, fires `afterMapGenAfterHistorical` on every kernel (→ ModCore.OnMapSeen
+  picks up the map), then one real `turnTick()`. Takes ~30-120 s wall-clock.
+- **`GameOptions.turnLimit` is INVERTED**: `true` ⇒ `map.opt_endless = true` (World.cs:459 —
+  no time-out defeat); the options popup confirms it (`tEndless.isOn = !options.turnLimit`,
+  PopupGameOptions.cs:283). The `new_game` tool exposes the intuitive polarity
+  (`turnLimit:true` = limit enforced) and negates internally.
+- In-place map replacement over a running game **without scene reload or cleanup is supported** —
+  the game's own `WHILE_TRUE_RESTART` debug loop (World.cs:386-404) does exactly that repeatedly.
+  Only caveat: null `GraphicalMap.selectedUnit`/`selectedHex` first, or `ui.checkData()` inside
+  startup can touch units of the discarded map.
+- `Eleven.random` is reseeded from `opts.seed` inside `startup` — never consume it pre-start
+  when picking random tool defaults (use a fresh `System.Random`), or determinism breaks.
+- `new_game` runs as ONE main-thread dispatcher job (server-thread registration, own
+  `NewGameTimeoutMs` budget). A started job cannot be cancelled: if the tool call times out the
+  game still finishes starting — the tool description tells the agent to check `game_overview`
+  instead of retrying.
+
 ## Save / load (World.cs:870-1000) — CRITICAL for mod design
 
 - Saves = FullSerializer (`fsSerializer.TrySerialize(typeof(Map), map)`) → compressed JSON.
