@@ -37,6 +37,12 @@ namespace ShadowsMcp
         /// (single-flighted by the dispatcher), so a plain HashSet needs no lock.</summary>
         public readonly HashSet<string> ShownTips = new HashSet<string>();
 
+        /// <summary>The last decision banner stamped onto a tool result (see GameToolHost.Stamp).
+        /// While the same decision stays pending, repeat stamps shrink to a one-liner — the full
+        /// headline was already shown and remains in game_overview.pendingDecision. Cleared whenever
+        /// no decision is pending, so a new decision always gets the full banner. Main-thread only.</summary>
+        public string LastBanner;
+
         public MainThreadDispatcher Dispatcher;
 
         public object ResolveEntity(string id)

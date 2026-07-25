@@ -213,6 +213,26 @@ namespace ShadowsMcp.Tools.Decisions
         private static void Dismiss(UIMaster ui, GameObject blocker)
         {
             FlushPendingAutosave(blocker); // ensure the autosave hits disk before we destroy the popup
+
+            // PopupConfirmOrder's dismissKeyHit CONFIRMS (dismissConfirm → order(paramString)) — a "dismiss"
+            // must decline the destructive action, not execute it. Route to dismissAbort instead.
+            try
+            {
+                PopupConfirmOrder confirm = blocker.GetComponent<PopupConfirmOrder>();
+                if (confirm != null) { confirm.dismissAbort(); return; }
+            }
+            catch { }
+
+            // PopupAristocrat (crisis-vote result) is not UI_Dismissable; a bare removeBlocker would skip
+            // concludeVoting(), silently discarding the outcome a completed ritual earned. Conclude — what
+            // clicking its button does — which applies the vote result and then closes the popup itself.
+            try
+            {
+                PopupAristocrat vote = blocker.GetComponent<PopupAristocrat>();
+                if (vote != null) { vote.concludeVoting(); return; }
+            }
+            catch { }
+
             try
             {
                 UI_Dismissable d = blocker.GetComponent<UI_Dismissable>();

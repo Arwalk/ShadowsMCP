@@ -73,7 +73,7 @@ namespace ShadowsMcp.Tools.Decisions
             {
                 if (h.CanHandle(blocker)) return h;
             }
-            return null; // unreachable: GenericPopupHandler matches everything
+            return null; // unreachable: GenericButtonHandler matches everything
         }
 
         /// <summary>Full detail for get_pending_decision.</summary>
@@ -233,18 +233,19 @@ namespace ShadowsMcp.Tools.Decisions
             try { return h.Kind(blocker); } catch { return null; }
         }
 
-        /// <summary>The popup's title (falling back to the banner headline) and its <c>Popup*</c> type
-        /// name, both from ONE <c>Describe</c> call. Must be read before Resolve, which destroys the
-        /// blocker. Both outputs are null on error — never throws.</summary>
+        /// <summary>The popup's title (falling back to the banner headline), its <c>Popup*</c> type
+        /// name and its body text, all from ONE <c>Describe</c> call. Must be read before Resolve, which
+        /// destroys the blocker. All outputs are null on error — never throws.</summary>
         private static void DescribeForLog(GameContext ctx, IDecisionHandler h, GameObject blocker,
-            out string title, out string popupType)
+            out string title, out string popupType, out string body)
         {
-            title = null; popupType = null;
+            title = null; popupType = null; body = null;
             try
             {
                 JsonValue d = h.Describe(ctx, blocker);
                 title = d["title"].AsString();
                 popupType = d["popupType"].AsString();
+                body = d["text"].AsString();
             }
             catch { }
             if (string.IsNullOrEmpty(title))
@@ -348,8 +349,8 @@ namespace ShadowsMcp.Tools.Decisions
                 // returned `items` (end_turn's digest) — a bare count is what let a razing and a lost
                 // battle vanish into "3 popups dismissed". Only the loggable kinds also reach the
                 // recent-events feed, keeping that feed disjoint from the turn snapshot (see LoggableKinds).
-                string logTitle, popupType;
-                DescribeForLog(ctx, h, blocker, out logTitle, out popupType);
+                string logTitle, popupType, logBody;
+                DescribeForLog(ctx, h, blocker, out logTitle, out popupType, out logBody);
                 ToolResult r = h.Resolve(ctx, blocker, ForceArgs);
                 if (r == null || r.IsError)
                 {
@@ -367,6 +368,11 @@ namespace ShadowsMcp.Tools.Decisions
                     JsonValue it = JsonValue.NewObject().Set("turn", TurnOf(ctx)).Set("kind", type);
                     if (!string.IsNullOrEmpty(popupType) && popupType != type) it.Set("popupType", popupType);
                     if (!string.IsNullOrEmpty(logTitle)) it.Set("title", logTitle);
+                    // Seal breaks and the god's awakening (both PopupMsgSeal) are the game's biggest beats
+                    // and their body (which powers unlocked, cap changes) exists nowhere else once dismissed
+                    // — keep it in the digest instead of flattening it to a bare title.
+                    if (popupType == "PopupMsgSeal" && !string.IsNullOrEmpty(logBody))
+                        it.Set("detail", logBody.Length > 400 ? logBody.Substring(0, 400) + "…" : logBody);
                     items.Add(it);
                 }
                 if (IsLoggableKind(type)) ctx.Events.RecordPopup(TurnOf(ctx), type, logTitle, "dismissed");

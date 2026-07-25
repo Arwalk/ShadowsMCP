@@ -55,8 +55,20 @@ namespace ShadowsMcp
             try
             {
                 string banner = DecisionRegistry.Banner(_ctx);
-                if (!string.IsNullOrEmpty(banner))
-                    result.Text = banner + "\n\n" + (result.Text ?? "");
+                if (string.IsNullOrEmpty(banner))
+                {
+                    _ctx.LastBanner = null; // decision cleared — the next one gets the full banner again
+                }
+                else
+                {
+                    // Same decision as last stamp: the agent already saw the full line (and it stays in
+                    // game_overview.pendingDecision) — don't re-pay its tokens on every exploratory call.
+                    string stamp = banner == _ctx.LastBanner
+                        ? "⚠ decision still pending - resolve_decision."
+                        : banner;
+                    _ctx.LastBanner = banner;
+                    result.Text = stamp + "\n\n" + (result.Text ?? "");
+                }
             }
             catch
             {

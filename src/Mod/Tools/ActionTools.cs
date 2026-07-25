@@ -83,16 +83,13 @@ namespace ShadowsMcp.Tools
 
             host.Register(new ToolDefinition(
                 "command_army",
-                "Issue a commandable military unit's special order - the third action category beside challenges " +
-                "and powers, used by army units such as an awakened god-army (e.g. She Who Will Feast) or an orc " +
-                "raiding party. order=raze devours the human settlement the unit is standing on (move it onto the " +
-                "city first; the city's defences fall each turn until it is destroyed); order=drive_back forces an " +
-                "enemy hero sharing the unit's tile to retreat and drop its task; order=attack starts a battle with " +
-                "an enemy army sharing the tile. A unit's currently-available orders (with the exact call) appear " +
-                "under 'orders' in get_unit / list_units. NOTE: once a battle starts the army is COMMITTED - " +
-                "there is no retreat/withdraw order; the battle auto-resolves one cycle per end_turn until one " +
-                "side is destroyed or routs, and the unit accepts no orders meanwhile (only agent duels can " +
-                "flee, via their popup).",
+                "Issue a military unit's special order (armies like an awakened god-army or orc raiders; " +
+                "available orders appear under 'orders' in the unit views). order=raze devours the human " +
+                "settlement the unit stands on (move onto it first; defences fall each turn until destroyed); " +
+                "order=drive_back forces an enemy hero on the tile to retreat and drop its task; order=attack " +
+                "battles an enemy army on the tile. Once a battle starts the army is COMMITTED - no retreat; " +
+                "it auto-resolves one cycle per end_turn until a side is destroyed or routs, and the unit " +
+                "accepts no orders meanwhile (only agent duels can flee).",
                 Schema.Object(
                     Schema.Prop("unitId", Schema.String("Your military unit's id, e.g. U17"), required: true),
                     Schema.Prop("order", Schema.StringEnum("Which order to issue", "raze", "drive_back", "attack"), required: true),
@@ -101,18 +98,15 @@ namespace ShadowsMcp.Tools
 
             host.Register(new ToolDefinition(
                 "command_agent",
-                "Act on ANOTHER agent standing on the same tile as one of your agents - the offensive/social " +
-                "half of the agent action list, beside challenges and powers. order=attack starts a duel with " +
-                "an enemy hero: this is how you strike first instead of waiting to be hunted, and it CANCELS " +
-                "the target's in-progress challenge or ritual outright - even if you then flee or retreat, and " +
-                "even if you lose - which is the standard way to break the Chosen One's ritual (it also cancels " +
-                "your own agent's challenge, so compare get_unit combat.dangerEstimate on both first). " +
-                "order=rob steals items from a weaker enemy hero or merchant (you must be a HIGHER level than " +
-                "them, once per 5 turns, and it raises your profile and menace). order=trade moves items and " +
-                "gold between two of YOUR OWN agents. order=follow makes a Harvester shadow a merchant. " +
-                "attack/rob/trade open a menu that is returned inline as pendingDecision - drive it with " +
-                "resolve_decision. Targets must share your agent's tile: move_unit there first. A unit's " +
-                "currently-available orders (with the exact call) appear under 'orders' in get_unit / list_units.",
+                "Act on ANOTHER agent on the same tile as one of your agents (move_unit there first). " +
+                "order=attack duels an enemy hero and CANCELS both sides' in-progress challenges permanently - " +
+                "even if you flee or lose (the standard way to break a ritual you cannot otherwise stop; " +
+                "compare both units' combat.dangerEstimate first - see get_tips id=agent_can_attack). " +
+                "order=rob steals items from a weaker enemy (you must be HIGHER level; once per 5 turns; " +
+                "raises your profile and menace). order=trade moves items/gold between two of YOUR OWN " +
+                "agents. order=follow makes a Harvester shadow a merchant. attack/rob/trade open a menu " +
+                "returned inline as pendingDecision - drive it with resolve_decision. Available orders appear " +
+                "under 'orders' in the unit views.",
                 Schema.Object(
                     Schema.Prop("unitId", Schema.String("Your agent's id, e.g. U17"), required: true),
                     Schema.Prop("order", Schema.StringEnum("Which action to take against the target agent",
@@ -125,49 +119,35 @@ namespace ShadowsMcp.Tools
             // per-tool timeout, so it dispatches its own job with the longer budget.
             host.RegisterServerThread(new ToolDefinition(
                 "end_turn",
-                "End your turn (runs the full turn processing; may take a few seconds). If a decision popup " +
-                "is blocking the turn, this returns it with its options (also in game_overview.pendingDecision) " +
-                "and does not advance; pass resolveOptionIndex to pick an option, and it resolves that decision " +
-                "then continues ending the turn (if the index could not be applied - nothing was pending, or " +
-                "the resolve failed - the result says so in resolveWarning; it is never silently ignored). " +
-                "With force=true, auto-resolves only what is safely " +
-                "dismissable: skill points auto-spent, and purely-informational popups dismissed (the " +
-                "agent-death NOTICE - kind:\"death\", PopupMsgAgentsDeath - and message boxes; the periodic " +
-                "autosave is written to disk first, then its notice dismissed). " +
-                "Force never skips anything carrying a real choice - all of these block even under force: " +
-                "a pending agent battle (blockedBy:\"combat\" - fight to the end, flee, or retreat via " +
-                "resolveOptionIndex / resolve_decision); the idle-agent alert (blockedBy:\"decision\", " +
-                "kind:\"idleAgents\" - so an idle agent's turn is never silently wasted: give it an order, " +
-                "or pass all idle with resolveOptionIndex 0); a narrative event (kind:\"event\"), INCLUDING " +
-                "the \"Defeat\" event a lost battle raises, because an event's choice can matter; and any " +
-                "other open choice popup (a level-up trait pick, trading, a list selection) - answer them " +
-                "with resolveOptionIndex. Idle is a recurring state " +
-                "(Task_PassTurn lasts one turn), so a count>1 batch stops on the first idle turn (advancedBy " +
-                "may be 0, stopReason:\"decision\", kind:\"idleAgents\") - to fast-forward unattended give every " +
-                "agent a standing order (they leave the idle set), or pass passIdleAgents:true to bulk-pass " +
-                "idle each turn. Pass " +
-                "count to advance several turns at once (force=true recommended so it doesn't stall on the " +
-                "repetitive 'Life Continues'-type popups); it stops early and reports stopReason on any "
-                + "decision, game over, or a meaningful threat escalation (an agent becomes huntable / a hero "
-                + "it is not favoured against starts hunting it / its odds worsen), with a threatAlert listing "
-                + "the affected agents (each tagged with what triggered it). Set stopOnThreatMotivation to also "
-                + "halt when a hunter's motivation toward an agent is at or above that percent - it fires "
-                + "whether motivation rose to it mid-batch OR was already there at the start, and can exceed "
-                + "100 for a strongly-inclined hunter. EVERY call returns a 'digest' of what actually "
-                + "happened, covering every turn of the batch (not just the last): digest.dismissed names "
-                + "each popup force cleared, digest.events lists the turn's notable news (razing, battles, "
-                + "deaths, wars, seal/prophecy progress - entries touching your own units are tagged "
-                + "mine:true), and digest.lost names any of YOUR units that died. Losing a unit also stops a "
-                + "batch immediately with stopReason:\"unitLost\", so a dead army is never followed by turns "
-                + "played blind. Read the digest - it is the only place a batch's news appears in full "
-                + "(get_recent_events has the unabridged log). A 'tips' array may also appear, "
-                + "explaining a mechanic that just became relevant.",
+                "End your turn (runs the full turn processing; may take a few seconds). " +
+                "A blocking decision popup is returned with its options instead of advancing (also in " +
+                "game_overview.pendingDecision); answer it by passing resolveOptionIndex (a failed or " +
+                "unneeded resolve is reported in resolveWarning, never silently ignored). " +
+                "force=true auto-resolves ONLY what carries no choice: one unspent skill point per agent " +
+                "per turn is auto-spent (AI-picked trait), and purely-informational popups are dismissed " +
+                "(message boxes, death notices; the periodic autosave is written to disk first). " +
+                "Everything with a real choice blocks even under force: a pending agent battle " +
+                "(blockedBy:\"combat\" - fight, flee, or retreat), the idle-agent alert (kind:\"idleAgents\" " +
+                "- give idle agents orders, or resolveOptionIndex 0 passes them all), narrative events " +
+                "(kind:\"event\", including the Defeat event of a lost battle), and any other choice popup " +
+                "(level-up trait pick, trading, list selections). " +
+                "Idle recurs every turn, so a count>1 batch stops on the first idle turn unless every agent " +
+                "holds a standing order or you pass passIdleAgents:true. " +
+                "count advances several turns (force=true recommended); the batch stops early with a " +
+                "stopReason on any decision, game over, the loss of one of your units " +
+                "(stopReason:\"unitLost\"), or a meaningful threat escalation (threatAlert names the agents " +
+                "affected and why); stopOnThreatMotivation adds an opt-in halt at a hunter-motivation " +
+                "percentage. EVERY call returns a 'digest' covering every turn of the batch - " +
+                "digest.dismissed (each popup force cleared), digest.events (notable news; your units " +
+                "tagged mine:true), digest.lost (your units that died). Read it: it is the only place a " +
+                "batch's news appears in full (get_recent_events keeps the unabridged log). A 'tips' array " +
+                "may explain a mechanic that just became relevant.",
                 Schema.Object(
-                    Schema.Prop("count", Schema.Integer("Advance up to this many turns (default 1, max 10). Stops early on any decision, game over, the loss of one of your units (stopReason:\"unitLost\", with digest.lost naming it), or a meaningful threat escalation (an agent becomes huntable, a hero it is not favoured against starts hunting it, or its odds worsen). The returned digest covers every turn advanced, not just the last.")),
-                    Schema.Prop("force", Schema.Boolean("Auto-spend unspent skill points and dismiss purely-informational popups (the death NOTICE, message boxes). Nothing is lost by doing so: every dismissal is named in digest.dismissed and the turn's news in digest.events. Does NOT skip anything carrying a real choice: a pending battle, the idle-agent alert, a narrative event (kind:event, including a lost battle's Defeat popup), and any open choice popup (a level-up trait pick, trading, a list selection) all block even under force - resolve them explicitly (pick with resolveOptionIndex, order the idle agents, or pass all idle with resolveOptionIndex 0). In a count>1 batch, idle blocks the first idle turn (advancedBy may be 0) unless agents hold standing orders or you pass passIdleAgents:true.")),
-                    Schema.Prop("passIdleAgents", Schema.Boolean("Deliberate fast-forward opt-in: bulk-pass every idle agent (a visible 'Passing Turn') each turn so a multi-turn advance doesn't stop on the recurring idle-agent alert. Unlike force this is a conscious choice to waste those agents' turns - prefer giving them standing orders instead. Only affects idle; combat and narrative events still block.")),
-                    Schema.Prop("resolveOptionIndex", Schema.Integer("If a decision popup is blocking the turn, choose this option (index from the pendingDecision options) to resolve it, then continue ending the turn")),
-                    Schema.Prop("stopOnThreatMotivation", Schema.Integer("Opt-in caution: stop the batch on the first turn a hunter's motivation toward one of your agents is AT OR ABOVE this percent, even while the agent is still favoured - catches threat building up before an agent becomes huntable. Level-triggered: fires whether the hunter rose to it mid-batch OR was already there at batch start. Motivation can exceed 100 for a strongly-inclined hunter, so a threshold above 100 is valid (e.g. 150 = only when strongly inclined). Omit or 0 to disable (default)."))),
+                    Schema.Prop("count", Schema.Integer("Advance up to this many turns (default 1, max 10); stops early per the rules above, and the digest covers every turn advanced.")),
+                    Schema.Prop("force", Schema.Boolean("Auto-spend skill points and dismiss informational popups; never skips a real choice (see tool description). Every dismissal is named in the digest - nothing is lost.")),
+                    Schema.Prop("passIdleAgents", Schema.Boolean("Bulk-pass every idle agent each turn (a visible 'Passing Turn') so a batch doesn't stop on the recurring idle alert. A conscious choice to waste those turns - prefer standing orders. Combat and events still block.")),
+                    Schema.Prop("resolveOptionIndex", Schema.Integer("Answer the blocking decision with this option index (from pendingDecision.options), then continue ending the turn.")),
+                    Schema.Prop("stopOnThreatMotivation", Schema.Integer("Stop the batch once any hunter's motivation toward one of your agents is AT OR ABOVE this percent (level-triggered; can exceed 100 for a strongly-inclined hunter). Omit or 0 to disable."))),
                 a =>
                 {
                     bool force = a["force"].AsBool();
@@ -257,6 +237,11 @@ namespace ShadowsMcp.Tools
             UM um = u as UM;
             if (ua == null && um == null)
                 return ToolResult.Error(u.getName() + " cannot perform challenges.");
+
+            // Hero-side ("good") challenges are hidden from the player's agents in the game UI —
+            // performing one would undo the player's own work. Never start one via a remembered id.
+            if (Summaries.IsHeroOnly(c))
+                return ToolResult.Error("'" + c.getName() + "' is a heroes-only challenge - your agents cannot perform it.");
 
             // Guards, mirroring UA/UM.playerTriesToStartChallenge:
             if (u.engagedBy != null && u.turnLastEngaged == map.turn)

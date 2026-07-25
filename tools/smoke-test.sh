@@ -52,7 +52,8 @@ assert_contains "initialize advertises tools capability" "$BODY" '"tools":{}'
 assert_contains "initialize serverInfo" "$BODY" '"name":"shadows-mcp-testhost"'
 
 post '{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"1999-01-01"}}'
-assert_contains "initialize falls back on unsupported version" "$BODY" '"protocolVersion":"2025-03-26"'
+# Spec: when the client's requested version is unsupported, answer with the LATEST supported one.
+assert_contains "initialize falls back on unsupported version" "$BODY" '"protocolVersion":"2025-06-18"'
 
 post '{"jsonrpc":"2.0","method":"notifications/initialized"}'
 [ "$STATUS" = "202" ] && ok "notification returns 202" || bad "notification returns 202" "$STATUS"

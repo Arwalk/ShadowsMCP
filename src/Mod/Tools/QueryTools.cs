@@ -18,26 +18,24 @@ namespace ShadowsMcp.Tools
         {
             host.Register(new ToolDefinition(
                 "game_overview",
-                "High-level state of the current game: turn, your god, resources, world counts, seal countdown " +
-                "and a threats breadcrumb. victoryProgress is your weighted score toward victory (score / " +
-                "pointsToWin ~200), not average enshadowment or panic. threats.agentsUnderAttack flags agents " +
-                "attacked THIS turn - a battle is pending (resolve via get_pending_decision; it blocks end_turn); " +
-                "threats.agentsInDanger flags agents a hero is closing on; threats.agentsHuntable flags agents " +
-                "exposed to assassination (profile>=50 & menace>25) - open get_threats when a danger signal is " +
-                "non-zero. A 'tips' array may appear here to " +
-                "explain a mechanic the moment it becomes relevant (get_tips is the full reference).",
+                "High-level state of the current game: turn, god, resources, world counts, seal countdown and " +
+                "a threats breadcrumb. The world meters (victoryProgress toward 200 points, worldPanic, " +
+                "awarenessOfUnderground, avrgEnshadowment) are 0-1 fractions. threats.agentsUnderAttack = a " +
+                "battle is pending (blocks end_turn; resolve via pendingDecision); agentsInDanger = a hero is " +
+                "closing; agentsHuntable = exposed to assassination (profile>=50 & menace>25) - open " +
+                "get_threats when a danger signal is non-zero. A 'tips' array may explain a mechanic the " +
+                "moment it becomes relevant (get_tips is the full reference).",
                 Schema.Object(),
                 a => WithMap(ctx, map => ToolResult.Ok(OverviewJson(ctx, map)))));
 
             host.Register(new ToolDefinition(
                 "get_threats",
-                "THE primary per-turn risk check - call it before ending a turn whenever an agent is in the "
-                + "field. Mirrors the game's Threats panel (heroes moving to attack your agents, the "
-                + "most-inclined attacker per agent with motivation %, the Chosen One's prophecy progress, "
-                + "seal/Iastur rituals, incoming wars and holy-order mood; sorted by severity), PLUS an "
-                + "agentSafety array: per agent, its dangerEstimate, whether it is huntable (profile>=50 and "
-                + "menace>25), the top hunter and a strength verdict (favoured/even/outmatched) - the "
-                + "\"will my agent survive if attacked\" picture that lets you hide or retreat before it dies.",
+                "THE per-turn risk check - call it before ending a turn whenever an agent is in the field. "
+                + "Mirrors the game's Threats panel (heroes moving to attack, most-inclined attacker per "
+                + "agent with motivation %, prophecy progress, seal/Iastur rituals, incoming wars, "
+                + "holy-order mood; sorted by severity) PLUS agentSafety: per agent its dangerEstimate, "
+                + "isHuntable, top hunter and verdict (favoured/even/outmatched) - the will-it-survive "
+                + "picture that lets you hide or retreat before it dies.",
                 Schema.Object(),
                 a => WithMap(ctx, map =>
                 {
@@ -143,9 +141,9 @@ namespace ShadowsMcp.Tools
 
             host.Register(new ToolDefinition(
                 "list_units",
-                "List units. Default scope 'mine' = your commandable agents. Paginated. A commandable military " +
-                "unit carries an 'orders' array (raze/drive_back/attack via command_army) when one is available " +
-                "on its tile.",
+                "List units. Default scope 'mine' = your commandable agents. Paginated. A commandable unit " +
+                "carries an 'orders' array when a special order (command_army / command_agent) is available on " +
+                "its tile; the response-level ordersLegend explains the calls once (get_unit has per-entry hints).",
                 Schema.Object(
                     Schema.Prop("scope", Schema.StringEnum("Filter: mine (default), agents, military, all, hostileToMe (units hunting/disrupting a shadow-aligned unit you benefit from - your own agents or allied evil units such as orc upstarts; mirrors get_threats)", "mine", "agents", "military", "all", "hostileToMe")),
                     Schema.Prop("socialGroupId", Schema.String("Only units of this social group (e.g. SG3)")),
@@ -176,7 +174,17 @@ namespace ShadowsMcp.Tools
                         }
                         matches.Add(u);
                     }
-                    return Paginate(a, matches, u => Summaries.UnitSummary(ctx, u));
+                    // Rows carry hint-less orders; ONE legend per response gives the call templates
+                    // (get_unit keeps the full per-entry hints as the drill-in).
+                    bool anyOrders = false;
+                    JsonValue payload = PaginatePayload(a, matches, u =>
+                    {
+                        JsonValue row = Summaries.UnitSummary(ctx, u, orderHints: false);
+                        if (!row["orders"].IsNull) anyOrders = true;
+                        return row;
+                    });
+                    if (anyOrders) payload.Set("ordersLegend", Summaries.OrdersLegend);
+                    return ToolResult.Ok(payload);
                 })));
 
             host.Register(new ToolDefinition(
@@ -282,7 +290,7 @@ namespace ShadowsMcp.Tools
                     JsonValue agents = JsonValue.NewArray();
                     foreach (Unit u in om.agents)
                     {
-                        if (u != null && !u.isDead) agents.Add(Summaries.UnitSummary(ctx, u));
+                        if (u != null && !u.isDead) agents.Add(Summaries.UnitSummary(ctx, u, orderHints: false));
                     }
                     JsonValue powers = JsonValue.NewArray();
                     if (om.god != null)
@@ -305,7 +313,9 @@ namespace ShadowsMcp.Tools
                         .Set("agentCap", agentCap)
                         .Set("canRecruit", om.availableEnthrallments > 0 && om.nEnthralled < agentCap)
                         .Set("endOfGameAchieved", om.endOfGameAchieved)
-                        .Set("victoryMode", om.endOfGameAchieved ? Summaries.VictoryModeLabel(om.victoryMode) : null)
+                        // victoryMode defaults to 0 (SHADOW) and defeat() never sets it — gate on
+                        // victoryAchieved or a defeat reads as a shadow victory.
+                        .Set("victoryMode", om.victoryAchieved ? Summaries.VictoryModeLabel(om.victoryMode) : null)
                         .Set("victoryProgress", Summaries.Round2(map.data_victoryProgess))
                         // The god's win-condition sheet: time budget, seal thresholds, agent-cap curve,
                         // and the victory / seal descriptive text.
@@ -345,14 +355,12 @@ namespace ShadowsMcp.Tools
 
             host.Register(new ToolDefinition(
                 "list_recruitable_agents",
-                "What you can recruit right now: your recruitment capacity, the agent archetypes you can " +
-                "enthrall onto a location (pass an archetype's code to recruit_agent with a target locationId), " +
-                "and any existing heroes corrupted enough to turn to your side in place (pass their unit id " +
-                "as recruit_agent's heroUnitId). Recruiting spends one recruitment point. Archetypes specialise " +
-                "by their stats - intrigue for infiltration and steering rulers, might/command for leading armies " +
-                "and combat, lore for rituals and knowledge - and each carries a placement object with " +
-                "eligible + exampleTargets showing where it can actually go right now (meaningful while " +
-                "capacity.canRecruit is true). Match the pick to your current need instead of always taking the first one.",
+                "What you can recruit right now: your capacity, the archetypes you can enthrall onto a " +
+                "location (pass code + locationId to recruit_agent), and heroes corrupted enough to turn in " +
+                "place (pass heroUnitId). Costs one recruitment point. Archetypes specialise (intrigue = " +
+                "infiltration/rulers, might+command = combat, lore = rituals); each carries placement.eligible " +
+                "+ exampleTargets showing where it can go right now - match the pick to your need, not the " +
+                "first listed.",
                 Schema.Object(),
                 a => WithMap(ctx, map =>
                 {
@@ -474,6 +482,13 @@ namespace ShadowsMcp.Tools
                     JsonValue arr = JsonValue.NewArray();
                     foreach (Challenge c in loc.GetChallenges())
                     {
+                        // The game shows an agent only non-"good" challenges (UIScroll_Unit filters
+                        // isGoodTernary()==1 from BOTH its valid and invalid sections): a hero-side
+                        // challenge like Combat Banditry would undo the player's own work. Mirror that.
+                        if (uaF != null && Summaries.IsHeroOnly(c)) continue;
+                        // For an army the game UI offers no location challenges at all — only the
+                        // subclasses that explicitly implement validFor(UM) are genuinely army-usable.
+                        if (umF != null && !Summaries.OverridesValidForUM(c)) continue;
                         if (performableOnly && !performable(c)) { recordHidden(c, false); continue; }
                         arr.Add(Summaries.ChallengeSummary(ctx, c, u, !terse));
                     }
@@ -484,6 +499,25 @@ namespace ShadowsMcp.Tools
                         {
                             if (performableOnly && !performable(r)) { recordHidden(r, true); continue; }
                             rituals.Add(Summaries.ChallengeSummary(ctx, r, u, !terse));
+                        }
+                    }
+                    // Rituals granted by carried items (Laughing Tome, Horde Banner…): the game merges
+                    // these into the list from person.items, never into unit.rituals.
+                    if (uaF != null && uaF.person != null && uaF.person.items != null)
+                    {
+                        foreach (Item it in uaF.person.items)
+                        {
+                            if (it == null) continue;
+                            List<Ritual> granted;
+                            try { granted = it.getRituals(uaF); } catch { continue; }
+                            if (granted == null) continue;
+                            foreach (Ritual r in granted)
+                            {
+                                if (r == null) continue;
+                                if (performableOnly && !performable(r)) { recordHidden(r, true); continue; }
+                                rituals.Add(Summaries.ChallengeSummary(ctx, r, u, !terse)
+                                    .Set("fromItem", Summaries.SafeItemName(it)));
+                            }
                         }
                     }
                     JsonValue result = JsonValue.NewObject()
@@ -537,14 +571,12 @@ namespace ShadowsMcp.Tools
 
             host.Register(new ToolDefinition(
                 "list_holy_orders",
-                "Every religion (holy order) with its enshadowment, prophet, temples, worshipper reach, "
-                + "divine entity, and whether it worships you. Relevant to several victory paths and the "
-                + "Chosen One threat. Also the control panel for a faith's DOCTRINE: each entry's "
-                + "holyOrder.tenets lists that order's tenets with their current status, range and which "
-                + "way you may shift them (canInfluence.toward_elder / toward_human), and "
-                + "holyOrder.canChangeTenet says whether enough Elder influence is banked to shift one now "
-                + "with influence_holy_order_tenet. Pass orderId (or verbose) for the full detail: each "
-                + "tenet's description and a ready-to-paste call.",
+                "Every religion (holy order): enshadowment, prophet, temples, worshipper reach, divine "
+                + "entity, whether it worships you. Also the doctrine control panel: holyOrder.tenets lists "
+                + "each tenet's status, range and shiftable directions (canInfluence.*), and "
+                + "holyOrder.canChangeTenet says whether one can be shifted NOW with "
+                + "influence_holy_order_tenet. Pass orderId (or verbose) for full detail: each tenet's "
+                + "description and a ready-to-paste call.",
                 Schema.Object(
                     Schema.Prop("orderId", Schema.String("Only this holy order, e.g. SG5 (implies verbose)")),
                     Schema.Prop("verbose", Schema.Boolean("Include every tenet's description and example call (large across all orders)"))),
@@ -575,12 +607,10 @@ namespace ShadowsMcp.Tools
 
             host.Register(new ToolDefinition(
                 "get_recent_events",
-                "Recent game events, newest first — a persistent, cross-turn feed of what has been "
-                + "happening: status messages (idle agents, wars, seals weakening, hero actions) plus the "
-                + "agent deaths, level-ups and narrative events that end_turn dismissed or resolved. The "
-                + "headless counterpart to the on-screen message log, for analysing how a game is "
-                + "developing. Each item is {turn, type, title, message?, resolution?}. (A player action's "
-                + "own mid-turn messages are returned by that action, not re-logged here.)",
+                "Recent game events, newest first — a persistent cross-turn feed: status messages (idle "
+                + "agents, wars, seals weakening, hero actions) plus the deaths, level-ups and narrative "
+                + "events end_turn dismissed or resolved. Each item is {turn, type, title, message?, "
+                + "resolution?}. (A player action's own messages are returned by that action, not re-logged.)",
                 Schema.Object(Schema.Prop("limit", Schema.Integer("Max events (default 30)"))),
                 a => WithMap(ctx, map =>
                 {
@@ -649,13 +679,13 @@ namespace ShadowsMcp.Tools
                 threatsBlock.Set("mostUrgent", agentsHuntable + " agent(s) huntable (profile>=50 & menace>25) - " +
                     "exposed to assassination; get_threats shows which and how to hide");
             if (agentsInDanger > 0 || agentsHuntable > 0)
-                threatsBlock.Set("hint", "call get_threats for per-agent odds (isHuntable, verdict, top hunter)");
+                threatsBlock.Set("hint", "get_threats has per-agent odds");
             // Active combat takes priority over predictive danger: a pending battle blocks end_turn.
             if (agentsUnderAttack > 0)
                 threatsBlock.Set("agentsUnderAttack", agentsUnderAttack)
                             .Set("underAttack", underAttack)
-                            .Set("combatHint", "a battle is pending - resolve it with get_pending_decision / " +
-                                "resolve_decision (fight, flee, or retreat); end_turn is blocked until you do");
+                            .Set("combatHint", "battle pending - end_turn is blocked until resolved via " +
+                                "resolve_decision (fight, flee, or retreat)");
             if (armiesInBattle > 0)
                 threatsBlock.Set("armiesInBattle", armiesInBattle);
 
@@ -672,16 +702,16 @@ namespace ShadowsMcp.Tools
                     .Set("name", map.overmind.god != null ? map.overmind.god.getName() : null)
                     .Set("type", map.overmind.god != null ? map.overmind.god.GetType().Name : null))
                 .Set("power", Summaries.Round2(map.overmind.power))
-                // victoryMode is only recorded once the game is decided; null while playing.
-                .Set("victoryMode", om.endOfGameAchieved ? Summaries.VictoryModeLabel(om.victoryMode) : null)
+                // victoryMode is only recorded on a WIN (defeat leaves it at the default 0); null otherwise.
+                .Set("victoryMode", om.victoryAchieved ? Summaries.VictoryModeLabel(om.victoryMode) : null)
                 .Set("victoryProgress", Summaries.Round2(map.data_victoryProgess))
                 // Distinct from victoryProgress: the average enshadowment of rulers/heroes. Surfaced
                 // so the two are not conflated. Full victory split via get_victory_breakdown.
                 .Set("avrgEnshadowment", Summaries.Round2(map.data_avrgEnshadowment))
                 .Set("worldPanic", Summaries.Round2(map.worldPanic))
                 // Where the world's alarm is coming from (a player reads this in tooltips).
+                // No `total` here: worldPanic above IS the total.
                 .Set("panic", JsonValue.NewObject()
-                    .Set("total", Summaries.Round2(map.worldPanic))
                     .Set("fromPowerUse", Summaries.Round2(om.panicFromPowerUse))
                     .Set("fromCluesDiscovered", Summaries.Round2(om.panicFromCluesDiscovered))
                     .Set("heroesFallen", Summaries.Round2(om.panicHeroesFallen))
@@ -734,8 +764,8 @@ namespace ShadowsMcp.Tools
         {
             JsonValue pd = DecisionRegistry.FullOrNull(ctx);
             if (!pd.IsNull)
-                pd.Set("resolveHint", "pick an option by its index: call end_turn with resolveOptionIndex " +
-                    "(or resolve_decision with optionIndex). force=true skips/dismisses where allowed.");
+                pd.Set("resolveHint", "answer via end_turn resolveOptionIndex (or resolve_decision " +
+                    "optionIndex); force=true dismisses only pure notices.");
             return pd;
         }
 
@@ -766,11 +796,9 @@ namespace ShadowsMcp.Tools
             if (ready.Count == 0) return JsonValue.Null;
             return JsonValue.NewObject()
                 .Set("readyToInfluence", ready)
-                .Set("hint", "each of these can have one tenet shifted NOW with influence_holy_order_tenet; "
-                    + "their Elder influence is capped, so anything they earn until you spend it is lost. "
-                    + "list_holy_orders {\"orderId\":\"SG...\"} shows which tenets are eligible and why. "
-                    + "An ordinary tenet can only be darkened once alignmentStatus is below it, so the usual "
-                    + "first purchase is {\"tenet\":\"H_Alignment\",\"direction\":\"toward_elder\"}.");
+                .Set("hint", "one tenet can be shifted NOW per order listed (influence_holy_order_tenet); "
+                    + "unspent Elder influence is discarded. list_holy_orders {\"orderId\":\"SG...\"} shows "
+                    + "eligible tenets; usual first move: {\"tenet\":\"H_Alignment\",\"direction\":\"toward_elder\"}.");
         }
 
         /// <summary>True when this unit's current task targets a shadow-aligned unit you benefit from —
@@ -799,6 +827,13 @@ namespace ShadowsMcp.Tools
 
         private static ToolResult Paginate<T>(JsonValue args, List<T> matches, Func<T, JsonValue> render)
         {
+            return ToolResult.Ok(PaginatePayload(args, matches, render));
+        }
+
+        /// <summary>Paginate variant returning the still-mutable payload, for callers that append
+        /// response-level fields (e.g. list_units' ordersLegend) before serializing.</summary>
+        private static JsonValue PaginatePayload<T>(JsonValue args, List<T> matches, Func<T, JsonValue> render)
+        {
             int limit = args["limit"].AsInt(DefaultLimit);
             if (limit < 1) limit = 1;
             if (limit > MaxLimit) limit = MaxLimit;
@@ -815,7 +850,7 @@ namespace ShadowsMcp.Tools
                 .Set("offset", offset)
                 .Set("items", items);
             if (offset + limit < matches.Count) result.Set("nextOffset", offset + limit);
-            return ToolResult.Ok(result);
+            return result;
         }
     }
 }

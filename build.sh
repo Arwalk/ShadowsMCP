@@ -72,6 +72,15 @@ with open("dist/upload/ShadowsMCP/mod.json", "w", encoding="utf-8") as f:
     f.write("\n")
 PY
 
+# ---- deploy: keep the in-repo game install in sync --------------------------
+# The workspace carries a full game install under game/; a stale copy there means
+# in-game QA silently runs an old build. Refresh it whenever it exists.
+if [ -d game/data/optionalData ]; then
+  echo "== deploying to game/data/optionalData/ShadowsMCP =="
+  rm -rf game/data/optionalData/ShadowsMCP
+  cp -r dist/ShadowsMCP game/data/optionalData/ShadowsMCP
+fi
+
 echo ""
 echo "Done (v$VERSION)."
 echo "Local install : copy dist/ShadowsMCP/ -> <game>\\data\\optionalData\\ShadowsMCP\\"

@@ -16,7 +16,9 @@ namespace ShadowsMcp.Core.Mcp
         {
             "2024-11-05", "2025-03-26", "2025-06-18"
         };
-        private const string DefaultProtocolVersion = "2025-03-26";
+        // Fallback when the client's requested version is unsupported; the spec says the server
+        // SHOULD then answer with the latest version it supports.
+        private const string DefaultProtocolVersion = "2025-06-18";
 
         private readonly IToolHost _host;
         private readonly string _serverName;

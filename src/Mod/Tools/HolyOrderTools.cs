@@ -19,21 +19,14 @@ namespace ShadowsMcp.Tools
         {
             host.Register(new ToolDefinition(
                 "influence_holy_order_tenet",
-                "Spend a holy order's banked Elder influence to shift one of its tenets by one step - the "
-                + "single highest-leverage lever you have over a religion, and the only way to rewrite what "
-                + "its acolytes and temples DO. direction=toward_elder darkens the tenet (the game's "
-                + "'Elder Powers' side); toward_human pushes it back the other way. Examples of what a "
-                + "darkened tenet buys you: Dark Worship makes its temples spread shadow, Candle Circles "
-                + "lets its acolytes remove wards, Healers become plague-spreaders, Prophets of Doom drive "
-                + "madness, and The Feast turns the whole faith vampiric. "
-                + "IMPORTANT ORDERING: an ordinary tenet cannot be darkened while the order's 'Alignment "
-                + "Status' tenet is at or above it, so the first several changes you buy for a faith are "
-                + "normally Alignment Status toward_elder (it also enshadows acolytes as it drops). "
-                + "Only the three structural tenets - Dogmatic, Preachers, Temple Builders, marked "
-                + "structural:true - are exempt from that gate. Spending resets the "
-                + "order's Elder influence to 0; it refills each turn and is CAPPED at the requirement, so "
-                + "influence banked past it is wasted - check list_holy_orders.canChangeTenet and spend "
-                + "promptly. Raising the Dogmatic tenet raises the price of every later change.",
+                "Spend a holy order's banked Elder influence to shift one of its tenets by one step - your "
+                + "highest-leverage lever over a religion. direction=toward_elder darkens it; toward_human "
+                + "reverses. Gate: an ordinary tenet cannot be darkened while the order's 'Alignment Status' "
+                + "tenet is at or above it (only structural:true tenets - Dogmatic, Preachers, Temple "
+                + "Builders - are exempt), so a faith's first buys are normally H_Alignment toward_elder. "
+                + "Spending resets Elder influence to 0; it refills and is CAPPED at the requirement (banked "
+                + "overflow is wasted - see list_holy_orders.canChangeTenet and spend promptly). Raising "
+                + "Dogmatic raises every later price. get_tips id=holy_tenets explains what darkened tenets do.",
                 Schema.Object(
                     Schema.Prop("orderId", Schema.String("The holy order's social group id, e.g. SG5 (from list_holy_orders)"), required: true),
                     Schema.Prop("tenet", Schema.String("Which tenet, by class type (e.g. H_CandleCircles, H_Alignment) or display name (e.g. \"Candle Circles\"), from that order's holyOrder.tenets"), required: true),
@@ -45,15 +38,13 @@ namespace ShadowsMcp.Tools
 
             host.Register(new ToolDefinition(
                 "oppose_divinity",
-                "Act against the divine entity behind a holy order (the other half of the holy-order "
-                + "screen). action=undermine spends 1 of your power to cut 10 off the entity's strength - "
-                + "the first time you do this anywhere you start the War in Heaven, which angers the entity "
-                + "and briefly raises world panic. action=exile banishes an entity permanently once it is "
-                + "at 0 strength AND every one of its presences in the world has been corrupted; exiling it "
-                + "drives every acolyte of its order to full shadow and zero sanity. Read the current "
-                + "strength, anger, corrupted-presence count and canUndermine/canExile flags from "
-                + "list_holy_orders {orderId}. Both actions raise a narrative event - answer it with "
-                + "resolve_decision (or end_turn's resolveOptionIndex).",
+                "Act against the divine entity behind a holy order. action=undermine spends 1 power to cut "
+                + "10 off the entity's strength - the first use anywhere starts the War in Heaven (angers "
+                + "the entity, briefly raises panic). action=exile permanently banishes an entity at 0 "
+                + "strength once ALL its worldly presences are corrupted; exile drives its acolytes to full "
+                + "shadow and zero sanity. Read strength/anger/corrupted presences and canUndermine/canExile "
+                + "from list_holy_orders {orderId}. Both raise a narrative event - answer it via "
+                + "resolve_decision (or end_turn resolveOptionIndex).",
                 Schema.Object(
                     Schema.Prop("orderId", Schema.String("The holy order's social group id, e.g. SG5"), required: true),
                     Schema.Prop("action", Schema.StringEnum(

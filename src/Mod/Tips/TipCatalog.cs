@@ -67,64 +67,57 @@ namespace ShadowsMcp.Tips
             Core("premise", "Premise", "basics",
                 "You are a sleeping dark god; agents and powers are how you weaken humanity while you wake.",
                 "Shadows of Forbidden Gods is a game of infiltration and hidden agendas. You are a sleeping dark " +
-                "god; your agents are your hands in the world, weakening human societies while you wake. As you " +
-                "wake you break seals on a fixed schedule - each seal raises your power cap, speeds power gain, " +
-                "and increases how many agents you can hold. Human heroes oppose your agents and will hunt and " +
-                "kill any that grow too exposed. You act through agents (query and command them with the unit " +
-                "tools) and through god powers (list_powers / use_power). Read game_overview every turn - it " +
-                "carries the turn, your resources, the seal countdown, threats, and any pending decision."),
+                "god; your agents are your hands in the world, weakening human societies while you wake. Seals " +
+                "break on a fixed schedule - each raises your power cap, speeds power gain, and raises your " +
+                "agent cap. Human heroes hunt and kill agents that grow too exposed. You act through agents " +
+                "(the unit tools) and god powers (list_powers / use_power). Read game_overview every turn - " +
+                "turn, resources, seal countdown, threats, and any pending decision."),
 
             Core("infiltration", "Infiltration", "infiltration",
                 "The core loop; reduce a settlement's security (unrest, neighbours, enshadowed ruler) to speed it.",
-                "Infiltration is the core loop and unlocks most challenges (see list_challenges). Higher-security " +
-                "settlements take longer - cities more than villages, capitals most of all. Reduce a settlement's " +
-                "security before or during infiltration: cause unrest (for example start a famine by raiding the " +
-                "farms and villages that feed it), infiltrate its neighbours first, or enshadow its ruler (an " +
-                "enshadowed ruler welcomes your cult in). Plan the reduction; don't just throw an agent at a capital."),
+                "Infiltration is the core loop and unlocks most challenges (list_challenges). Higher-security " +
+                "settlements take longer - cities more than villages, capitals most of all. Reduce security " +
+                "before or during: cause unrest (e.g. a famine - raid the farms and villages feeding it), " +
+                "infiltrate the neighbours first, or enshadow the ruler (an enshadowed ruler welcomes your " +
+                "cult in). Plan the reduction; don't just throw an agent at a capital."),
 
             Core("challenges", "Challenges, profile & menace", "basics",
                 "Agents act by performing challenges, which build profile (detection range) and menace (threat).",
                 "Agents mainly act by performing challenges (list_challenges on a unit, then perform_challenge). " +
-                "Each takes several turns depending on the agent's skill and the challenge's complexity, and " +
-                "building it up grants the agent profile and menace. Profile is how far away heroes can detect " +
-                "the agent - hostile heroes within about profile/5 hexes can find and hunt it; menace is how " +
-                "threatening heroes consider it. An agent becomes huntable at profile >= 50 and menace > 25 " +
-                "(get_unit's combat.isHuntable), and human rulers then send assassins - watch get_threats. Both " +
-                "are sticky: a floor ratchets up as the agent acts and neither can drop below it, so don't build " +
-                "exposure you don't need. Lower them by running the Lay Low challenge or leaving the agent In " +
-                "Hiding (combat.inHiding), or by enshadowing the local ruler, who then ignores the menace. See " +
-                "get_tips id=menace and id=profile for the exact thresholds. Challenges are not an agent's only " +
-                "move: an agent sharing a tile with another agent can act on them directly with command_agent " +
-                "(attack a hostile hero, rob a weaker one, trade items with your own) - see 'orders' in " +
-                "get_unit/list_units. Attacking is the offensive half of combat and cancels the target's " +
-                "in-progress ritual permanently, even if you flee; get_tips id=agent_can_attack has the details."),
+                "Each takes several turns (agent skill vs complexity) and grants the agent profile (detection: " +
+                "hero AI sees it within profile/10 hexes) and menace (how threatening heroes consider it). At " +
+                "profile >= 50 and menace > 25 an agent is huntable (get_unit's combat.isHuntable) and rulers " +
+                "send hunters - watch get_threats. Both stats are sticky: a floor ratchets up as the agent acts " +
+                "and neither can drop below it, so don't build exposure you don't need; bleed them down with the " +
+                "Lay Low challenge or In Hiding, or enshadow the local ruler (blind to menace). get_tips " +
+                "id=menace / id=profile have the exact thresholds. Agents can also act on co-located agents " +
+                "directly with command_agent (attack / rob / trade - see 'orders' in the unit views); attacking " +
+                "cancels the target's in-progress ritual permanently (get_tips id=agent_can_attack)."),
 
             Core("recruitment", "Recruiting agents", "basics",
                 "Need a roster slot (cap grows with seals) + a recruitment point; losing all agents is not a loss.",
-                "To bring on a new agent you need two things: a free roster slot (your agent cap, which rises as " +
-                "you break seals) and a recruitment point (gained over time). See list_recruitable_agents and " +
-                "recruit_agent. Archetypes are not interchangeable - they specialise by their stats (intrigue for " +
-                "infiltration and steering rulers, might/command for leading armies and combat, lore for rituals " +
-                "and knowledge), so pick the one that fits your current plan rather than always the first on the " +
-                "list; each archetype's placement.eligible and exampleTargets show where it can actually be " +
-                "enthralled right now. Losing all your agents is NOT a loss - you are the god and your points " +
-                "regenerate; just recruit again. The game only truly ends when endOfGameAchieved is set."),
+                "Recruiting an agent needs a free roster slot (cap rises with seals) and a recruitment point " +
+                "(gained over time): list_recruitable_agents, then recruit_agent. Archetypes specialise " +
+                "(intrigue = infiltration and steering rulers, might/command = armies and combat, lore = " +
+                "rituals and knowledge) - pick what fits the plan, not the first listed; each archetype's " +
+                "placement.eligible and exampleTargets show where it can be enthralled right now. Losing all " +
+                "your agents is NOT a loss - points regenerate; recruit again. The game truly ends only when " +
+                "endOfGameAchieved is set."),
 
             Core("panic_vs_awareness", "Panic vs. awareness", "world",
                 "worldPanic = vague dread from your actions; awareness = people who know the truth and fight you.",
-                "Two world meters track how much humanity notices you, and they differ. worldPanic is how visible " +
-                "your actions are - people sense the world is going wrong without knowing why; it rises mainly from " +
-                "using god powers and from clues heroes discover. awarenessOfUnderground is how many people know the " +
-                "truth about you specifically - they act against you deliberately, taking pre-emptive action and " +
-                "funding the Chosen One. Both climb as you act; game_overview's panic breakdown shows the sources."),
+                "Two world meters (both 0-1 fractions) track how much humanity notices you. worldPanic is vague " +
+                "dread - people sense the world going wrong without knowing why; it rises mainly from god powers " +
+                "and clues heroes discover. awarenessOfUnderground is people who KNOW the truth about you - they " +
+                "act deliberately and fund the Chosen One. Both climb as you act; game_overview's panic block " +
+                "shows the sources."),
 
             Core("victory", "Winning on points", "basics",
                 "You win on victoryProgress toward pointsToWin (~200), not on any single meter.",
-                "You win on points, not on any single meter. victoryProgress in game_overview is your weighted " +
-                "score toward pointsToWin (~200); get_victory_breakdown shows the category split behind it. Don't " +
-                "confuse it with avrgEnshadowment (average shadow on rulers/heroes) or worldPanic - enshadowing " +
-                "helps, but the score decides the game. Different gods win differently; see your god's own " +
-                "mechanics in get_player_state.progression."),
+                "You win on points, not on any single meter: victoryProgress in game_overview is your weighted " +
+                "score toward pointsToWin (200); get_victory_breakdown shows the split. Don't confuse it with " +
+                "avrgEnshadowment (average shadow on rulers/heroes) or worldPanic - enshadowing helps, but the " +
+                "score decides. Gods win differently; see get_player_state.progression."),
 
             // ---------- CONTEXTUAL: fire once when a live condition becomes true ----------
             Ctx("high_sec", "High-security infiltration", "infiltration", HighSecInfiltration,
@@ -162,8 +155,9 @@ namespace ShadowsMcp.Tips
                 "An agent's profile & menace have entered the danger band - heroes can hunt it and rulers may send assassins.",
                 "One of your agents has built up profile and menace into the danger band (profile >= 40 and " +
                 "menace >= 20; at profile >= 50 and menace > 25 it is outright huntable - see get_unit's " +
-                "combat.isHuntable and get_threats). Hostile heroes within about profile/5 hexes can now find and " +
-                "attack it, and human rulers may send assassins. Options: pull it out of hunter range; run the Lay " +
+                "combat.isHuntable and get_threats). Hero AI can see and attack it within profile/10 hexes " +
+                "(get_threats scans a wider profile/5 belt as early warning), and human rulers may order hunts " +
+                "with no range limit. Options: pull it out of hunter range; run the Lay " +
                 "Low challenge or leave it In Hiding (combat.inHiding) to bleed profile and menace toward their " +
                 "floors; or enshadow the local ruler, who then ignores the menace. The floors themselves ratchet " +
                 "up permanently and nothing resets them, so exposure management is preventive: act BEFORE the " +
@@ -243,9 +237,10 @@ namespace ShadowsMcp.Tips
             Ctx("iastur_regen", "Iastur: power regeneration", "god", GodIsLaughingKing,
                 "Iastur regains power 50% faster, but only while the Laughing Tome is being read.",
                 "You are playing Iastur, the Laughing King. Iastur regains power 50% faster than usual, but only " +
-                "while the Laughing Tome is being read: the Tome must be in a person's inventory in its normal " +
-                "(non-bound) state, or present in a location as the 'Laughing King's Tome' modifier. If the Tome " +
-                "is not being read, your power does not regenerate - keep it in play."),
+                "while the Laughing Tome is being read by mortal eyes: held unbound by a ruler or an independent " +
+                "hero (your own agents' reading does not count), or present in a location as the 'Laughing " +
+                "King's Tome' modifier. While it is unread, your power regenerates at only HALF the normal " +
+                "rate - keep the Tome in play."),
 
             CtxDyn("ophanim_faith", "Ophanim: faith growth", "god", GodIsOphanim, OphanimFaithBody,
                 "Ophanim's Faith grows from fear of shadow - fastest from shadow in a location itself."),
@@ -268,7 +263,7 @@ namespace ShadowsMcp.Tips
                 "Strong but brittle: shadow-resistant, yet a lost Wayfinder + sovereign causes a succession crisis.",
                 "Elves are present. They resist shadow and disease and are strong in battle, but they are brittle: " +
                 "their rulers must be appointed by a Wayfinder and their heroes created by a sovereign, so if they " +
-                "lose both they fall into a succession crisis for years. Humanity can be turned against them by " +
+                "lose both they fall into a succession crisis for many months. Humanity can be turned against them by " +
                 "religious tenet or politics. Their Crystalsmiths make anti-shadow crystals but can be driven " +
                 "insane if the Arcane Secrets they rely on are corrupted into Dangerous Knowledge."),
 
@@ -298,17 +293,18 @@ namespace ShadowsMcp.Tips
                 TagsBody),
 
             Ref("profile", "Profile (detection)", "infiltration",
-                "Profile is detection range: hostile heroes within about profile/5 hexes can find and hunt the agent.",
-                "Profile is how visible an agent is. Hostile heroes within about profile/5 hexes can detect it and " +
-                "weigh attacking it (get_threats runs exactly this scan, and get_unit reports the radius as " +
-                "combat.huntRadius), so a high-profile agent is reachable from far away. (A separate, smaller " +
-                "radius - profile/10 from its home - is how far the agent itself can reach out to find challenges " +
-                "to perform.) Profile is built by performing challenges; channelled spells apply their whole " +
+                "Profile is detection range: hero AI sees the agent within profile/10 hexes; get_threats scans a wider profile/5 belt.",
+                "Profile is how visible an agent is. Hero AI can see and choose to attack it within profile/10 " +
+                "hexes; get_threats (and get_unit's combat.huntRadius) scan a wider profile/5 belt as early " +
+                "warning, and a ruler's hunt order has no range limit at all - so a high-profile agent is " +
+                "reachable from far away. (Challenge reach is separate: an agent sees a challenge whose own " +
+                "profile/10 covers the distance to it, plus everything at its home location at any distance.) " +
+                "Profile is built by performing challenges; channelled spells apply their whole " +
                 "profile cost up front when casting begins, so interrupting one early does not spare the agent " +
                 "(see get_tips id=magical_mastery). It is sticky: every gain also raises a minimum - at least a " +
                 "third of the current value - that profile can never drop below (get_unit combat.profileFloor). " +
-                "Reduce profile by lying low - the Lay Low challenge, or leaving the agent In Hiding; storing an " +
-                "agent halves it and clears the floor. An agent is huntable only at profile >= 50 AND menace > 25."),
+                "Reduce profile by lying low - the Lay Low challenge, or leaving the agent In Hiding. " +
+                "An agent is huntable only at profile >= 50 AND menace > 25."),
 
             Ref("menace", "Menace (threat)", "tactics",
                 "Menace is how much heroes, armies and nations want to attack - it crosses fixed thresholds.",
@@ -321,7 +317,7 @@ namespace ShadowsMcp.Tips
                 "Enshadowed rulers are blind to menace - their urge to attack is scaled by (1 - their shadow) - so " +
                 "enshadowing the local ruler shields a menacing agent. Menace is sticky: a floor ratchets up with " +
                 "every gain and it can never drop below it (get_unit combat.menaceFloor); lower it by lying low " +
-                "(Lay Low or In Hiding) or storing the agent (halves it, clears the floor). Nations and cults " +
+                "(Lay Low or In Hiding). Nations and cults " +
                 "carry their own menace too: a society's menace draws crusades and wars against it, and a " +
                 "subsettlement's menace draws raids and razing armies - watch it on get_social_group and location detail."),
 

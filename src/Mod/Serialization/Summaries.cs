@@ -295,7 +295,19 @@ namespace ShadowsMcp
 
         // ---------- units ----------
 
-        public static JsonValue UnitSummary(GameContext ctx, Unit u)
+        /// <summary>One static legend for the order entries UnitSummary emits without per-row hints
+        /// (list views). Emitted once per response — the exact call templates the per-row hints used
+        /// to repeat on every entry. get_unit keeps the full per-entry hints as the drill-in.</summary>
+        public const string OrdersLegend =
+            "orders: command_agent {unitId, order, targetUnitId} - attack=duel an enemy hero (compare both " +
+            "dangerEstimates first; permanently cancels the target's in-progress challenge AND your own); " +
+            "rob=steal items (needs higher level, once per 5 turns, raises your profile+menace); trade=move " +
+            "items/gold between two of YOUR agents; follow=Harvester shadows a merchant. " +
+            "command_army {unitId, order, targetUnitId?} - raze=destroy the settlement your army stands on; " +
+            "drive_back=force a co-located hero to retreat and drop its task; attack=battle a co-located " +
+            "enemy army.";
+
+        public static JsonValue UnitSummary(GameContext ctx, Unit u, bool orderHints = true)
         {
             // A dead unit keeps a stale task and can still report isCommandable()==true; force the
             // caller-facing view to null/false so a remembered id can't look actionable (the action
@@ -317,7 +329,7 @@ namespace ShadowsMcp
             // Special orders the game surfaces on a selected unit and that are neither challenges nor powers:
             // a UM's raze / drive back / attack (command_army) and an agent's on-tile attack / rob / trade /
             // follow (command_agent). Omitted (null) when no such order applies right now.
-            JsonValue orders = UnitOrders(ctx, u);
+            JsonValue orders = UnitOrders(ctx, u, orderHints);
             if (!orders.IsNull) o.Set("orders", orders);
             // Active combat, surfaced in list views so an under-attack agent / in-battle army is visible without
             // a get_unit round-trip (agents were reaching combat via no other signal). engagedThisTurn is the
@@ -337,9 +349,9 @@ namespace ShadowsMcp
         /// {order, target, hint}; the hint spells out the exact call to make. Returns
         /// <see cref="JsonValue.Null"/> unless this is a live commandable unit with at least one order
         /// applicable right now.</summary>
-        public static JsonValue UnitOrders(GameContext ctx, Unit u)
+        public static JsonValue UnitOrders(GameContext ctx, Unit u, bool includeHints = true)
         {
-            if (u is UA) return AgentOrders(ctx, u as UA);
+            if (u is UA) return AgentOrders(ctx, u as UA, includeHints);
             UM um = u as UM;
             if (um == null || um.isDead || !um.isCommandable()) return JsonValue.Null;
             // In battle every order pops "... while in battle" - offer none (mirrors UM.playerCommands*).
@@ -352,11 +364,13 @@ namespace ShadowsMcp
             SettlementHuman razeTarget = um.location != null ? um.location.settlement as SettlementHuman : null;
             if (razeTarget != null)
             {
-                arr.Add(JsonValue.NewObject()
+                JsonValue e = JsonValue.NewObject()
                     .Set("order", "raze")
-                    .Set("target", LocationRef(um.location))
-                    .Set("hint", "command_army {unitId:" + UnitId(ctx, um) + ", order:\"raze\"} razes " +
-                        SafeName(() => razeTarget.getName()) + " - its defences fall each turn until it is destroyed"));
+                    .Set("target", LocationRef(um.location));
+                if (includeHints)
+                    e.Set("hint", "command_army {unitId:" + UnitId(ctx, um) + ", order:\"raze\"} razes " +
+                        SafeName(() => razeTarget.getName()) + " - its defences fall each turn until it is destroyed");
+                arr.Add(e);
                 any = true;
             }
 
@@ -369,21 +383,25 @@ namespace ShadowsMcp
                     UA ua = other as UA;
                     if (ua != null && !ua.isCommandable())
                     {
-                        arr.Add(JsonValue.NewObject()
+                        JsonValue e = JsonValue.NewObject()
                             .Set("order", "drive_back")
-                            .Set("target", UnitRef(ctx, ua))
-                            .Set("hint", "command_army {unitId:" + UnitId(ctx, um) + ", order:\"drive_back\", targetUnitId:" +
-                                UnitId(ctx, ua) + "} forces this hero to retreat and drop its task"));
+                            .Set("target", UnitRef(ctx, ua));
+                        if (includeHints)
+                            e.Set("hint", "command_army {unitId:" + UnitId(ctx, um) + ", order:\"drive_back\", targetUnitId:" +
+                                UnitId(ctx, ua) + "} forces this hero to retreat and drop its task");
+                        arr.Add(e);
                         any = true;
                     }
                     UM enemyArmy = other as UM;
                     if (enemyArmy != null && !enemyArmy.isCommandable() && enemyArmy.society != um.society)
                     {
-                        arr.Add(JsonValue.NewObject()
+                        JsonValue e = JsonValue.NewObject()
                             .Set("order", "attack")
-                            .Set("target", UnitRef(ctx, enemyArmy))
-                            .Set("hint", "command_army {unitId:" + UnitId(ctx, um) + ", order:\"attack\", targetUnitId:" +
-                                UnitId(ctx, enemyArmy) + "} starts a battle with this army"));
+                            .Set("target", UnitRef(ctx, enemyArmy));
+                        if (includeHints)
+                            e.Set("hint", "command_army {unitId:" + UnitId(ctx, um) + ", order:\"attack\", targetUnitId:" +
+                                UnitId(ctx, enemyArmy) + "} starts a battle with this army");
+                        arr.Add(e);
                         any = true;
                     }
                 }
@@ -398,7 +416,7 @@ namespace ShadowsMcp
         /// your own agents, Follow a merchant as a Harvester). Surfacing them here is what makes the offensive
         /// half of the agent layer discoverable: it rides along in list_units and get_unit, each hint carrying
         /// the literal command_agent call. Null when nothing applies.</summary>
-        private static JsonValue AgentOrders(GameContext ctx, UA ua)
+        private static JsonValue AgentOrders(GameContext ctx, UA ua, bool includeHints = true)
         {
             if (ua == null || ua.isDead || !ua.isCommandable()) return JsonValue.Null;
             if (ua.location == null || ua.location.units == null) return JsonValue.Null;
@@ -422,16 +440,22 @@ namespace ShadowsMcp
                     bool busy = target.engagedBy != null && ua.map != null && target.turnLastEngaged == ua.map.turn;
                     if (!busy)
                     {
-                        string breaks = target.task is Task_PerformChallenge
-                            ? " and cancels their '" + SafeName(() => target.task.getShort()) + "' for good (even if you flee)"
-                            : "";
-                        arr.Add(JsonValue.NewObject()
+                        // What attacking would break stays a DATA field in both modes: it is
+                        // target-specific eligibility info a legend cannot carry.
+                        string breaksTask = target.task is Task_PerformChallenge
+                            ? SafeName(() => target.task.getShort()) : null;
+                        JsonValue e = JsonValue.NewObject()
                             .Set("order", "attack")
                             .Set("target", UnitRef(ctx, target))
                             .Set("theirDangerEstimate", Safe(() => target.getDangerEstimate(), 0))
-                            .Set("yourDangerEstimate", Safe(() => ua.getDangerEstimate(), 0))
-                            .Set("hint", "command_agent {unitId:" + me + ", order:\"attack\", targetUnitId:" + tid +
-                                "} starts a duel with this hero" + breaks + " - compare the two dangerEstimates first"));
+                            .Set("yourDangerEstimate", Safe(() => ua.getDangerEstimate(), 0));
+                        if (breaksTask != null) e.Set("cancelsTheirTask", breaksTask);
+                        if (includeHints)
+                            e.Set("hint", "command_agent {unitId:" + me + ", order:\"attack\", targetUnitId:" + tid +
+                                "} starts a duel with this hero" +
+                                (breaksTask != null ? " and cancels their '" + breaksTask + "' for good (even if you flee)" : "") +
+                                " - compare the two dangerEstimates first");
+                        arr.Add(e);
                         any = true;
                     }
 
@@ -440,31 +464,37 @@ namespace ShadowsMcp
                         target.person.level < ua.person.level &&
                         (ua.map == null || ua.turnLastDidRobbery == 0 || ua.map.turn - ua.turnLastDidRobbery >= 5))
                     {
-                        arr.Add(JsonValue.NewObject()
+                        JsonValue e = JsonValue.NewObject()
                             .Set("order", "rob")
-                            .Set("target", UnitRef(ctx, target))
-                            .Set("hint", "command_agent {unitId:" + me + ", order:\"rob\", targetUnitId:" + tid +
-                                "} steals their items (raises your profile and menace; once per 5 turns)"));
+                            .Set("target", UnitRef(ctx, target));
+                        if (includeHints)
+                            e.Set("hint", "command_agent {unitId:" + me + ", order:\"rob\", targetUnitId:" + tid +
+                                "} steals their items (raises your profile and menace; once per 5 turns)");
+                        arr.Add(e);
                         any = true;
                     }
 
                     if (ua is UAE_Harvester && target is UAG)
                     {
-                        arr.Add(JsonValue.NewObject()
+                        JsonValue e = JsonValue.NewObject()
                             .Set("order", "follow")
-                            .Set("target", UnitRef(ctx, target))
-                            .Set("hint", "command_agent {unitId:" + me + ", order:\"follow\", targetUnitId:" + tid +
-                                "} shadows this merchant wherever they go"));
+                            .Set("target", UnitRef(ctx, target));
+                        if (includeHints)
+                            e.Set("hint", "command_agent {unitId:" + me + ", order:\"follow\", targetUnitId:" + tid +
+                                "} shadows this merchant wherever they go");
+                        arr.Add(e);
                         any = true;
                     }
                 }
                 else
                 {
-                    arr.Add(JsonValue.NewObject()
+                    JsonValue e = JsonValue.NewObject()
                         .Set("order", "trade")
-                        .Set("target", UnitRef(ctx, target))
-                        .Set("hint", "command_agent {unitId:" + me + ", order:\"trade\", targetUnitId:" + tid +
-                            "} moves items and gold between these two agents of yours"));
+                        .Set("target", UnitRef(ctx, target));
+                    if (includeHints)
+                        e.Set("hint", "command_agent {unitId:" + me + ", order:\"trade\", targetUnitId:" + tid +
+                            "} moves items and gold between these two agents of yours");
+                    arr.Add(e);
                     any = true;
                 }
             }
@@ -521,10 +551,12 @@ namespace ShadowsMcp
                     .Set("menace", Round2(u.menace))
                     .Set("profile", Round2(u.profile))
                     // menace/profile ratchet up a floor they can never fall below (Unit.addMenace/addProfile):
-                    // a high floor means the exposure is permanent - retire or store the agent rather than clean it.
+                    // a high floor means the exposure is permanent - plan around it (Lay Low / In Hiding
+                    // only bleed down TO the floor; nothing in the live game lowers the floor itself).
                     .Set("menaceFloor", Round2(u.inner_menaceMin))
                     .Set("profileFloor", Round2(u.inner_profileMin))
-                    // hexes within which hostile heroes can detect & hunt this agent (Overmind.getThreats: dist <= profile/5)
+                    // early-warning belt mirrored from Overmind.getThreats (dist <= profile/5); hero AI's
+                    // actual vision is the tighter profile/10 (UA.getVisibleUnits), ruler hunts are uncapped
                     .Set("huntRadius", (int)(u.profile / 5.0))
                     .Set("isHuntable", u.profile >= 50.0 && u.menace > 25.0)
                     .Set("inHiding", ua.task is Task_InHiding));
@@ -978,24 +1010,21 @@ namespace ShadowsMcp
 
         /// <summary>Resolve a (deterministic) challenge id for a specific commandable unit. Recomputes the
         /// canonical id over the unit's reachable challenges (the id's encoded location, plus the unit's own
-        /// tile) and its rituals, matching by string; falls back to the legacy weak-ref registry for any old
-        /// "C{n}" id still in flight. Returns null only when the challenge is genuinely gone. Lives here (not
-        /// in the generic ResolveId) because rituals need the performing unit as context.</summary>
+        /// tile) and its rituals, matching by string. Returns null only when the challenge is genuinely gone.
+        /// Lives here (not in the generic ResolveId) because rituals need the performing unit as context:
+        /// a ritual id has no unit component, so the same "Cr-..." id names each unit's own instance — the
+        /// performing unit's copy must win (a global scan could return another unit's instance).</summary>
         public static Challenge ResolveChallengeForUnit(GameContext ctx, Unit unit, string id)
         {
             if (string.IsNullOrEmpty(id)) return null;
-
-            // Legacy registry id ("C8" from before deterministic ids) - still honour it if present.
-            Challenge legacy = ResolveId(ctx, id) as Challenge;
-            if (legacy != null) return legacy;
 
             Map map = ctx != null ? ctx.Map : null;
             if (map == null) return null;
 
             if (id.StartsWith("Cr-", StringComparison.OrdinalIgnoreCase))
             {
-                // Ritual id: only the performing unit owns it.
-                Challenge r = FindByCanonicalId(ctx, unit != null ? unit.rituals : null, id);
+                // Ritual id: only the performing unit owns it (incl. rituals granted by carried items).
+                Challenge r = FindByCanonicalId(ctx, RitualsFor(unit), id);
                 if (r != null) return r;
             }
             else
@@ -1014,7 +1043,7 @@ namespace ShadowsMcp
                     Challenge hit = FindByCanonicalId(ctx, SafeChallenges(ul), id);
                     if (hit != null) return hit;
                 }
-                Challenge rit = FindByCanonicalId(ctx, unit.rituals, id);
+                Challenge rit = FindByCanonicalId(ctx, RitualsFor(unit), id);
                 if (rit != null) return rit;
             }
             return null;
@@ -1035,7 +1064,7 @@ namespace ShadowsMcp
                 foreach (Unit u in map.units)
                 {
                     if (u == null || !SafeIsCommandable(u)) continue;
-                    Challenge rit = FindByCanonicalId(ctx, u.rituals, id);
+                    Challenge rit = FindByCanonicalId(ctx, RitualsFor(u), id);
                     if (rit != null) return rit;
                 }
                 return null;
@@ -1046,6 +1075,57 @@ namespace ShadowsMcp
         private static bool SafeIsCommandable(Unit u)
         {
             try { return u.isCommandable(); } catch { return false; }
+        }
+
+        /// <summary>True for a challenge meant for HEROES, not the dark player (isGoodTernary()==1):
+        /// the game UI hides these from an agent entirely — performing one (e.g. Combat Banditry)
+        /// would undo the player's own work.</summary>
+        public static bool IsHeroOnly(Challenge c)
+        {
+            try { return c != null && c.isGoodTernary() == 1; } catch { return false; }
+        }
+
+        /// <summary>True when this challenge's type actually implements <c>validFor(UM)</c> rather than
+        /// inheriting the base default (which returns true for everything). The game UI never offers
+        /// location challenges to an army, so only explicit overrides are genuinely army-usable.</summary>
+        public static bool OverridesValidForUM(Challenge c)
+        {
+            if (c == null) return false;
+            try
+            {
+                var m = c.GetType().GetMethod("validFor", new[] { typeof(UM) });
+                return m != null && m.DeclaringType != typeof(Challenge);
+            }
+            catch { return false; }
+        }
+
+        public static string SafeItemName(Item it)
+        {
+            try { return it != null ? it.getName() : null; } catch { return null; }
+        }
+
+        /// <summary>Every ritual this unit can perform: its own <c>rituals</c> list PLUS rituals granted
+        /// by carried items (Laughing Tome, Horde Banner, personal items…). The game UI merges
+        /// <c>person.items[i].getRituals(ua)</c> into the challenge list (UIScroll_Unit) but the engine
+        /// never copies them into <c>unit.rituals</c> — reading only that field made item rituals
+        /// invisible and unstartable through the MCP.</summary>
+        public static IEnumerable<Challenge> RitualsFor(Unit u)
+        {
+            if (u == null) yield break;
+            if (u.rituals != null)
+                foreach (Challenge r in u.rituals)
+                    if (r != null) yield return r;
+            UA ua = u as UA;
+            if (ua == null || ua.person == null || ua.person.items == null) yield break;
+            foreach (Item it in ua.person.items)
+            {
+                if (it == null) continue;
+                List<Ritual> granted;
+                try { granted = it.getRituals(ua); } catch { continue; }
+                if (granted == null) continue;
+                foreach (Ritual r in granted)
+                    if (r != null) yield return r;
+            }
         }
 
         /// <summary>Scan the location encoded in a "C{idx}-..." id for a challenge matching it.</summary>
@@ -1199,9 +1279,10 @@ namespace ShadowsMcp
                 .Set("mechanics", Safe(() => god.getDetailedMechanics(), null))
                 .Set("sealDesc", Safe(() => god.getSealDesc(), null))
                 .Set("powerIncreaseText", Safe(() => god.powerIncreaseText(), null))
-                // The specific victory blurb is mode-keyed, and victoryMode is -1 until a win is
-                // recorded — so only surface it once the game is actually decided.
-                .Set("victoryMessage", map.overmind.endOfGameAchieved
+                // The specific victory blurb is mode-keyed, and victoryMode stays at its default (0 =
+                // SHADOW) until victory() records a real mode — defeat() never touches it. Gate on
+                // victoryAchieved, not endOfGameAchieved, or a defeat would show a mode-0 VICTORY blurb.
+                .Set("victoryMessage", map.overmind.victoryAchieved
                     ? Safe(() => god.getVictoryMessage(map.overmind.victoryMode), null) : null);
         }
 

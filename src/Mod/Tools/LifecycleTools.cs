@@ -24,37 +24,31 @@ namespace ShadowsMcp.Tools
             // per-tool budget, so the handler dispatches its own job with its own timeout.
             host.RegisterServerThread(new ToolDefinition(
                 "new_game",
-                "Start a NEW game from the main menu, headlessly - no human at the game window needed. " +
-                "Generates a fresh world and begins play as the chosen god. SLOW: map generation plus the " +
-                "burn-in history simulation takes ~30-120s; make ONE call and wait - do not retry while it " +
-                "runs (even if this call times out, the game finishes starting; check game_overview). If a " +
-                "game is already in progress it refuses unless confirm:true, which abandons that game " +
-                "WITHOUT saving. On success returns the god, the seed used and a full game_overview-style " +
-                "summary; every other tool (list_units, list_powers, end_turn, ...) works immediately after.",
+                "Start a NEW game from the main menu, headlessly. Generates a fresh world and begins play " +
+                "as the chosen god. SLOW (~30-120s): make ONE call and wait - never retry while it runs " +
+                "(even if this call times out the game finishes starting; check game_overview). Refuses if " +
+                "a game is in progress unless confirm:true (abandons it WITHOUT saving). Returns the god, " +
+                "the seed used and a game_overview-style summary; every other tool works immediately after.",
                 Schema.Object(
                     Schema.Prop("god", Schema.StringEnum(
-                        "Which god to play (default random). snake=She Who Will Feast (devouring serpent, " +
-                        "army/combat focus), laughing_king=Iastur, The Laughing King (madness and courtly " +
-                        "intrigue), vinerva=Vinerva (life and nature twisted into threat), ophanim=Ophanim, " +
-                        "The Divine Beyond (judgement through its own holy order), mammon=Mammon (greed, " +
-                        "trade and industry).",
+                        "Which god to play (default random). snake=She Who Will Feast (army/combat), " +
+                        "laughing_king=Iastur (madness, courtly intrigue), vinerva=Vinerva (nature twisted " +
+                        "into threat), ophanim=Ophanim (judgement via its own holy order), mammon=Mammon " +
+                        "(greed, trade and industry).",
                         "snake", "laughing_king", "vinerva", "ophanim", "mammon", "random")),
                     Schema.Prop("seed", Schema.Integer(
-                        "Map-generation seed. Omit for a random seed. The seed used is echoed in the result; " +
-                        "the same seed reproduces the same world.")),
+                        "Map seed (default random; echoed in the result; same seed = same world).")),
                     Schema.Prop("mapSize", Schema.StringEnum(
-                        "World size (default standard). small=32x32 (fastest to generate, good for testing), " +
-                        "standard=42x42 (the game's default), large=52x52 (slow to generate).",
+                        "World size (default standard). small=32x32 (fastest, good for testing), " +
+                        "standard=42x42, large=52x52 (slow).",
                         "small", "standard", "large")),
                     Schema.Prop("difficulty", Schema.Integer(
-                        "Difficulty (default 0=normal). Game presets: -3 easy, 0 normal, 3 hard, 6 brutal; " +
-                        "any value works - negative=easier, positive=harder.")),
+                        "Default 0=normal. Presets: -3 easy, 0 normal, 3 hard, 6 brutal; any value works.")),
                     Schema.Prop("turnLimit", Schema.Boolean(
-                        "true (default): you lose if you have not won by your god's max turns (500). " +
-                        "false: endless game, no time-out defeat.")),
+                        "true (default): you lose if you have not won by the god's max turns (500). " +
+                        "false: endless.")),
                     Schema.Prop("confirm", Schema.Boolean(
-                        "Required (true) when a game is already in progress: abandons it WITHOUT saving - " +
-                        "unsaved progress is lost permanently."))),
+                        "Required (true) when a game is in progress: abandons it WITHOUT saving."))),
                 a => ctx.Dispatcher.Run(() => NewGame(ctx, a), ctx.Config.NewGameTimeoutMs)));
         }
 

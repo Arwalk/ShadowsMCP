@@ -24,14 +24,11 @@ namespace ShadowsMcp.Tools
 
             host.Register(new ToolDefinition(
                 "resolve_decision",
-                "Answer the current pending decision (from get_pending_decision). Pass optionIndex to " +
-                "pick a choice/trait. For a level-up you may instead pass force=true to skip it (keeping " +
-                "the skill point); for an unmodelled popup, force=true dismisses it (like clicking OK). " +
-                "For the idle-agent alert, optionIndex 0 passes all idle agents so the turn can end - or " +
-                "just give them orders instead (force does NOT pass idle: like combat, it blocks even under " +
-                "force). For any other popup, optionIndex " +
-                "clicks that button and force=true dismisses it (like pressing OK). If another decision " +
-                "is queued behind this one, the result banner will flag it.",
+                "Answer the current pending decision (from get_pending_decision): optionIndex clicks that " +
+                "option. force=true dismisses a popup like pressing OK (for a level-up it skips while " +
+                "keeping the skill point). Idle-agent alert: optionIndex 0 passes all idle agents - or give " +
+                "them orders; force does NOT pass idle (it blocks, like combat). A decision queued behind " +
+                "this one is flagged in the result banner.",
                 Schema.Object(
                     Schema.Prop("optionIndex", Schema.Integer("Zero-based index of the option to choose (from get_pending_decision)")),
                     Schema.Prop("force", Schema.Boolean("Skip a level-up / dismiss an unmodelled popup without choosing (does NOT pass the idle-agent alert — use optionIndex 0 for that)"))),

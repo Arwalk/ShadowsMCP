@@ -59,7 +59,8 @@ across playthroughs. At the START of every session, read all three before touchi
   follow up with `get_tips {"id":...}` when you meet a mechanic you don't understand.
 - Check `get_threats` before committing agents to anything: `agentSafety` verdicts
   (safe/favoured/even/outmatched), `topHunter.motivationPct`, and `hostilesOnTile` tell you who is
-  about to die. An agent with high profile (huntRadius = profile/5) and menace is huntable — manage
+  about to die. An agent with high profile (heroes see it within profile/10; huntRadius = profile/5
+  is the wider early-warning belt) and menace is huntable — manage
   those stats on purpose, not by accident.
 - Give EVERY agent a job every turn (a challenge, a move, a power target). Then `end_turn`. For
   quiet stretches, batch with `end_turn {"count":N,"passIdleAgents":true}` and use

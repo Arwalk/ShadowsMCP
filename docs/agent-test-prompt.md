@@ -102,7 +102,7 @@ resolve_decision, end_turn, new_game.
 - B1: `game_overview` includes `agentCap`, `canRecruit`, `endOfGameAchieved`, `defeated`,
   `availableEnthrallments`.
 - B2: `get_player_state` includes `agentCap`, `canRecruit`, `endOfGameAchieved`, `enthralledCount` (and
-  `victoryMode` once the game is decided — omitted while still playing).
+  `victoryMode` only once the game is WON — omitted while playing and on a defeat).
 - B3: consistency — `canRecruit` == (`availableEnthrallments` > 0 AND `enthralledCount` < `agentCap`), and
   `defeated` == (`endOfGameAchieved` AND NOT `victoryAchieved`). Compute from the fields and compare.
 
@@ -130,6 +130,13 @@ resolve_decision, end_turn, new_game.
   (assert absent) while name/type/`valid` remain; `list_challenges {"unitId":"U...","performableOnly":true}`
   returns only entries with `valid` AND `validForUnit` true (assert none has either false). Compare counts
   against the unfiltered call.
+- D5c (hero-only challenges hidden): assert no `list_challenges` result for one of YOUR agents contains a
+  hero-side "good" challenge (e.g. `Ch_CombatBanditry` — the game hides `isGoodTernary()==1` entries from
+  agents), and that `perform_challenge` on such an id (if you have one cached) errors with "heroes-only".
+  If no such challenge exists nearby, SKIP.
+- D5d (item rituals visible): if any of your agents carries a ritual-granting item (e.g. Iastur's Laughing
+  Tome, a Horde Banner — check `get_unit`'s person items), assert `list_challenges` for it lists the item's
+  ritual(s) in `unitRituals` tagged `fromItem`, and that `perform_challenge` accepts the `Cr-` id. Else SKIP.
 - D5b (nothing silently filtered): in the `performableOnly:true` call of D5, if the unfiltered call had
   more entries, assert the result carries `hiddenNotPerformable` with a `count` equal to the difference and
   `items:[{id,name,restriction?}]` naming what was hidden (plus a `hint`). This is how gated families
@@ -407,10 +414,10 @@ resolve_decision, end_turn, new_game.
 **K. Analysis surfaces (enriched detail views + new tools)**
 - K1 (time budget & panic): `game_overview` includes an `endless` boolean, `maxTurns`, `turnsRemaining`
   (both numbers when `endless` is false, both null in an endless game — there is no turn limit then), a
-  `victoryMode` (a label once the game is decided, else omitted), and a `panic` object with numeric
-  `total`/`fromPowerUse`/`fromCluesDiscovered`/`heroesFallen`/`temporaryChange`. Assert `endless`, `panic`
-  are present, that `maxTurns`/`turnsRemaining` match the `endless` flag, and that `panic.total` equals
-  `worldPanic`.
+  `victoryMode` (a label only once the game is WON — omitted while playing AND on a defeat), and a `panic`
+  object with numeric `fromPowerUse`/`fromCluesDiscovered`/`heroesFallen`/`temporaryChange` (no `total`:
+  the top-level `worldPanic` IS the total). Assert `endless`, `panic` are present and that
+  `maxTurns`/`turnsRemaining` match the `endless` flag.
 - K2 (win-condition sheet): `get_player_state.progression` has `endless`, `maxTurns` (null when `endless`
   is true, consistent with K1), `sealLevels` (array), `agentCaps` (array) and `powerLevelReqs` (array).
   Assert present.
@@ -512,11 +519,13 @@ opportunistic: watch `game_overview.threats.agentsUnderAttack` and `get_unit.eng
 control (M0, M6–M9): move an agent onto a tile that holds a hostile hero — heroes cluster in settlements, so
 `list_units {"scope":"agents"}` (or `get_threats`) plus a `move_unit` usually arranges it within a few turns.
 - M0 (the attack is discoverable): with one of your agents sharing a tile with a hostile hero, assert the
-  option surfaces on the always-read tools without being asked for — `get_unit` (and `list_units
-  {"scope":"mine"}`) on that agent has an `orders` entry `{order:"attack", target, yourDangerEstimate,
-  theirDangerEstimate, hint}` whose `hint` is a literal `command_agent {...}` call, and
-  `get_threats.agentSafety` for that agent has a `hostilesOnTile` array naming the same hero (with its
-  `dangerEstimate` and `task`) plus an `attackHint`. Else SKIP (no co-located hero).
+  option surfaces on the always-read tools without being asked for — `get_unit` on that agent has an
+  `orders` entry `{order:"attack", target, yourDangerEstimate, theirDangerEstimate, hint}` whose `hint` is
+  a literal `command_agent {...}` call; `list_units {"scope":"mine"}` shows the same entry WITHOUT the
+  per-row `hint` but the response carries a top-level `ordersLegend` explaining the calls once (and, if
+  the target is mid-challenge, the row has `cancelsTheirTask`); and `get_threats.agentSafety` for that
+  agent has a `hostilesOnTile` array naming the same hero (with its `dangerEstimate` and `task`) plus an
+  `attackHint`. Else SKIP (no co-located hero).
 - M1 (opportunistic, signal agreement): the first turn an agent is under attack, assert the signal is
   consistent across surfaces — `game_overview.threats.agentsUnderAttack ≥ 1` with an `underAttack` list; the
   same unit shows `engagedThisTurn:true` (+ `underAttackBy`) in both `list_units {"scope":"mine"}` and
@@ -541,7 +550,7 @@ control (M0, M6–M9): move an agent onto a tile that holds a hostile hero — h
   `advantageFavours`. Army battles auto-resolve and do NOT block `end_turn`. Else SKIP.
 - M6 (strike first — the core new verb; **must be attempted**, and a crash here is a FAIL, never a SKIP or a
   retry loop — see the "unhandled crash" rule above): from the M0 setup, note the target hero's `task` via `get_unit`, then
-  issue the exact call the `hint` gave (`command_agent {"unitId":"U...","order":"attack","targetUnitId":"U..."}`).
+  issue the exact call `get_unit`'s `hint` gave (`command_agent {"unitId":"U...","order":"attack","targetUnitId":"U..."}`).
   Assert the result carries a `pendingDecision` **inline** with `popupType:"PopupBattleAgent"` (no separate
   `get_pending_decision` needed) and reports `cancelledTargetTask`; then assert `get_unit` on the target shows
   `task: null` — the target's challenge/ritual is broken. Resolve the duel via `resolve_decision` (fight, or

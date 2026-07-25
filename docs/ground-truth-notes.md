@@ -527,9 +527,10 @@ bodies in `QueryTools.cs`.
   `getAgentCaps()`, `powerLevelReqs`, `getDetailedMechanics()`, `getSealDesc()`, `powerIncreaseText()`,
   and `getVictoryMessage(mode)`. `Map.opt_endless` gates `maxTurns` and `turnsRemaining` (both null when endless —
   `getMaxTurns()` still returns a number the game ignores; `Overmind.computeVictoryProgress` only ends the game by
-  time-out when `!opt_endless`) and is surfaced as the `endless` boolean. `Overmind.victoryMode` is `-1`
-  until a win is recorded (set 0–5 in `victory()`), so both it and the mode-keyed victory message are
-  surfaced **only** once `endOfGameAchieved`.
+  time-out when `!opt_endless`) and is surfaced as the `endless` boolean. `Overmind.victoryMode` defaults
+  to `0` (the C# field default — `-1` is only a transient inside `victory()` before a mode 0–5 is chosen)
+  and `defeat()` never touches it, so it and the mode-keyed victory message are surfaced **only** once
+  `victoryAchieved` — gating on `endOfGameAchieved` would show a mode-0 SHADOW victory blurb on a defeat.
 - **Panic breakdown** — `Overmind`: `panicFromPowerUse`, `panicFromCluesDiscovered`, `panicHeroesFallen`,
   `panicTemporaryChange` (surfaced in `game_overview.panic` / `get_player_state.panic`).
 - **Recent events** — `get_recent_events` reads the mod-owned `RecentEventLog` (held on `GameContext`, so
