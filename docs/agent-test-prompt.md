@@ -194,10 +194,16 @@ resolve_decision, end_turn, new_game.
   `perform_challenge` by the second agent then errors with the same performer name. SKIP if you never have
   two co-located agents wanting the same exclusive challenge.
 - D11 (market stalls are distinct): move an agent to a location with a market (SKIP if none reachable):
-  `list_challenges` there returns THREE `Ch_BuyItem` entries with three DISTINCT `id`s, each carrying
-  `itemForSale.name` (assert present even with `terse:true`). `perform_challenge` with the 2nd or 3rd id
-  and assert the started/travel task targets that exact stall (its item name appears in later completion
-  text or the bought item lands in `get_unit`'s inventory).
+  `list_challenges` there returns `Ch_BuyItem` entries with DISTINCT `id`s, each carrying
+  `itemForSale.name` (assert present even with `terse:true`). A market has 3 stalls; when two stalls
+  happen to sell the same-named item they share one deterministic id and MUST appear as a single entry
+  with `copies:2` (never the same id twice) — so assert entry count + extra `copies` sums to 3.
+  `perform_challenge` with the 2nd or 3rd id and assert the started/travel task targets that exact stall
+  (its item name appears in later completion text or the bought item lands in `get_unit`'s inventory).
+- D14 (no duplicate ids in a listing): in every `list_challenges` response you fetch during this run,
+  assert no `id` appears twice across `challenges` + `unitRituals` + `hiddenNotPerformable.items` —
+  interchangeable twins (same-item market stalls, rituals granted by duplicate carried items) must
+  collapse into one entry with a `copies` count instead.
 
 **E. Powers**
 - E1: `list_powers` returns powers with `cost` and a castable flag. Power ids are stable across turns

@@ -444,7 +444,8 @@ namespace ShadowsMcp.Tools
                 + "Optionally list another location's challenges "
                 + "to plan a move. Pass terse=true to drop the long prose descriptions, performableOnly=true "
                 + "to list only what this unit can act on right now (anything filtered out is summarized in "
-                + "hiddenNotPerformable so nothing is silently dropped).",
+                + "hiddenNotPerformable so nothing is silently dropped). Interchangeable duplicate offers "
+                + "(e.g. two market stalls selling the same item) collapse into one entry with a 'copies' count.",
                 Schema.Object(
                     Schema.Prop("unitId", Schema.String("Unit id, e.g. U17"), required: true),
                     Schema.Prop("locationId", Schema.String("Look at this location instead of the unit's current one")),
@@ -479,6 +480,30 @@ namespace ShadowsMcp.Tools
                     // Refresh the location's challenge list the same way the game UI does.
                     loc.populateStandardChallenges();
 
+                    // Deterministic ids can legitimately repeat within one listing: two market stalls
+                    // selling the same-named item hash to the same "C..-Ch_BuyItem-.." (the offers are
+                    // interchangeable — see Summaries.ChallengeId), and duplicate carried items grant
+                    // identical "Cr-.." rituals. An id resolves to one action, so emitting it twice only
+                    // reads as a bug; collapse repeats into the first entry with a "copies" count.
+                    // Visible and hidden entries dedupe separately so hiddenNotPerformable.count stays
+                    // equal to (unfiltered − filtered) visible entries, and so a performable entry can
+                    // never be swallowed by an earlier hidden twin.
+                    Func<Dictionary<string, JsonValue>, JsonValue, bool> dedupe = (seen, entry) =>
+                    {
+                        string id = entry["id"].AsString();
+                        if (id == null) return false;
+                        JsonValue prev;
+                        if (seen.TryGetValue(id, out prev))
+                        {
+                            prev.Set("copies", prev["copies"].AsInt(1) + 1);
+                            return true;
+                        }
+                        seen[id] = entry;
+                        return false;
+                    };
+                    var visibleById = new Dictionary<string, JsonValue>();
+                    var hiddenById = new Dictionary<string, JsonValue>();
+
                     // With performableOnly, never drop entries silently: an agent that only ever sees the
                     // performable subset can't learn that e.g. the whole Geomancy family exists behind a
                     // mastery gate. Collect what was filtered into a compact hidden list instead.
@@ -486,8 +511,6 @@ namespace ShadowsMcp.Tools
                     JsonValue hiddenItems = JsonValue.NewArray();
                     Action<Challenge, bool> recordHidden = (c, isRitual) =>
                     {
-                        hiddenCount++;
-                        if (hiddenItems.Count >= 20) return;
                         JsonValue h = JsonValue.NewObject()
                             .Set("id", Summaries.ChallengeId(ctx, c))
                             .Set("name", Summaries.ChallengeName(c));
@@ -498,6 +521,9 @@ namespace ShadowsMcp.Tools
                             if (!string.IsNullOrEmpty(restr)) h.Set("restriction", restr);
                         }
                         catch { }
+                        if (dedupe(hiddenById, h)) return;
+                        hiddenCount++;
+                        if (hiddenItems.Count >= 20) return;
                         hiddenItems.Add(h);
                     };
 
@@ -512,7 +538,9 @@ namespace ShadowsMcp.Tools
                         // subclasses that explicitly implement validFor(UM) are genuinely army-usable.
                         if (umF != null && !Summaries.OverridesValidForUM(c)) continue;
                         if (performableOnly && !performable(c)) { recordHidden(c, false); continue; }
-                        arr.Add(Summaries.ChallengeSummary(ctx, c, u, !terse));
+                        JsonValue entry = Summaries.ChallengeSummary(ctx, c, u, !terse);
+                        if (dedupe(visibleById, entry)) continue;
+                        arr.Add(entry);
                     }
                     JsonValue rituals = JsonValue.NewArray();
                     if (u.rituals != null)
@@ -520,7 +548,9 @@ namespace ShadowsMcp.Tools
                         foreach (Challenge r in u.rituals)
                         {
                             if (performableOnly && !performable(r)) { recordHidden(r, true); continue; }
-                            rituals.Add(Summaries.ChallengeSummary(ctx, r, u, !terse));
+                            JsonValue entry = Summaries.ChallengeSummary(ctx, r, u, !terse);
+                            if (dedupe(visibleById, entry)) continue;
+                            rituals.Add(entry);
                         }
                     }
                     // Rituals granted by carried items (Laughing Tome, Horde Banner…): the game merges
@@ -537,8 +567,10 @@ namespace ShadowsMcp.Tools
                             {
                                 if (r == null) continue;
                                 if (performableOnly && !performable(r)) { recordHidden(r, true); continue; }
-                                rituals.Add(Summaries.ChallengeSummary(ctx, r, u, !terse)
-                                    .Set("fromItem", Summaries.SafeItemName(it)));
+                                JsonValue entry = Summaries.ChallengeSummary(ctx, r, u, !terse)
+                                    .Set("fromItem", Summaries.SafeItemName(it));
+                                if (dedupe(visibleById, entry)) continue;
+                                rituals.Add(entry);
                             }
                         }
                     }
