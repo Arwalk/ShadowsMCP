@@ -90,6 +90,17 @@ namespace ShadowsMcp.Tools.Decisions
                     buttons.Count + (buttons.Count == 1 ? " option)." : " options)."));
 
             string label = PopupButtons.LabelFor(buttons[wanted]);
+            string method = PopupButtons.FirstPersistentMethod(buttons[wanted]);
+
+            // Snapshot both sides so the result can state what actually moved. The base game's bTakeAll()
+            // silently skips every item when side A has no free slot (gold still transfers), so "clicked
+            // Take All" alone is NOT evidence anything happened.
+            PopupItemTrading pre = blocker.GetComponent<PopupItemTrading>();
+            List<string> itemsA0 = ItemNames(pre != null ? pre.traderA : null);
+            List<string> itemsB0 = ItemNames(pre != null ? pre.traderB : null);
+            int goldA0 = GoldOf(pre != null ? pre.traderA : null);
+            int goldB0 = GoldOf(pre != null ? pre.traderB : null);
+
             buttons[wanted].onClick.Invoke(); // the button's own bXxx() also refreshes the popup's item slots
 
             bool closed = blocker == null || ui == null || ui.blocker != blocker;
@@ -102,7 +113,33 @@ namespace ShadowsMcp.Tools.Decisions
             if (!closed)
             {
                 PopupItemTrading p = blocker.GetComponent<PopupItemTrading>();
-                if (p != null) o.Set("sides", SidesJson(p));
+                if (p != null)
+                {
+                    o.Set("sides", SidesJson(p));
+
+                    List<string> itemsA1 = ItemNames(p.traderA);
+                    List<string> itemsB1 = ItemNames(p.traderB);
+                    JsonValue movedToA = NamesJson(MultisetDiff(itemsA1, itemsA0));
+                    JsonValue movedToB = NamesJson(MultisetDiff(itemsB1, itemsB0));
+                    if (movedToA.Count > 0) o.Set("itemsMovedToA", movedToA);
+                    if (movedToB.Count > 0) o.Set("itemsMovedToB", movedToB);
+                    int goldDeltaA = GoldOf(p.traderA) - goldA0;
+                    int goldDeltaB = GoldOf(p.traderB) - goldB0;
+                    if (goldDeltaA != 0) o.Set("goldDeltaA", goldDeltaA);
+                    if (goldDeltaB != 0) o.Set("goldDeltaB", goldDeltaB);
+
+                    if (method == "bTakeAll")
+                    {
+                        int leftBehind = ItemNames(p.traderB).Count;
+                        if (leftBehind > 0)
+                            o.Set("warning", "receiver's inventory was full - " + leftBehind + " item(s) could " +
+                                "not be taken and remain with " + (TraderName(p, false) ?? "side B") +
+                                (goldDeltaA > 0 ? " (their gold still transferred)" : "") +
+                                ". Free a slot on side A (swap an item away) and Take All again to get the rest.");
+                        else if (movedToA.Count == 0 && goldDeltaA == 0)
+                            o.Set("warning", "nothing moved - side B had no items or gold to take.");
+                    }
+                }
             }
             return ToolResult.Ok(o);
         }
@@ -158,6 +195,47 @@ namespace ShadowsMcp.Tools.Decisions
                 return t != null ? t.getName() : null;
             }
             catch { return null; }
+        }
+
+        /// <summary>The non-null item names on one side, in slot order (slot order is irrelevant to the
+        /// diff - the carousels rotate - so movement detection compares these as multisets).</summary>
+        private static List<string> ItemNames(ItemTradeInterface trader)
+        {
+            var names = new List<string>();
+            try
+            {
+                Item[] arr = trader != null ? trader.getItems() : null;
+                if (arr != null)
+                    foreach (Item it in arr)
+                        if (it != null) names.Add(Safe(() => it.getName()) ?? "?");
+            }
+            catch { }
+            return names;
+        }
+
+        private static int GoldOf(ItemTradeInterface trader)
+        {
+            try { return trader != null ? (int)trader.getGold() : 0; } catch { return 0; }
+        }
+
+        /// <summary>Multiset difference: entries of <paramref name="after"/> not accounted for in
+        /// <paramref name="before"/> (duplicates respected).</summary>
+        private static List<string> MultisetDiff(List<string> after, List<string> before)
+        {
+            var remaining = new List<string>(before);
+            var gained = new List<string>();
+            foreach (string name in after)
+            {
+                if (!remaining.Remove(name)) gained.Add(name);
+            }
+            return gained;
+        }
+
+        private static JsonValue NamesJson(List<string> names)
+        {
+            JsonValue arr = JsonValue.NewArray();
+            foreach (string n in names) arr.Add(n);
+            return arr;
         }
 
         private static string Safe(Func<string> get) { try { return get(); } catch { return null; } }

@@ -618,3 +618,44 @@ bodies in `QueryTools.cs`.
 - Consequence: the mod's `agent_exposed` tip (TipCatalog.cs) must NOT recommend "store the agent" — that
   was a false promise (fixed in 0.4.5; menace/profile floors are permanent, exposure management is
   preventive only). Decision on 0.4.5: do NOT synthesize a `store_agent` tool from first principles.
+
+## Challenge heat, market stalls, silent cancellations (verified 0.5.1)
+
+- **`Challenge.getMenace()`/`getProfile()` are NOT heat gains.** They are the engine AI's
+  utility-scoring inputs (the `_aiMenace`/`_aiProfile` params; `UA.getChallengeUtility` uses
+  `getMenace()` as base utility, `UA.cs:1123` uses `getProfile()/10` as a travel gate). They can be
+  negative (Ch_FuelTheFire: `locationUnrest - 75` ≈ -73) or 6-25× the applied heat
+  (Ch_DangerousKnowledge: ai 50/50 vs applied 8/2). The heat actually applied on completion is
+  `getCompletionMenaceAfterDifficulty()` (= `getCompletionMenace() * difficultyMult_growWithDifficulty`,
+  1.0 at base difficulty) and `getCompletionProfile()` — see `Task_PerformChallenge.cs:71-72,199-200,262`;
+  the in-game UI shows these (UISideChallengeDetails.cs:41,183). The MCP `menaceGain`/`profileGain`
+  fields serialize the completion pair since 0.5.1. `Challenge.isIndefinite()` marks per-turn
+  challenges (Ch_LayLow: completion values 0; `turnTick` does `addProfile(-x)`/`addMenace(-x)`).
+- **`Sub_Market` builds exactly 3 `Ch_BuyItem`** (Sub_Market.cs:23-26), all named "Buy Item From
+  Market" (`getName()` is constant; the sold item lives in the public `Ch_BuyItem.onSale` field,
+  `Item.getName()`/`getShortDesc()`). A name-derived challenge id therefore collides — the mod salts
+  `ChallengeId` with the onSale item name for `Ch_BuyItem` (0.5.1) and emits `itemForSale` in summaries.
+- **`Task_GoToPerformChallenge.turnTick` nulls the task with NO UnifiedMessage** in two paths
+  (challenge no longer at location, `moveTowards` failed) — the only truly silent cancellation.
+  `Task_PerformChallenge.turnTick` (lines 36-57) emits a `TASK_CANCELLED` UnifiedMessage on mid-cast
+  invalidation but ONLY when `unit.isCommandable()`; public field `challenge` on both tasks. The mod
+  synthesizes digest events for the travel case (`Summaries.EvaluateTaskLoss`, 0.5.1) and no longer
+  filters `TASK_CANCELLED` out of the end_turn digest.
+- **`PopupItemTrading.bTakeAll()` silently skips items when side A has no free slot** (inner loop
+  rotates A full-circle looking for a null slot; item stays on B) — gold still transfers via
+  `bSwapGoldA1()`. No return value/message; detection is diffing `getItems()`/`getGold()` around the
+  click (0.5.1 handler does this).
+- **Event outcomes are silent unless described**: `EventManager.chooseOutcome` (weighted pick, runs
+  effects, no text) + `PopupEvent.dismiss()` (PopupEvent.cs:497-506) pops a `PopupMsg`
+  (`prefabStore.popMsg(desc, force:true)`, public `PopupMsg.text`) ONLY when `outcome.description` is
+  non-empty. Which branch fired is otherwise unreadable without patching. `PopupMsgUnified` is a
+  separate class (NOT a PopupMsg subclass), so consuming PopupMsg blockers doesn't touch unified
+  messages.
+- **`PopupChallengeComplete`** re-evaluates `bRepeat.gameObject.SetActive(...)` EVERY frame
+  (`Update()`: challenge valid+unclaimed+validFor, unit `task==null`, alive) → generic button
+  enumeration yields 2 or 3 options with shifting indices. Public members: `unit`, `ch`, `textBody`,
+  `textFlavour`, `bRepeat`, `dismiss()`, `dismissGoto()` (does NOT close when unit is dead),
+  `dismissRepeat()` (silently degrades to plain dismiss when ineligible). Bespoke handler since 0.5.1.
+- **Latent base-game bug (not fixable mod-side)**: `Rt_DarkEmpire.complete()` guards its whole effect
+  block on `shadow == 1.0` EXACTLY while `validFor` accepts `> 0.99` — a cast finishing at 0.991-0.999
+  "completes" with zero effect.

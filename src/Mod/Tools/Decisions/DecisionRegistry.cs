@@ -31,6 +31,7 @@ namespace ShadowsMcp.Tools.Decisions
             new PopupScrollSetHandler(), // the scrolling "pick one from this list" carousel (scandal victim, tags, minions)
             new PopupBattleAgentHandler(), // the agent-duel combat menu (multi-round: step / flee / retreat / reorder)
             new PopupMinionDismissalHandler(), // over-capacity minion keep/dismiss (toggle-then-commit; a real choice)
+            new PopupChallengeCompleteHandler(), // stable Dismiss/Goto/Repeat options (Repeat's button toggles per frame)
             // ... add further bespoke handlers (PopupHolyOrder …) here, before the fallback.
             new GenericButtonHandler(), // must stay last: CanHandle is always true; lists any popup's buttons
         };

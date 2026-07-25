@@ -407,15 +407,18 @@ namespace ShadowsMcp.Tools
 
             host.Register(new ToolDefinition(
                 "list_challenges",
-                "Challenges and rituals available to one of your units, each with its ROI (menaceGain, "
-                + "profileGain, complexity, progressPerTurn), valid/validForUnit flags and a restriction hint "
-                + "stating what it needs. Optionally list another location's challenges to plan a move. Pass "
-                + "terse=true to drop the long prose descriptions, performableOnly=true to list only what "
-                + "this unit can act on right now.",
+                "Challenges and rituals available to one of your units. menaceGain/profileGain are the "
+                + "one-time menace/profile actually applied to the unit on completion (after difficulty "
+                + "scaling); indefinite challenges instead act per turn (see their heatNote/description). "
+                + "Each entry also has complexity, progressPerTurn, valid/validForUnit flags and a "
+                + "restriction hint stating what it needs. Optionally list another location's challenges "
+                + "to plan a move. Pass terse=true to drop the long prose descriptions, performableOnly=true "
+                + "to list only what this unit can act on right now (anything filtered out is summarized in "
+                + "hiddenNotPerformable so nothing is silently dropped).",
                 Schema.Object(
                     Schema.Prop("unitId", Schema.String("Unit id, e.g. U17"), required: true),
                     Schema.Prop("locationId", Schema.String("Look at this location instead of the unit's current one")),
-                    Schema.Prop("terse", Schema.Boolean("Omit each challenge's long 'description' prose (keeps name/type/ROI/valid/restriction). Cheaper output.")),
+                    Schema.Prop("terse", Schema.Boolean("Omit each challenge's long 'description' prose (keeps name/type/heat/valid/restriction). Cheaper output.")),
                     Schema.Prop("performableOnly", Schema.Boolean("Only challenges this unit can act on now (valid AND validForUnit)"))),
                 a => WithMap(ctx, map =>
                 {
@@ -446,10 +449,32 @@ namespace ShadowsMcp.Tools
                     // Refresh the location's challenge list the same way the game UI does.
                     loc.populateStandardChallenges();
 
+                    // With performableOnly, never drop entries silently: an agent that only ever sees the
+                    // performable subset can't learn that e.g. the whole Geomancy family exists behind a
+                    // mastery gate. Collect what was filtered into a compact hidden list instead.
+                    int hiddenCount = 0;
+                    JsonValue hiddenItems = JsonValue.NewArray();
+                    Action<Challenge, bool> recordHidden = (c, isRitual) =>
+                    {
+                        hiddenCount++;
+                        if (hiddenItems.Count >= 20) return;
+                        JsonValue h = JsonValue.NewObject()
+                            .Set("id", Summaries.ChallengeId(ctx, c))
+                            .Set("name", Summaries.ChallengeName(c));
+                        if (isRitual) h.Set("ritual", true);
+                        try
+                        {
+                            string restr = c.getRestriction();
+                            if (!string.IsNullOrEmpty(restr)) h.Set("restriction", restr);
+                        }
+                        catch { }
+                        hiddenItems.Add(h);
+                    };
+
                     JsonValue arr = JsonValue.NewArray();
                     foreach (Challenge c in loc.GetChallenges())
                     {
-                        if (performableOnly && !performable(c)) continue;
+                        if (performableOnly && !performable(c)) { recordHidden(c, false); continue; }
                         arr.Add(Summaries.ChallengeSummary(ctx, c, u, !terse));
                     }
                     JsonValue rituals = JsonValue.NewArray();
@@ -457,14 +482,22 @@ namespace ShadowsMcp.Tools
                     {
                         foreach (Challenge r in u.rituals)
                         {
-                            if (performableOnly && !performable(r)) continue;
+                            if (performableOnly && !performable(r)) { recordHidden(r, true); continue; }
                             rituals.Add(Summaries.ChallengeSummary(ctx, r, u, !terse));
                         }
                     }
-                    return ToolResult.Ok(JsonValue.NewObject()
+                    JsonValue result = JsonValue.NewObject()
                         .Set("location", Summaries.LocationRef(loc))
                         .Set("challenges", arr)
-                        .Set("unitRituals", rituals));
+                        .Set("unitRituals", rituals);
+                    if (hiddenCount > 0)
+                        result.Set("hiddenNotPerformable", JsonValue.NewObject()
+                            .Set("count", hiddenCount)
+                            .Set("items", hiddenItems)
+                            .Set("hint", "these challenges/rituals exist here but this unit cannot act on "
+                                + "them right now (valid/validFor failed — see each 'restriction'). Re-run "
+                                + "without performableOnly for full details."));
+                    return ToolResult.Ok(result);
                 })));
 
             host.Register(new ToolDefinition(

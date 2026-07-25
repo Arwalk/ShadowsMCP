@@ -130,6 +130,11 @@ resolve_decision, end_turn, new_game.
   (assert absent) while name/type/`valid` remain; `list_challenges {"unitId":"U...","performableOnly":true}`
   returns only entries with `valid` AND `validForUnit` true (assert none has either false). Compare counts
   against the unfiltered call.
+- D5b (nothing silently filtered): in the `performableOnly:true` call of D5, if the unfiltered call had
+  more entries, assert the result carries `hiddenNotPerformable` with a `count` equal to the difference and
+  `items:[{id,name,restriction?}]` naming what was hidden (plus a `hint`). This is how gated families
+  (e.g. the Geomancy `Mg_*` challenges at a geomantic locus) stay discoverable. If nothing was filtered,
+  assert `hiddenNotPerformable` is absent.
 - D6 (error names the reason): find a listed challenge with `valid:false` and `perform_challenge` it; assert
   the error message includes the `restriction` text, not just "requirements … are not met". If none is
   invalid, SKIP.
@@ -138,8 +143,27 @@ resolve_decision, end_turn, new_game.
   re-listing — assert it is accepted (a perform/travel task appears via `get_unit`), proving the id survived
   the turns. Assert the id has the deterministic shape (`C{loc}-{Type}-{hash}` or `Cr-…`), not `C8`.
 - D8 (stale-id error lists alternatives): `perform_challenge {"unitId":"U...","challengeId":"C-nope"}`
-  returns a clean error that BOTH says the id is unknown/stale AND lists that unit's currently-available
-  challenge ids+names to retry with.
+  returns a clean error that BOTH says the id is unknown/stale AND lists challenge ids+names to retry with,
+  labeled with WHICH location they are at.
+- D8b (stale-id error targets the encoded location): pick a location index `<idx>` DIFFERENT from the
+  unit's current location (from `list_locations`) and call
+  `perform_challenge {"unitId":"U...","challengeId":"C<idx>-Ch_Nope-00000000"}`. Assert the error lists
+  challenges at THAT location (named, "the location encoded in your id"), not the unit's current one, and
+  notes the unit is not there.
+- D9 (heat values are the applied ones): in `list_challenges`, assert every `menaceGain`/`profileGain` is a
+  small integer consistent with the challenge's own `description` text (e.g. "Fuel the Fire"-style unrest
+  challenges show single-digit menace, not ±50/±75-scale numbers, and NEVER a negative like -73). Then
+  `perform_challenge` one completable challenge, complete it (end turns), and compare the unit's
+  menace/profile before→after (`get_unit`): the delta from the completion must equal the advertised
+  `menaceGain`/`profileGain` (other same-turn sources may add on top — note if so).
+- D10 (indefinite challenges say so): find an indefinite challenge (e.g. "Lay Low" on an agent, SKIP if
+  none available): assert it has `indefinite:true`, `menaceGain:0`/`profileGain:0` (no lump-sum heat), and
+  a `heatNote` explaining the per-turn effect lives in `description`.
+- D11 (market stalls are distinct): move an agent to a location with a market (SKIP if none reachable):
+  `list_challenges` there returns THREE `Ch_BuyItem` entries with three DISTINCT `id`s, each carrying
+  `itemForSale.name` (assert present even with `terse:true`). `perform_challenge` with the 2nd or 3rd id
+  and assert the started/travel task targets that exact stall (its item name appears in later completion
+  text or the bought item lands in `get_unit`'s inventory).
 
 **E. Powers**
 - E1: `list_powers` returns powers with `cost` and a castable flag. Power ids are stable across turns
@@ -225,6 +249,27 @@ resolve_decision, end_turn, new_game.
   readable (e.g. "Take ALL…", "Done…", "Rotate side A…", "Move … gold to side B") — NOT raw
   "Button (Previous)". Resolve a non-closing option (a rotate) via `resolve_decision {"optionIndex":N}` and
   assert the returned `sides` reflect the change. Item trades aren't forcible → SKIP if none appears.
+- G6b (trades report what moved): in the same trade, resolve the "Take ALL…" option and assert the result
+  states the outcome explicitly: `itemsMovedToA` (names) and/or `goldDeltaA`/`goldDeltaB` when anything
+  moved; when side A's inventory is full and side B still holds items, a `warning` naming how many items
+  could NOT be taken (the base game silently skips them; gold still transfers). "clicked Take All" with no
+  movement fields and no warning is a FAIL.
+- G6c (event outcomes are never silent): whenever you resolve a narrative `kind:"event"` choice, assert the
+  result carries — besides `chose` — EITHER `outcomeText` (the outcome description the game rolled, read
+  and cleared for you) OR an explicit `outcome` field stating the choice applied one of its weighted
+  outcomes without disclosure text. A result with only `chose` is a FAIL.
+- G6d (challenge-complete popup is stable): after any challenge completes, `get_pending_decision` shows
+  `kind:"challengeComplete"` with ALWAYS exactly 3 options at fixed indices — 0 Dismiss, 1 dismiss+pan,
+  2 "Repeat this challenge immediately" with an `enabled` flag (and a `why` when disabled) — plus the
+  completed `challenge` {id,name}. Resolve index 2 when enabled and assert the unit's task became the
+  challenge again (`get_unit`); when disabled, assert index 2 returns a clean error (NOT a silent
+  dismiss). Assert `end_turn {"force":true}` does NOT auto-dismiss this popup (it holds a real choice).
+- G11 (cancelled tasks surface in the digest): if a unit's in-progress challenge/ritual is ever
+  invalidated mid-cast (e.g. its location's requirements degrade), assert the `end_turn` result's
+  `digest.events` contains a `TASK_CANCELLED` entry naming the unit and challenge — the unit going idle
+  with no digest event is a FAIL. A silently-dead travel task (challenge vanished / path blocked while a
+  unit was en route) must likewise produce a synthesized `TASK_CANCELLED` digest event. Opportunistic —
+  SKIP if never observed, but `get_recent_events` should carry any that occurred.
 - G7 (permanent-silence warning): if any popup ever offers a "No longer show message of type…" option (e.g.
   a `PopupMsgUnified`), assert that option's label carries the explicit WARNING that it PERMANENTLY hides the
   type for the whole game (persists across reload) — so an agent won't blind itself. SKIP if none appears.

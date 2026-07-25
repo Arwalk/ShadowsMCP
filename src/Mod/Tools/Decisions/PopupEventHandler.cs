@@ -123,7 +123,57 @@ namespace ShadowsMcp.Tools.Decisions
                 .Set("kind", "event")
                 .Set("chose", label);
             if (forcedDefault) ok.Set("forcedDefault", true);
+
+            // A choice rolls one of its weighted outcomes (EventManager.chooseOutcome) and applies its
+            // effects SILENTLY; the only disclosure channel is PopupEvent.dismiss popping the outcome's
+            // description as a PopupMsg - when the outcome has one. Read that message into the result here
+            // (and clear it) so the agent learns what fired in the same tool call; when there is none, say
+            // so explicitly rather than reporting only the option that was clicked.
+            string outcomeText = ReadAndDismissOutcomeMsg(ctx, ui);
+            if (outcomeText != null)
+            {
+                ok.Set("outcomeText", outcomeText);
+                try { ctx.Events.RecordPopup(TurnOf(ctx), "eventOutcome", FirstLine(outcomeText), "auto-read into event result"); }
+                catch { }
+            }
+            else
+            {
+                ok.Set("outcome", "applied without disclosure - this choice rolled one of its weighted " +
+                    "outcomes and the game showed no text for it; its effects (if any) are already applied. " +
+                    "Check the relevant unit/location if you need to confirm.");
+            }
             return ToolResult.Ok(ok);
+        }
+
+        /// <summary>If the new live blocker is exactly a <see cref="PopupMsg"/> (the outcome-description
+        /// popup), return its text and dismiss it. Any other popup type (a chained level-up, a follow-up
+        /// event, …) is left pending untouched and null is returned.</summary>
+        private static string ReadAndDismissOutcomeMsg(GameContext ctx, UIMaster ui)
+        {
+            try
+            {
+                DecisionRegistry.PumpQueue(ctx);
+                if (ui == null || ui.blocker == null) return null;
+                PopupMsg msg = ui.blocker.GetComponent<PopupMsg>();
+                if (msg == null) return null;
+                string text = msg.text != null ? msg.text.text : null;
+                if (string.IsNullOrEmpty(text)) return null;
+                msg.dismiss();
+                return text;
+            }
+            catch { return null; }
+        }
+
+        private static string FirstLine(string s)
+        {
+            int nl = s.IndexOf('\n');
+            string line = nl > 0 ? s.Substring(0, nl) : s;
+            return line.Length > 120 ? line.Substring(0, 120) : line;
+        }
+
+        private static int TurnOf(GameContext ctx)
+        {
+            try { return ctx.Map != null ? ctx.Map.turn : 0; } catch { return 0; }
         }
 
         /// <summary>First active, condition-met choice button, or null if the event has none.</summary>

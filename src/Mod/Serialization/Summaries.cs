@@ -33,6 +33,14 @@ namespace ShadowsMcp
             if (c == null) return null;
             string type = c.GetType().Name;
             string name = SafeName(() => c.getName()) ?? "";
+            // Market stalls: Sub_Market holds three Ch_BuyItem all named "Buy Item From Market", which
+            // would collide into one id (and FindByCanonicalId would only ever resolve the first stall).
+            // Salt with the item on sale — the offer's real identity: stable while that item is on sale,
+            // correctly invalidated when the stall restocks (a cached id must never silently buy another
+            // item). Two stalls selling identically-named items still collide, but those purchases are
+            // interchangeable.
+            if (c is Ch_BuyItem buy)
+                name += "|" + (SafeName(() => buy.onSale != null ? buy.onSale.getName() : null) ?? "empty");
             string h = StableHash8(type + "|" + name);
             if (c is Ritual) return "Cr-" + type + "-" + h;
             int loc;
@@ -1090,10 +1098,20 @@ namespace ShadowsMcp
                 .Set("isRitual", c is Ritual)
                 .Set("location", LocationRef(c.location))
                 .Set("valid", Safe(() => c.valid(), false))
-                .Set("menaceGain", Safe(() => Round2(c.getMenace()), 0))
-                .Set("profileGain", Safe(() => Round2(c.getProfile()), 0))
+                // The heat the unit actually receives on completion (what Task_PerformChallenge applies
+                // and the in-game UI shows) — NOT Challenge.getMenace()/getProfile(), which are the
+                // engine AI's utility-scoring inputs and can be negative or wildly off from applied heat.
+                .Set("menaceGain", Safe(() => c.getCompletionMenaceAfterDifficulty(), 0))
+                .Set("profileGain", Safe(() => c.getCompletionProfile(), 0))
                 .Set("danger", Safe(() => c.getDanger(), 0))
                 .Set("claimedBy", UnitRef(ctx, c.claimedBy));
+            if (Safe(() => c.isIndefinite(), false))
+            {
+                o.Set("indefinite", true);
+                o.Set("heatNote", "indefinite challenge: menaceGain/profileGain are one-time completion "
+                    + "values (often 0); its real effect is applied per turn while active and is stated "
+                    + "in 'description' (e.g. Lay Low REDUCES menace and profile each turn).");
+            }
             // Why the challenge is locked / what it needs — the game's own hint text (getRestriction).
             // `valid` says whether the world preconditions are met and `validForUnit` whether THIS unit
             // qualifies; `restriction` states the actual requirement (e.g. "Requires 100% Infiltration.
@@ -1105,6 +1123,15 @@ namespace ShadowsMcp
                 if (!string.IsNullOrEmpty(restriction)) o.Set("restriction", restriction);
             }
             catch { }
+            // Market stalls: always show the wares (even terse) — the three stalls share one display
+            // name, so without this an agent cannot tell the offers apart or choose between them.
+            if (c is Ch_BuyItem stall && stall.onSale != null)
+            {
+                JsonValue item = JsonValue.NewObject()
+                    .Set("name", SafeName(() => stall.onSale.getName()));
+                try { item.Set("desc", stall.onSale.getShortDesc()); } catch { }
+                o.Set("itemForSale", item);
+            }
             if (includeDescription)
             {
                 try { o.Set("description", c.getDesc()); } catch { }
@@ -1745,7 +1772,9 @@ namespace ShadowsMcp
                 UnifiedMessage.messageType.AGENT_IDLE,    // surfaces as the idleAgents decision
                 UnifiedMessage.messageType.TUTORIAL,
                 UnifiedMessage.messageType.UNIT_ARRIVES,
-                UnifiedMessage.messageType.TASK_CANCELLED,
+                // TASK_CANCELLED deliberately NOT here: a mid-cast invalidation (e.g. Dark Empire losing
+                // its 100%-shadow capital at 48/50 progress) is exactly the news an unattended player
+                // must hear; the `mine` gate keeps it scoped to your own units.
             };
 
         /// <summary>
@@ -1815,6 +1844,10 @@ namespace ShadowsMcp
             public Unit Unit;
             public string Name;
             public Location Location;
+            /// <summary>Set when the unit was travelling to a challenge (Task_GoToPerformChallenge) at
+            /// snapshot time — that task nulls itself out with NO game message when the challenge vanishes
+            /// or a move fails, so <see cref="EvaluateTaskLoss"/> has to detect the transition itself.</summary>
+            public string TravelChallengeName;
         }
 
         /// <summary>
@@ -1831,11 +1864,15 @@ namespace ShadowsMcp
                 if (u == null || u.isDead) continue;
                 bool mine; try { mine = u.isCommandable(); } catch { continue; }
                 if (!mine) continue;
+                string travelChallenge = null;
+                if (u.task is Task_GoToPerformChallenge travel && travel.challenge != null)
+                    travelChallenge = SafeName(() => travel.challenge.getName()) ?? "a challenge";
                 result.Add(new OwnedUnitInfo
                 {
                     Unit = u,
                     Name = SafeName(() => u.getName()),
-                    Location = u.location
+                    Location = u.location,
+                    TravelChallengeName = travelChallenge
                 });
             }
             return result;
@@ -1863,6 +1900,40 @@ namespace ShadowsMcp
                     .Set("name", b.Name);
                 if (b.Location != null) o.Set("lastLocation", LocationRef(b.Location));
                 arr.Add(o);
+            }
+            return arr.Count > 0 ? arr : JsonValue.Null;
+        }
+
+        /// <summary>
+        /// Detect units whose travel-to-challenge task silently died since the snapshot.
+        /// <c>Task_GoToPerformChallenge.turnTick</c> nulls the task with no UnifiedMessage when the
+        /// challenge disappears or a move fails — the one cancellation the game never announces
+        /// (a <c>Task_PerformChallenge</c> cancellation on a commandable unit emits TASK_CANCELLED,
+        /// which the digest now passes through). Returns digest-shaped events (same fields as
+        /// <see cref="NotableTurnEvents"/>, plus <c>synthesized</c>) or <c>JsonValue.Null</c>;
+        /// each is also archived into <c>ctx.Events</c> for get_recent_events.
+        /// </summary>
+        public static JsonValue EvaluateTaskLoss(GameContext ctx, Map map, List<OwnedUnitInfo> before)
+        {
+            if (before == null || before.Count == 0 || map == null) return JsonValue.Null;
+            JsonValue arr = JsonValue.NewArray();
+            foreach (OwnedUnitInfo b in before)
+            {
+                if (b == null || b.Unit == null || b.TravelChallengeName == null) continue;
+                if (b.Unit.isDead) continue;                 // deaths are EvaluateUnitLoss's story
+                bool stillTasked; try { stillTasked = b.Unit.task != null; } catch { continue; }
+                if (stillTasked) continue;                   // arrived (now performing) or retasked
+                string title = "Task cancelled";
+                string message = b.Name + "'s travel to perform '" + b.TravelChallengeName +
+                    "' ended prematurely (the challenge disappeared or the path was blocked); the unit is now idle.";
+                arr.Add(JsonValue.NewObject()
+                    .Set("turn", map.turn)
+                    .Set("type", "TASK_CANCELLED")
+                    .Set("title", title)
+                    .Set("message", message)
+                    .Set("mine", true)
+                    .Set("synthesized", true));
+                try { ctx.Events.RecordPopup(map.turn, "TASK_CANCELLED", message, "synthesized"); } catch { }
             }
             return arr.Count > 0 ? arr : JsonValue.Null;
         }

@@ -94,8 +94,10 @@ namespace ShadowsMcp.Tools.Decisions
         }
 
         /// <summary>The first Inspector-set (persistent) onClick target method name, or null. Code-wired
-        /// listeners (AddListener) are invisible here by design - those popups already have bespoke handlers.</summary>
-        private static string FirstPersistentMethod(Button b)
+        /// listeners (AddListener) are invisible here by design - those popups already have bespoke handlers.
+        /// Internal so bespoke handlers can identify a clicked button by its wired method (e.g. the
+        /// item-trading handler detecting bTakeAll to check for a silent receiver-full no-op).</summary>
+        internal static string FirstPersistentMethod(Button b)
         {
             try
             {
@@ -120,6 +122,10 @@ namespace ShadowsMcp.Tools.Decisions
             switch (method)
             {
                 case "dismiss": return "Done - finish and close";
+                // PopupChallengeComplete (normally handled by its bespoke handler; these labels are
+                // defense-in-depth for any other popup wiring the same methods):
+                case "dismissGoto": return "Dismiss and pan the camera to the unit (no gameplay effect)";
+                case "dismissRepeat": return "Repeat this challenge immediately";
                 case "bTakeAll": return "Take ALL of side B's items (into side A's free slots) and all their gold";
                 case "swapTop": return "Swap the top item of each side (moves side A's top item to side B, and B's to A)";
                 case "bRotateLeft": return "Rotate side A's item carousel forward";

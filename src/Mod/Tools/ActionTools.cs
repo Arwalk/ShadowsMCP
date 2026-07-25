@@ -325,23 +325,47 @@ namespace ShadowsMcp.Tools
             }
             CheckUiData(map);
 
+            // Heat actually applied on completion (Task_PerformChallenge), not the AI-utility scores.
+            int menaceOnCompletion, profileOnCompletion;
+            try { menaceOnCompletion = c.getCompletionMenaceAfterDifficulty(); } catch { menaceOnCompletion = 0; }
+            try { profileOnCompletion = c.getCompletionProfile(); } catch { profileOnCompletion = 0; }
             return ToolResult.Ok(JsonValue.NewObject()
                 .Set("unit", Summaries.UnitRef(ctx, u))
                 .Set("challenge", c.getName())
                 .Set("status", "started")
-                .Set("menaceGain", Summaries.Round2(c.getMenace()))
-                .Set("profileGain", Summaries.Round2(c.getProfile())));
+                .Set("menaceGain", menaceOnCompletion)
+                .Set("profileGain", profileOnCompletion));
         }
 
-        /// <summary>A stale/unknown-challenge error that also lists the unit's currently-available challenge
-        /// ids+names, so the agent can retry immediately instead of guessing. With deterministic ids this is
-        /// rare (it means the challenge is genuinely gone), so we spend the words on actionable alternatives.</summary>
+        /// <summary>A stale/unknown-challenge error that also lists challenge ids+names the agent can retry
+        /// with. The failed id encodes its target location ("C&lt;locIdx&gt;-..."), so list THAT location's
+        /// challenges when it still resolves — not the unit's current location, which is unrelated when the
+        /// unit was routed somewhere remote. Falls back to the unit's current location (labeled) otherwise.</summary>
         private static string StaleChallengeError(GameContext ctx, Unit u, string id)
         {
+            // "C12-Ch_Foo-a1b2c3d4" → location index 12. Ritual ids ("Cr-...") don't encode a location.
+            Location target = null;
+            try
+            {
+                if (id != null && id.StartsWith("C") && !id.StartsWith("Cr-"))
+                {
+                    int dash = id.IndexOf('-');
+                    int locIdx;
+                    if (dash > 1 && int.TryParse(id.Substring(1, dash - 1), out locIdx))
+                        target = Summaries.ResolveId(ctx, "L" + locIdx) as Location;
+                }
+            }
+            catch { }
+
+            Location loc = target ?? u.location;
+            string targetName;
+            try { targetName = target != null ? target.getName() : null; } catch { targetName = "that location"; }
+            string where = target != null
+                ? "at " + targetName + " (the location encoded in your id)"
+                : "at " + u.getName() + "'s current location";
             var lines = new List<string>();
             try
             {
-                Location loc = u.location;
                 if (loc != null)
                 {
                     loc.populateStandardChallenges();
@@ -362,9 +386,12 @@ namespace ShadowsMcp.Tools
             }
             catch { }
             string head = "unknown or stale challenge id: " + id + ". ";
+            string tail = target != null && target != u.location
+                ? " Note: " + u.getName() + " is not there; perform_challenge handles the travel itself."
+                : "";
             if (lines.Count > 0)
-                return head + "Challenges available to " + u.getName() + " now: " +
-                    string.Join(", ", lines.ToArray()) + ".";
+                return head + "Challenges " + where + " (plus " + u.getName() + "'s rituals): " +
+                    string.Join(", ", lines.ToArray()) + "." + tail;
             return head + "Re-run list_challenges for " + u.getName() + ".";
         }
 
@@ -1005,6 +1032,8 @@ namespace ShadowsMcp.Tools
                 {
                     // Losses first: a unit you no longer have outranks any warning about one you still do.
                     digest1.SetLost(Summaries.EvaluateUnitLoss(ctx, map, roster1));
+                    // Travel tasks that died silently (no game message exists for these).
+                    digest1.Absorb(JsonValue.Null, Summaries.EvaluateTaskLoss(ctx, map, roster1));
                     JsonValue alert1; string reason1;
                     Summaries.EvaluateThreatStop(ctx, map, before1, args["stopOnThreatMotivation"].AsInt(0), out alert1, out reason1);
                     if (!alert1.IsNull) payload1.Set("threatAlert", alert1);
@@ -1020,6 +1049,9 @@ namespace ShadowsMcp.Tools
             // threat escalation so a batched advance never blows past an agent walking into danger.
             var before = Summaries.ComputeAgentSafety(ctx, map);
             var roster = Summaries.ComputeOwnedRoster(ctx, map);
+            // Per-iteration snapshot for silent travel-task loss; `roster` itself must stay the batch-start
+            // snapshot so EvaluateUnitLoss catches a death on any turn of the batch.
+            var taskSnap = roster;
             var digest = new TurnDigest();
             int advancedBy = 0;
             string stopReason = null;
@@ -1065,6 +1097,11 @@ namespace ShadowsMcp.Tools
                     dismissRemaining = ad["remaining"];
                     if (ad["cappedOut"].AsBool()) dismissCappedOut = true;
                 }
+
+                // Travel tasks that died silently this turn (no game message exists for these); the batch
+                // keeps going - a task-less agent trips the idleAgents decision next turn anyway.
+                digest.Absorb(JsonValue.Null, Summaries.EvaluateTaskLoss(ctx, map, taskSnap));
+                taskSnap = Summaries.ComputeOwnedRoster(ctx, map);
 
                 // Losing a unit stops the batch, like a threat escalation - checked BEFORE the threat scan so
                 // a death is never masked by a warning about an agent that is merely in danger. This is the
