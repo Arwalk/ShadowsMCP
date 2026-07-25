@@ -18,7 +18,9 @@ namespace ShadowsMcp.Tools
                 "Show the decision the game is currently waiting on (level-up trait pick, narrative " +
                 "event choice, an idle-agent alert, or any other modal popup) with its options. Every " +
                 "popup is listed as a set of numbered options you can pick with resolve_decision; " +
-                "returns {pending:false} when nothing is open.",
+                "returns {pending:false} when nothing is open. decisionId is a token for this exact " +
+                "popup instance - pass it to resolve_decision.expectedDecisionId to guarantee you " +
+                "answer the popup you read (chained popups reuse option indices but get fresh ids).",
                 Schema.Object(),
                 a => QueryTools.WithMap(ctx, map => ToolResult.Ok(DecisionRegistry.Current(ctx)))));
 
@@ -31,7 +33,8 @@ namespace ShadowsMcp.Tools
                 "this one is flagged in the result banner.",
                 Schema.Object(
                     Schema.Prop("optionIndex", Schema.Integer("Zero-based index of the option to choose (from get_pending_decision)")),
-                    Schema.Prop("force", Schema.Boolean("Skip a level-up / dismiss an unmodelled popup without choosing (does NOT pass the idle-agent alert — use optionIndex 0 for that)"))),
+                    Schema.Prop("force", Schema.Boolean("Skip a level-up / dismiss an unmodelled popup without choosing (does NOT pass the idle-agent alert — use optionIndex 0 for that)")),
+                    Schema.Prop("expectedDecisionId", Schema.String("Optional decisionId from get_pending_decision: if the pending decision has changed since you read it, nothing is clicked and the new decision is described instead. Recommended whenever you chain resolves."))),
                 a => QueryTools.WithMap(ctx, map => DecisionRegistry.Resolve(ctx, a))));
         }
     }

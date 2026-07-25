@@ -71,13 +71,21 @@ across playthroughs. At the START of every session, read all three before touchi
   that's an MCP finding.
 - Discover ids dynamically (`U*` from `list_units`, `L*` from `list_locations`, `C…` from
   `list_challenges`, `SG*` from `list_social_groups`, archetype codes from
-  `list_recruitable_agents`). Never invent or hardcode ids.
+  `list_recruitable_agents`). Never invent or hardcode ids. If `game_overview.idEpoch` changed since
+  you last looked (it increments on every load / new game), every cached `U*` id is stale — re-run
+  `list_units` before commanding anyone.
+- Compare challenges with `etaTurns`, not raw `complexity`: `progressPerTurn` is unit-relative
+  (stat-scaled — the same challenge can run 7x faster for another agent; `progressBreakdown` names
+  why), so the right agent on the right challenge is a strategic choice.
 
 ### Decisions and popups — read before choosing
 
 - When a decision blocks (`pendingDecision` / the ⚠ banner on tool results), `get_pending_decision`,
   read EVERY option, and choose the one that serves your strategy — do NOT default to option 0
   because it is first. Say in your narration why you chose it.
+- Pass the decision's `decisionId` back as `expectedDecisionId` when you resolve (on
+  `resolve_decision` or `end_turn`): chained popups reuse option indices, and the guard refuses the
+  click if the pending decision changed under you instead of answering the wrong popup.
 - `end_turn {"force":true}` only auto-dismisses purely informational notices. Real choices — combat,
   narrative events, level-up trait picks, item trading, list pickers — always block, by design. When
   blocked, resolve the decision; don't hammer `force`.

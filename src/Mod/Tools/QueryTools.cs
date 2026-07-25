@@ -19,7 +19,9 @@ namespace ShadowsMcp.Tools
             host.Register(new ToolDefinition(
                 "game_overview",
                 "High-level state of the current game: turn, god, resources, world counts, seal countdown and " +
-                "a threats breadcrumb. The world meters (victoryProgress toward 200 points, worldPanic, " +
+                "a threats breadcrumb. idEpoch: unit ids (U*) reset whenever this number changes (new game or " +
+                "loaded save) - discard cached U-ids and re-run list_units; L*/P*/SG* ids survive loads. " +
+                "The world meters (victoryProgress toward 200 points, worldPanic, " +
                 "awarenessOfUnderground, avrgEnshadowment) are 0-1 fractions. threats.agentsUnderAttack = a " +
                 "battle is pending (blocks end_turn; resolve via pendingDecision); agentsInDanger = a hero is " +
                 "closing; agentsHuntable = exposed to assassination (profile>=50 & menace>25) - open " +
@@ -196,7 +198,7 @@ namespace ShadowsMcp.Tools
                 a => WithMap(ctx, map =>
                 {
                     Unit u = Summaries.ResolveId(ctx, a["unitId"].AsString()) as Unit;
-                    if (u == null) return ToolResult.Error("unknown or stale unit id: " + a["unitId"].AsString() + " - re-run list_units");
+                    if (u == null) return ToolResult.Error(StaleUnitIdError(ctx, a["unitId"].AsString()));
                     return ToolResult.Ok(Summaries.UnitDetail(ctx, u));
                 })));
 
@@ -336,7 +338,10 @@ namespace ShadowsMcp.Tools
                 + "and every weighted category (% population in the Dark Empire, enshadowed population outside "
                 + "it, enshadowed+insane rulers, insane rulers, population destroyed, Deep One / Vinerva / "
                 + "Ophanim contributions) and the score total. Use it to see which of your activities is "
-                + "actually scoring. victoryProgress = score total / pointsToWin.",
+                + "actually scoring. victoryProgress = score total / pointsToWin. 'details' attributes the "
+                + "columns whose aggregates are opaque: exactly which persons qualify for the insane / "
+                + "insane+enshadowed columns (so a regression names its cause) and which Deep One cities "
+                + "score (sanctums never score directly - they feed abyssal cities).",
                 Schema.Object(),
                 a => WithMap(ctx, map =>
                 {
@@ -346,11 +351,15 @@ namespace ShadowsMcp.Tools
                     // Same call the game's own HUD uses (UITopRight); it recomputes the live figures.
                     try { breakdown = om.computeVictoryProgress(); }
                     catch (Exception ex) { return ToolResult.Error("could not compute victory breakdown: " + ex.Message); }
-                    return ToolResult.Ok(JsonValue.NewObject()
+                    JsonValue result = JsonValue.NewObject()
                         .Set("victoryProgress", Summaries.Round2(map.data_victoryProgess))
                         .Set("avrgEnshadowment", Summaries.Round2(map.data_avrgEnshadowment))
                         .Set("pointsToWin", 200)
-                        .Set("breakdown", breakdown));
+                        .Set("breakdown", breakdown);
+                    // Per-column attribution for the opaque aggregates (who qualifies, which cities score).
+                    JsonValue details = Summaries.VictoryAttribution(ctx, map);
+                    if (!details.IsNull) result.Set("details", details);
+                    return ToolResult.Ok(result);
                 })));
 
             host.Register(new ToolDefinition(
@@ -419,8 +428,15 @@ namespace ShadowsMcp.Tools
                 "Challenges and rituals available to one of your units. menaceGain/profileGain are the "
                 + "one-time menace/profile actually applied to the unit on completion (after difficulty "
                 + "scaling); indefinite challenges instead act per turn (see their heatNote/description). "
-                + "Each entry also has complexity, progressPerTurn, valid/validForUnit flags and a "
-                + "restriction hint stating what it needs. Optionally list another location's challenges "
+                + "progressPerTurn is UNIT-relative (stat-scaled: the same challenge can run 7x faster "
+                + "for another agent); etaTurns = ceil(complexity/progressPerTurn), turns of active work "
+                + "excluding travel (absent when the rate is 0 or the challenge is indefinite); "
+                + "progressBreakdown itemizes the rate (dropped with terse=true). valid = the challenge's "
+                + "world precondition (usually true even when you cannot act); validForUnit = can THIS "
+                + "unit do it from where it stands - location preconditions (infiltration %, shadow %, "
+                + "ward, settlement type) are checked here, so validForUnit:false usually means 'not "
+                + "here / not yet', NOT 'wrong unit type'; 'restriction' states the actual requirement. "
+                + "Optionally list another location's challenges "
                 + "to plan a move. Pass terse=true to drop the long prose descriptions, performableOnly=true "
                 + "to list only what this unit can act on right now (anything filtered out is summarized in "
                 + "hiddenNotPerformable so nothing is silently dropped).",
@@ -432,7 +448,7 @@ namespace ShadowsMcp.Tools
                 a => WithMap(ctx, map =>
                 {
                     Unit u = Summaries.ResolveId(ctx, a["unitId"].AsString()) as Unit;
-                    if (u == null) return ToolResult.Error("unknown or stale unit id: " + a["unitId"].AsString() + " - re-run list_units");
+                    if (u == null) return ToolResult.Error(StaleUnitIdError(ctx, a["unitId"].AsString()));
                     Location loc = u.location;
                     if (!a["locationId"].IsNull)
                     {
@@ -625,6 +641,16 @@ namespace ShadowsMcp.Tools
         // ---------- helpers ----------
 
         /// <summary>
+        /// Shared stale/unknown unit-id error. Stamps the current idEpoch so a client that cached
+        /// U-ids across a save/load can see WHY they went stale (unit ids reset with the epoch).
+        /// </summary>
+        internal static string StaleUnitIdError(GameContext ctx, string id, string relist = "list_units")
+        {
+            return "unknown or stale unit id: " + id + " - re-run " + relist + " (idEpoch is now "
+                + ctx.Registry.Epoch + "; all U-ids reset whenever game_overview.idEpoch changes, e.g. on load)";
+        }
+
+        /// <summary>
         /// The game_overview payload for a live map. Shared with new_game so a freshly
         /// started game returns the same immediate context game_overview would.
         /// </summary>
@@ -693,6 +719,9 @@ namespace ShadowsMcp.Tools
             JsonValue o = JsonValue.NewObject()
                 .Set("modVersion", ModCore.ModVersion)
                 .Set("turn", map.turn)
+                // Unit ids (U*) are minted per session and reset on new game / load; this counter
+                // increments on every such reset so a client can detect that cached U-ids are stale.
+                .Set("idEpoch", ctx.Registry.Epoch)
                 // In an endless game there is no turn limit: getMaxTurns() still returns a number
                 // (the game ignores it), so surface null there or an agent reads it as a deadline.
                 // Mirrors the game UI's "Turn: X (Endless)".

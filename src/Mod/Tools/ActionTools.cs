@@ -147,6 +147,7 @@ namespace ShadowsMcp.Tools
                     Schema.Prop("force", Schema.Boolean("Auto-spend skill points and dismiss informational popups; never skips a real choice (see tool description). Every dismissal is named in the digest - nothing is lost.")),
                     Schema.Prop("passIdleAgents", Schema.Boolean("Bulk-pass every idle agent each turn (a visible 'Passing Turn') so a batch doesn't stop on the recurring idle alert. A conscious choice to waste those turns - prefer standing orders. Combat and events still block.")),
                     Schema.Prop("resolveOptionIndex", Schema.Integer("Answer the blocking decision with this option index (from pendingDecision.options), then continue ending the turn.")),
+                    Schema.Prop("expectedDecisionId", Schema.String("Optional, with resolveOptionIndex: only resolve if the pending decision still matches this decisionId (from pendingDecision); a mismatch clicks nothing and is reported in resolveWarning.")),
                     Schema.Prop("stopOnThreatMotivation", Schema.Integer("Stop the batch once any hunter's motivation toward one of your agents is AT OR ABOVE this percent (level-triggered; can exceed 100 for a strongly-inclined hunter). Omit or 0 to disable."))),
                 a =>
                 {
@@ -434,7 +435,7 @@ namespace ShadowsMcp.Tools
             if (hasUnit)
             {
                 Unit target = Summaries.ResolveId(ctx, a["targetUnitId"].AsString()) as Unit;
-                if (target == null) return ToolResult.Error("unknown or stale unit id: " + a["targetUnitId"].AsString());
+                if (target == null) return ToolResult.Error(QueryTools.StaleUnitIdError(ctx, a["targetUnitId"].AsString()));
                 if (!power.validTarget(target))
                     return ToolResult.Error(target.getName() + " is not a valid target for '" + power.getName() +
                         "'. " + (power.getRestrictionText() ?? ""));
@@ -486,8 +487,8 @@ namespace ShadowsMcp.Tools
             {
                 Unit u = Summaries.ResolveId(ctx, a["heroUnitId"].AsString()) as Unit;
                 if (u == null)
-                    return ToolResult.Error("unknown or stale unit id: " + a["heroUnitId"].AsString() +
-                        " - re-run list_recruitable_agents.");
+                    return ToolResult.Error(QueryTools.StaleUnitIdError(ctx, a["heroUnitId"].AsString(),
+                        "list_recruitable_agents"));
                 if (!Summaries.IsCorruptibleHero(u))
                     return ToolResult.Error(u.getName() + " cannot be corrupted (must be a non-commandable " +
                         "hero/acolyte at 100% shadow or insane, and not the Chosen One).");
@@ -670,7 +671,7 @@ namespace ShadowsMcp.Tools
             if (target == null)
                 return ToolResult.Error(string.IsNullOrEmpty(id)
                     ? "this order needs a targetUnitId (the enemy unit sharing your unit's tile) - see get_unit.orders."
-                    : "unknown or stale unit id: " + id + " - re-run list_units.");
+                    : QueryTools.StaleUnitIdError(ctx, id));
             if (target.isDead)
                 return ToolResult.Error(target.getName() + " is dead.");
             if (target.location != um.location)
@@ -892,7 +893,7 @@ namespace ShadowsMcp.Tools
             if (t == null)
                 return ToolResult.Error(string.IsNullOrEmpty(id)
                     ? "this order needs a targetUnitId (the other agent sharing your agent's tile) - see get_unit.orders."
-                    : "unknown or stale unit id: " + id + " - re-run list_units.");
+                    : QueryTools.StaleUnitIdError(ctx, id));
             if (t.isDead)
                 return ToolResult.Error(t.getName() + " is dead.");
             if (t == ua)
@@ -1191,6 +1192,10 @@ namespace ShadowsMcp.Tools
                 else
                 {
                     JsonValue rargs = JsonValue.NewObject().Set("optionIndex", args["resolveOptionIndex"]);
+                    // Optional stale-decision guard: with expectedDecisionId the resolve refuses (and
+                    // reports via resolveWarning) when the pending decision is no longer the one read.
+                    if (!args["expectedDecisionId"].IsNull)
+                        rargs.Set("expectedDecisionId", args["expectedDecisionId"]);
                     ToolResult rr = Decisions.DecisionRegistry.Resolve(ctx, rargs);
                     resolved = JsonValue.NewObject()
                         .Set("ok", rr != null && !rr.IsError)
@@ -1452,7 +1457,7 @@ namespace ShadowsMcp.Tools
         {
             unit = Summaries.ResolveId(ctx, id) as Unit;
             if (unit == null)
-                return ToolResult.Error("unknown or stale unit id: " + id + " - re-run list_units");
+                return ToolResult.Error(QueryTools.StaleUnitIdError(ctx, id));
             if (unit.isDead)
                 return ToolResult.Error(unit.getName() + " is dead.");
             if (!unit.isCommandable())

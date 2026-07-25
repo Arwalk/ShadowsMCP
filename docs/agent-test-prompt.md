@@ -46,8 +46,10 @@ resolve_decision, end_turn, new_game.
 - **Discover ids dynamically; never hardcode.** Unit ids (`U*`) come from `list_units`, locations (`L*`)
   from `list_locations`/`get_location`, challenges (`C*`, now deterministic — `C{loc}-{Type}-{hash}`, or
   `Cr-…` for rituals) from `list_challenges`, archetype codes from `list_recruitable_agents`, social groups
-  (`SG*`) from `list_social_groups`. Unit ids are session-scoped — if a tool says "stale id", re-query;
-  challenge ids are now stable across turns and save/load (no need to re-list before `perform_challenge`).
+  (`SG*`) from `list_social_groups`. Unit ids are session-scoped and reset whenever
+  `game_overview.idEpoch` changes (new game / loaded save) — if a tool says "stale id" or idEpoch moved,
+  re-query; challenge ids are now stable across turns and save/load (no need to re-list before
+  `perform_challenge`).
 - **Verify by state-diff.** For every action, call the relevant query tool BEFORE, perform the action, then
   query AFTER, and assert the specific field changed as expected. Record the before value, the action, and
   the after value as evidence. Example: for `use_power`, snapshot `get_player_state.power`, cast, then
@@ -77,7 +79,8 @@ resolve_decision, end_turn, new_game.
 ### Test checklist
 
 **A. Sanity & cross-consistency**
-- A1: `game_overview` returns `turn`, `god.name`, `counts`. (PASS if all present.)
+- A1: `game_overview` returns `turn`, `god.name`, `counts`, and an integer `idEpoch` >= 1. (PASS if all
+  present.)
 - A2: `inspect {"path":"map.turn"}` equals `game_overview.turn`.
 - A3: `list_units {"scope":"mine"}` count equals `game_overview.counts.commandableUnits`.
 - A4: `get_player_state` returns a `god`, `agents` array, and `power`.
@@ -90,7 +93,8 @@ resolve_decision, end_turn, new_game.
   expanded world state; Unity-engine objects likewise collapse to `<Unity:TypeName>`. The root itself is
   exempt: `inspect {"path":"map","depth":1}` still returns the map's own fields.
 - A6 (error): `get_unit {"unitId":"U9999"}` and `get_location {"locationId":"L9999"}` both return clean
-  "unknown/stale id" errors.
+  "unknown/stale id" errors; the unit one must mention `idEpoch` (the reset rule: all U-ids reset whenever
+  `game_overview.idEpoch` changes).
 - A7 (people): `list_persons` returns a list; `get_person` on the first person's id (`P*`) returns a detail
   object with `stats` and a `traits` array whose entries are `{name, desc}` objects (not bare strings).
   Assert the id round-trips (the detail's id matches the one you asked for).
@@ -165,7 +169,16 @@ resolve_decision, end_turn, new_game.
   `menaceGain`/`profileGain` (other same-turn sources may add on top — note if so).
 - D10 (indefinite challenges say so): find an indefinite challenge (e.g. "Lay Low" on an agent, SKIP if
   none available): assert it has `indefinite:true`, `menaceGain:0`/`profileGain:0` (no lump-sum heat), and
-  a `heatNote` explaining the per-turn effect lives in `description`.
+  a `heatNote` explaining the per-turn effect lives in `description`. A Lay Low entry must additionally
+  carry a `locationNote` (its speed is location-dependent) and NO `etaTurns` (indefinite = no completion).
+- D12 (per-unit ETA + rate breakdown): in a non-terse `list_challenges`, pick an entry with
+  `progressPerTurn > 0` that is not `indefinite`: assert `etaTurns == ceil(complexity / progressPerTurn)`
+  and that `progressBreakdown` is a `[{reason, value}]` array whose values sum to ~`progressPerTurn`
+  (±0.01 rounding). With `terse:true` the same entry keeps `etaTurns` but drops `progressBreakdown`.
+  If a second agent with different stats can see the same challenge, assert their `progressPerTurn`/
+  `etaTurns` differ when their governing stat differs (the rate is unit-relative). For an army (UM),
+  `list_challenges` entries now also carry `progressPerTurn`/`complexity` (and `etaTurns` when the rate
+  is > 0).
 - D11 (market stalls are distinct): move an agent to a location with a market (SKIP if none reachable):
   `list_challenges` there returns THREE `Ch_BuyItem` entries with three DISTINCT `id`s, each carrying
   `itemForSale.name` (assert present even with `terse:true`). `perform_challenge` with the 2nd or 3rd id
@@ -239,6 +252,14 @@ resolve_decision, end_turn, new_game.
   banner). Assert the result carries `resolveWarning` saying the index was ignored (and no `resolved`
   object) — a provided resolve that had nothing to act on, or that failed, must always be reported, never
   silently dropped.
+- G3c (decisionId guards chained resolves): whenever a decision is pending, call `get_pending_decision`
+  TWICE — assert both return the same non-empty `decisionId` (stable for one popup instance) and that
+  `game_overview.pendingDecision` carries the same id. Then
+  `resolve_decision {"optionIndex":0,"expectedDecisionId":"D-bogus-0"}`: assert a clean error saying the
+  pending decision changed / naming the CURRENT id, and that the popup is STILL open (nothing was
+  clicked — re-read `get_pending_decision`). Finally resolve with the correct `expectedDecisionId` and
+  assert it succeeds. Opportunistic variant: `end_turn {"resolveOptionIndex":0,"expectedDecisionId":
+  "D-bogus-0"}` must surface the refusal via `resolveWarning` and leave the decision pending.
 - G4 (idle-agent alert): if `end_turn` reports `blockedBy:"decision"` with an idle-agents kind, resolve it
   with `resolve_decision {"optionIndex":0}` (pass all) OR by ordering an agent, then `end_turn` advances.
   `force` does NOT skip idle: like combat, the idle alert blocks even under `force` — assert
@@ -462,6 +483,14 @@ resolve_decision, end_turn, new_game.
   mentioning "Points to win" and a "Score total") plus numeric `victoryProgress`, `avrgEnshadowment` and
   `pointsToWin`. Assert `victoryProgress` equals `game_overview.victoryProgress`, and `avrgEnshadowment`
   equals `game_overview.avrgEnshadowment`.
+- K11b (score attribution, opportunistic): whenever the breakdown string's "Enshadowed and Insane Rulers
+  and Heroes" or "Insane Rulers and Heroes" line shows a non-zero count (the number after `x`), assert
+  `details.insaneAndShadowRulersAndHeroes` / `details.insaneOnlyRulersAndHeroes` exists and its
+  `qualifiers` length equals that count (unless `truncated:true`), each qualifier being
+  `{id, name, role: ruler|hero, shadow}` with `shadow > 0.5` in the AndShadow list and `<= 0.5` in the
+  other. If any Deep One Abyssal City or Sanctum exists, assert `details.deepOneCities` lists the cities
+  with `population` and a `sanctumCount` (sanctums never score directly — the note explains). When every
+  count is zero and no Deep One settlement exists, assert `details` is absent entirely.
 - K12 (seal countdown): `game_overview.seals` and `get_player_state.seals` each have `sealsBroken`,
   `sealProgress` and (unless all seals are already broken) `nextSealAt` and `turnsToNextSeal`. Assert
   `turnsToNextSeal == nextSealAt - sealProgress`. Advance a few turns and assert `sealProgress` increased

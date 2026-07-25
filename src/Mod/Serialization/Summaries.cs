@@ -1203,17 +1203,36 @@ namespace ShadowsMcp
                 .Set("profileGain", Safe(() => c.getCompletionProfile(), 0))
                 .Set("danger", Safe(() => c.getDanger(), 0))
                 .Set("claimedBy", UnitRef(ctx, c.claimedBy));
-            if (Safe(() => c.isIndefinite(), false))
+            bool indefinite = Safe(() => c.isIndefinite(), false);
+            if (indefinite)
             {
                 o.Set("indefinite", true);
                 o.Set("heatNote", "indefinite challenge: menaceGain/profileGain are one-time completion "
                     + "values (often 0); its real effect is applied per turn while active and is stated "
                     + "in 'description' (e.g. Lay Low REDUCES menace and profile each turn).");
             }
+            // Lay Low's speed is location-dependent but neither its restriction nor its description says
+            // so — hand-written note (AbilityCatalog precedent), always emitted even in terse mode
+            // because it is the actionable line. progressPerTurn/progressBreakdown below carry the
+            // actual numbers for THIS unit at THIS location.
+            if (c is Ch_LayLow)
+                o.Set("locationNote", "Lay Low's speed depends on WHERE you lay low: the base reduction "
+                    + "is added again for each of - settlement infiltration >= 50%, location shadow >= 50%, "
+                    + "and (Ophanim god only) 100% Ophanim faith here. progressPerTurn is the actual "
+                    + "per-turn menace AND profile reduction at this location (progressBreakdown names the "
+                    + "active boosts); an infiltrated or enshadowed settlement can be 2-4x faster than an "
+                    + "untouched one.");
+            else if (c is Ch_LayLowWilderness)
+                o.Set("locationNote", "Wilderness Lay Low runs at a base rate, doubled only if the "
+                    + "settlement here is 100% infiltrated; progressPerTurn is the actual rate at this "
+                    + "location.");
             // Why the challenge is locked / what it needs — the game's own hint text (getRestriction).
-            // `valid` says whether the world preconditions are met and `validForUnit` whether THIS unit
-            // qualifies; `restriction` states the actual requirement (e.g. "Requires 100% Infiltration.
-            // Cannot perform if Ward is higher than 50%"). Combine it with the location's shadow /
+            // `valid` is the challenge's WORLD precondition (most types hard-code `return true`, e.g.
+            // Ch_LayLow); the location/settlement preconditions (infiltration %, shadow %, ward,
+            // settlement type) are checked inside validFor(unit) because the unit carries its location —
+            // so `validForUnit: false` usually means "not here / not yet", not "wrong unit type".
+            // `restriction` states the actual requirement (e.g. "Requires 100% Infiltration. Cannot
+            // perform if Ward is higher than 50%"). Combine it with the location's shadow /
             // infiltration / ward (get_location or world_summary) to see which condition is unmet.
             try
             {
@@ -1239,15 +1258,162 @@ namespace ShadowsMcp
             if (ua != null)
             {
                 o.Set("validForUnit", Safe(() => c.validFor(ua), false));
-                o.Set("progressPerTurn", Safe(() => Round2(c.getProgressPerTurn(ua, null)), 0));
-                o.Set("complexity", Safe(() => Round2(c.getComplexityAfterDifficulty()), 0));
+                // One getProgressPerTurn call feeds both the number and its itemized breakdown
+                // (base + stat + trait/item boosts) — the rate is unit-relative (stat-scaled), so
+                // the same complexity can run 7x faster for one agent than another. The breakdown
+                // rides the terse knob (includeDescription) to keep list output cheap.
+                List<ReasonMsg> reasons = includeDescription ? new List<ReasonMsg>() : null;
+                double ppt = Safe(() => c.getProgressPerTurn(ua, reasons), 0.0);
+                double cx = Safe(() => c.getComplexityAfterDifficulty(), 0.0);
+                o.Set("progressPerTurn", Round2(ppt));
+                o.Set("complexity", Round2(cx));
+                // Turns of ACTIVE work at the current rate (travel excluded); meaningless for
+                // indefinites, absent when the rate is 0.
+                if (!indefinite && ppt > 0.0)
+                    o.Set("etaTurns", (int)Math.Ceiling(cx / ppt));
+                if (reasons != null && reasons.Count > 0)
+                {
+                    JsonValue br = JsonValue.NewArray();
+                    try
+                    {
+                        foreach (ReasonMsg m in reasons)
+                            br.Add(JsonValue.NewObject().Set("reason", m.msg).Set("value", Round2(m.value)));
+                    }
+                    catch { }
+                    if (br.Count > 0) o.Set("progressBreakdown", br);
+                }
             }
             UM um = forUnit as UM;
             if (um != null)
             {
                 o.Set("validForUnit", Safe(() => c.validFor(um), false));
+                double ppt = Safe(() => c.getProgressPerTurn(um, null), 0.0);
+                double cx = Safe(() => c.getComplexityAfterDifficulty(), 0.0);
+                o.Set("progressPerTurn", Round2(ppt));
+                o.Set("complexity", Round2(cx));
+                if (!indefinite && ppt > 0.0)
+                    o.Set("etaTurns", (int)Math.Ceiling(cx / ppt));
             }
             return o;
+        }
+
+        // ---------- victory attribution ----------
+
+        /// <summary>
+        /// Names WHO/WHAT is scoring in the victory columns whose aggregates are opaque, replicating
+        /// Overmind.computeVictoryProgress()'s qualifier logic (Overmind.cs:387-470):
+        ///  - insane(+enshadowed) rulers/heroes: rulers of human settlements whose society is neither
+        ///    the Dark Empire nor Ophanim-controlled (those populations score in their own columns
+        ///    instead — the else-if chain), plus living non-commandable heroes; split on shadow > 0.5.
+        ///  - Deep One cities: only Set_DeepOneAbyssalCity.population scores; a Set_DeepOneSanctum
+        ///    never scores itself, it feeds population into a nearby abyssal city.
+        /// Returns JsonValue.Null when there is nothing to attribute (sections are also omitted
+        /// individually when empty, so a mid-game payload stays small).
+        /// </summary>
+        public static JsonValue VictoryAttribution(GameContext ctx, Map map)
+        {
+            const int Cap = 25;
+            JsonValue insaneShadow = JsonValue.NewArray();
+            JsonValue insaneOnly = JsonValue.NewArray();
+            JsonValue cities = JsonValue.NewArray();
+            int sanctums = 0;
+            bool insaneShadowTrunc = false, insaneOnlyTrunc = false;
+
+            foreach (Location location in map.locations)
+            {
+                try
+                {
+                    if (location.settlement is SettlementHuman && location.soc is Society society
+                        && !society.isDarkEmpire && !society.isOphanimControlled)
+                    {
+                        Person person = location.person();
+                        if (person != null && person.isInsane())
+                        {
+                            JsonValue q = PersonRef(person)
+                                .Set("role", "ruler")
+                                .Set("location", LocationRef(location))
+                                .Set("shadow", Round2(person.shadow));
+                            if (person.shadow > 0.5)
+                            {
+                                if (insaneShadow.Count < Cap) insaneShadow.Add(q); else insaneShadowTrunc = true;
+                            }
+                            else
+                            {
+                                if (insaneOnly.Count < Cap) insaneOnly.Add(q); else insaneOnlyTrunc = true;
+                            }
+                        }
+                    }
+                    if (location.settlement is Set_DeepOneAbyssalCity abyssal)
+                        cities.Add(JsonValue.NewObject()
+                            .Set("id", LocationId(location))
+                            .Set("name", SafeName(() => location.getName()))
+                            .Set("population", Round2(abyssal.population)));
+                    if (location.settlement is Set_DeepOneSanctum) sanctums++;
+                }
+                catch { }
+            }
+            foreach (Person p in map.persons)
+            {
+                try
+                {
+                    if (p == null || p.isDead || !(p.unit is UAG) || p.unit.isCommandable() || !p.isInsane())
+                        continue;
+                    JsonValue q = PersonRef(p)
+                        .Set("role", "hero")
+                        .Set("location", LocationRef(p.unit.location))
+                        .Set("shadow", Round2(p.shadow));
+                    if (p.shadow > 0.5)
+                    {
+                        if (insaneShadow.Count < Cap) insaneShadow.Add(q); else insaneShadowTrunc = true;
+                    }
+                    else
+                    {
+                        if (insaneOnly.Count < Cap) insaneOnly.Add(q); else insaneOnlyTrunc = true;
+                    }
+                }
+                catch { }
+            }
+
+            JsonValue details = JsonValue.NewObject();
+            bool any = false;
+            if (insaneShadow.Count > 0)
+            {
+                any = true;
+                JsonValue s = JsonValue.NewObject()
+                    .Set("pointsEach", Safe(() => map.param.victory_insaneAndShadow, 0.0))
+                    .Set("qualifiers", insaneShadow)
+                    .Set("note", "rulers of human settlements OUTSIDE the Dark Empire / Ophanim societies "
+                        + "who are insane with shadow > 0.5, plus living non-commandable heroes insane with "
+                        + "shadow > 0.5. The count drops when one dies, is cured, falls to shadow <= 0.5, "
+                        + "loses their seat, is corrupted into your own agent, or their city joins the Dark "
+                        + "Empire (its population then scores in the Dark Empire column instead).");
+                if (insaneShadowTrunc) s.Set("truncated", true);
+                details.Set("insaneAndShadowRulersAndHeroes", s);
+            }
+            if (insaneOnly.Count > 0)
+            {
+                any = true;
+                JsonValue s = JsonValue.NewObject()
+                    .Set("pointsEach", Safe(() => map.param.victory_insane, 0.0))
+                    .Set("qualifiers", insaneOnly)
+                    .Set("note", "same rules but shadow <= 0.5; enshadowing one past 0.5 moves it to the "
+                        + "higher-weighted insaneAndShadow column.");
+                if (insaneOnlyTrunc) s.Set("truncated", true);
+                details.Set("insaneOnlyRulersAndHeroes", s);
+            }
+            if (cities.Count > 0 || sanctums > 0)
+            {
+                any = true;
+                details.Set("deepOneCities", JsonValue.NewObject()
+                    .Set("cities", cities)
+                    .Set("sanctumCount", sanctums)
+                    .Set("note", "only Abyssal City population scores; a Sanctum never scores itself - it "
+                        + "periodically pushes population into a nearby abyssal city (or founds one once "
+                        + "large enough). The breakdown line only appears once its points exceed 0, and its "
+                        + "printed points are truncated to an integer (0.9 displays as 0), so early Deep One "
+                        + "investment can look like nothing is happening while it is in fact accruing."));
+            }
+            return any ? details : JsonValue.Null;
         }
 
         // ---------- player / god ----------

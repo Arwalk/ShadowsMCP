@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using Assets.Code;
 using ShadowsMcp.Core.Json;
 using ShadowsMcp.Core.Mcp;
@@ -54,6 +55,41 @@ namespace ShadowsMcp.Tools.Decisions
             return null;
         }
 
+        // ---------- decision instance ids ----------
+
+        /// <summary>
+        /// Token for the exact popup instance currently open. Popup GameObjects are created per popup
+        /// and destroyed on resolve, so the managed identity hash is stable for THIS popup's lifetime
+        /// and different for every new one — a client that read a decision can pass the token back as
+        /// expectedDecisionId and be guaranteed it answers the popup it read, not a follow-up that got
+        /// promoted from the queue in between. Kind prefix is cosmetic (readability in logs).
+        /// </summary>
+        private static string ModalDecisionId(IDecisionHandler h, GameObject blocker)
+        {
+            return "D-" + (SafeKind(h, blocker) ?? "popup") + "-" +
+                unchecked((uint)RuntimeHelpers.GetHashCode(blocker)).ToString("x");
+        }
+
+        /// <summary>Non-modal decisions (idle agents, agent combat) have no popup instance; kind + turn
+        /// identifies "this decision, this turn", which is the granularity a client can act on.</summary>
+        private static string NonModalDecisionId(INonModalDecision d, GameContext ctx)
+        {
+            return "D-" + (SafeKind(d) ?? "nonmodal") + "-t" + TurnOf(ctx);
+        }
+
+        /// <summary>The decisionId of whatever is pending right now, or null when nothing is.</summary>
+        internal static string CurrentDecisionId(GameContext ctx)
+        {
+            GameObject blocker = CurrentBlocker(ctx);
+            if (blocker != null)
+            {
+                IDecisionHandler h = Find(blocker);
+                return h != null ? ModalDecisionId(h, blocker) : null;
+            }
+            INonModalDecision nm = FirstNonModal(ctx);
+            return nm != null ? NonModalDecisionId(nm, ctx) : null;
+        }
+
         /// <summary>The open modal's GameObject, or null when nothing is blocking.</summary>
         public static GameObject CurrentBlocker(GameContext ctx)
         {
@@ -86,11 +122,7 @@ namespace ShadowsMcp.Tools.Decisions
                 if (h != null) return SafeDescribe(ctx, h, blocker);
             }
             INonModalDecision nm = FirstNonModal(ctx);
-            if (nm != null)
-            {
-                try { return nm.Describe(ctx); }
-                catch (Exception e) { return Undescribable(SafeKind(nm), e); }
-            }
+            if (nm != null) return SafeDescribeNonModal(ctx, nm);
             return JsonValue.NewObject().Set("pending", false);
         }
 
@@ -100,13 +132,28 @@ namespace ShadowsMcp.Tools.Decisions
         /// (<c>ActionTools.AttachPending</c>), where it would also mis-report a battle that did open.</summary>
         private static JsonValue SafeDescribe(GameContext ctx, IDecisionHandler h, GameObject blocker)
         {
-            try { return h.Describe(ctx, blocker); }
+            JsonValue described;
+            try { described = h.Describe(ctx, blocker); }
             catch (Exception e)
             {
-                JsonValue o = Undescribable(SafeKind(h, blocker), e);
-                try { if (blocker != null) o.Set("popupType", blocker.name); } catch { }
-                return o;
+                described = Undescribable(SafeKind(h, blocker), e);
+                try { if (blocker != null) described.Set("popupType", blocker.name); } catch { }
             }
+            // Instance token for THIS popup — pass back as resolve_decision.expectedDecisionId to
+            // guarantee the click lands on the popup that was read (chained popups get fresh ids).
+            try { described.Set("decisionId", ModalDecisionId(h, blocker)); } catch { }
+            return described;
+        }
+
+        /// <summary>Non-modal counterpart of <see cref="SafeDescribe"/>: describe without throwing and
+        /// stamp the decisionId token.</summary>
+        private static JsonValue SafeDescribeNonModal(GameContext ctx, INonModalDecision nm)
+        {
+            JsonValue described;
+            try { described = nm.Describe(ctx); }
+            catch (Exception e) { described = Undescribable(SafeKind(nm), e); }
+            try { described.Set("decisionId", NonModalDecisionId(nm, ctx)); } catch { }
+            return described;
         }
 
         /// <summary>A decision we know is pending but could not read: still actionable via force.</summary>
@@ -149,13 +196,7 @@ namespace ShadowsMcp.Tools.Decisions
                 if (h != null) return CompactOf(SafeDescribe(ctx, h, blocker), SafeKind(h, blocker), true);
             }
             INonModalDecision nm = FirstNonModal(ctx);
-            if (nm != null)
-            {
-                JsonValue full;
-                try { full = nm.Describe(ctx); }
-                catch (Exception e) { full = Undescribable(SafeKind(nm), e); }
-                return CompactOf(full, SafeKind(nm), false);
-            }
+            if (nm != null) return CompactOf(SafeDescribeNonModal(ctx, nm), SafeKind(nm), false);
             return JsonValue.Null;
         }
 
@@ -167,6 +208,7 @@ namespace ShadowsMcp.Tools.Decisions
                 .Set("hint", "call get_pending_decision, then resolve_decision");
             if (isModal) compact.Set("popupType", full["popupType"]);
             if (!full["title"].IsNull) compact.Set("title", full["title"]);
+            if (!full["decisionId"].IsNull) compact.Set("decisionId", full["decisionId"]);
             return compact;
         }
 
@@ -200,6 +242,21 @@ namespace ShadowsMcp.Tools.Decisions
         /// <summary>Answer the current decision (used by resolve_decision).</summary>
         public static ToolResult Resolve(GameContext ctx, JsonValue args)
         {
+            // Optional stale-decision guard: when the caller says WHICH decision it is answering and
+            // the pending one has changed since (a chained popup promoted from the queue, a battle
+            // opening, a load...), click NOTHING and describe what is actually open now. Without the
+            // param behaviour is unchanged. Applies to force too — force clears notices, it does not
+            // license clicking blind on a popup the caller never read.
+            string expected = args["expectedDecisionId"].AsString();
+            if (!string.IsNullOrEmpty(expected))
+            {
+                string current = CurrentDecisionId(ctx);
+                if (current == null)
+                    return ToolResult.Error("expectedDecisionId " + expected + " was given but no decision "
+                        + "is pending any more - nothing was clicked. Re-check game_overview.pendingDecision.");
+                if (!string.Equals(current, expected, StringComparison.Ordinal))
+                    return StaleDecisionError(ctx, expected, current);
+            }
             GameObject blocker = CurrentBlocker(ctx);
             if (blocker != null)
             {
@@ -209,6 +266,39 @@ namespace ShadowsMcp.Tools.Decisions
             INonModalDecision nm = FirstNonModal(ctx);
             if (nm != null) return nm.Resolve(ctx, args);
             return ToolResult.Error("no decision is pending (nothing needs your attention right now).");
+        }
+
+        /// <summary>Refusal for a mismatched expectedDecisionId, modeled on ActionTools.StaleChallengeError:
+        /// name what changed, show the decision that IS open (with its options) so recovery is one call.</summary>
+        private static ToolResult StaleDecisionError(GameContext ctx, string expected, string current)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append("the pending decision changed: you expected ").Append(expected)
+              .Append(" but the current one is ").Append(current);
+            try
+            {
+                JsonValue d = Current(ctx);
+                string kind = d["kind"].AsString();
+                string title = d["title"].AsString();
+                if (!string.IsNullOrEmpty(kind)) sb.Append(" (").Append(kind)
+                    .Append(string.IsNullOrEmpty(title) ? "" : ", \"" + title + "\"").Append(")");
+                JsonValue opts = d["options"];
+                if (opts.Count > 0)
+                {
+                    sb.Append(". Nothing was clicked. Its options: ");
+                    for (int i = 0; i < opts.Count && i < 10; i++)
+                    {
+                        if (i > 0) sb.Append(", ");
+                        sb.Append(i).Append(": ").Append(opts[i]["label"].AsString() ?? "?");
+                    }
+                    if (opts.Count > 10) sb.Append(", … (" + opts.Count + " total)");
+                }
+                else sb.Append(". Nothing was clicked");
+            }
+            catch { sb.Append(". Nothing was clicked"); }
+            sb.Append(". Re-read it (get_pending_decision or game_overview.pendingDecision) and resolve "
+                + "with the new decisionId.");
+            return ToolResult.Error(sb.ToString());
         }
 
         private static readonly JsonValue ForceArgs = JsonValue.NewObject().Set("force", true);

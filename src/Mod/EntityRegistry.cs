@@ -19,6 +19,16 @@ namespace ShadowsMcp
         private ConditionalWeakTable<object, string> _idByEntity = new ConditionalWeakTable<object, string>();
         private Dictionary<string, WeakReference> _entityById = new Dictionary<string, WeakReference>(StringComparer.Ordinal);
         private int _nextId = 1;
+        private int _epoch;
+
+        /// <summary>
+        /// Incremented every time the registry resets (new game / loaded save). Surfaced as
+        /// game_overview.idEpoch so clients can detect that cached unit ids are stale.
+        /// </summary>
+        public int Epoch
+        {
+            get { lock (_lock) return _epoch; }
+        }
 
         public string IdFor(object entity, string prefix)
         {
@@ -53,6 +63,7 @@ namespace ShadowsMcp
                 _idByEntity = new ConditionalWeakTable<object, string>();
                 _entityById = new Dictionary<string, WeakReference>(StringComparer.Ordinal);
                 _nextId = 1;
+                _epoch++;
             }
         }
     }
