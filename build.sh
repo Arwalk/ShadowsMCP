@@ -24,12 +24,21 @@ if [ "${1:-}" != "--skip-tests" ]; then
   tools/smoke-test.sh >/tmp/shadowsmcp-smoke.log 2>&1 \
     || { echo "smoke test FAILED:"; tail -30 /tmp/shadowsmcp-smoke.log; exit 1; }
   tail -1 /tmp/shadowsmcp-smoke.log
+  echo "== save-analysis smoke test =="
+  tools/save-smoke.sh >/tmp/shadowsmcp-save-smoke.log 2>&1 \
+    || { echo "save smoke test FAILED:"; tail -30 /tmp/shadowsmcp-save-smoke.log; exit 1; }
+  tail -1 /tmp/shadowsmcp-save-smoke.log
 fi
 
 # Build both configs (Release ships; Debug is kept so a readable-symbols DLL is always available).
 echo "== building mod (Debug + Release) =="
 dotnet build src/Mod -c Debug   -v q
 dotnet build src/Mod -c Release -v q
+
+# Standalone save-file analyzer (runs without the game; see README "Save analysis").
+echo "== building savecli (Debug + Release) =="
+dotnet build src/SaveCli -c Debug   -v q
+dotnet build src/SaveCli -c Release -v q
 
 # ---- payload 1: flat local install ------------------------------------------
 echo "== packaging dist/ShadowsMCP (local install) =="

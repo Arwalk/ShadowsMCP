@@ -17,25 +17,32 @@ namespace ShadowsMcp.Core.Json
 
         public static JsonValue Parse(string text)
         {
+            return Parse(text, MaxDepth);
+        }
+
+        /// <summary>Parse with a caller-chosen depth cap. Callers raising the cap far above the
+        /// default must supply the stack to match (run the parse on a thread with a larger stack).</summary>
+        public static JsonValue Parse(string text, int maxDepth)
+        {
             if (text == null) throw new JsonParseException("null input", 0);
             int pos = 0;
-            JsonValue value = ParseValue(text, ref pos, 0);
+            JsonValue value = ParseValue(text, ref pos, maxDepth);
             SkipWhitespace(text, ref pos);
             if (pos != text.Length) throw new JsonParseException("trailing characters after JSON value", pos);
             return value;
         }
 
-        private static JsonValue ParseValue(string s, ref int pos, int depth)
+        private static JsonValue ParseValue(string s, ref int pos, int depthBudget)
         {
-            if (depth > MaxDepth) throw new JsonParseException("nesting too deep", pos);
+            if (depthBudget < 0) throw new JsonParseException("nesting too deep", pos);
             SkipWhitespace(s, ref pos);
             if (pos >= s.Length) throw new JsonParseException("unexpected end of input", pos);
 
             char c = s[pos];
             switch (c)
             {
-                case '{': return ParseObject(s, ref pos, depth);
-                case '[': return ParseArray(s, ref pos, depth);
+                case '{': return ParseObject(s, ref pos, depthBudget);
+                case '[': return ParseArray(s, ref pos, depthBudget);
                 case '"': return JsonValue.Of(ParseString(s, ref pos));
                 case 't': Expect(s, ref pos, "true"); return JsonValue.True;
                 case 'f': Expect(s, ref pos, "false"); return JsonValue.False;
@@ -46,7 +53,7 @@ namespace ShadowsMcp.Core.Json
             }
         }
 
-        private static JsonValue ParseObject(string s, ref int pos, int depth)
+        private static JsonValue ParseObject(string s, ref int pos, int depthBudget)
         {
             pos++; // '{'
             JsonValue obj = JsonValue.NewObject();
@@ -60,7 +67,7 @@ namespace ShadowsMcp.Core.Json
                 SkipWhitespace(s, ref pos);
                 if (pos >= s.Length || s[pos] != ':') throw new JsonParseException("expected ':'", pos);
                 pos++;
-                obj.Set(key, ParseValue(s, ref pos, depth + 1));
+                obj.Set(key, ParseValue(s, ref pos, depthBudget - 1));
                 SkipWhitespace(s, ref pos);
                 if (pos >= s.Length) throw new JsonParseException("unterminated object", pos);
                 if (s[pos] == ',') { pos++; continue; }
@@ -69,7 +76,7 @@ namespace ShadowsMcp.Core.Json
             }
         }
 
-        private static JsonValue ParseArray(string s, ref int pos, int depth)
+        private static JsonValue ParseArray(string s, ref int pos, int depthBudget)
         {
             pos++; // '['
             JsonValue arr = JsonValue.NewArray();
@@ -77,7 +84,7 @@ namespace ShadowsMcp.Core.Json
             if (pos < s.Length && s[pos] == ']') { pos++; return arr; }
             while (true)
             {
-                arr.Add(ParseValue(s, ref pos, depth + 1));
+                arr.Add(ParseValue(s, ref pos, depthBudget - 1));
                 SkipWhitespace(s, ref pos);
                 if (pos >= s.Length) throw new JsonParseException("unterminated array", pos);
                 if (s[pos] == ',') { pos++; continue; }

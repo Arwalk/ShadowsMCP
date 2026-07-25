@@ -107,12 +107,42 @@ tools/mcp-log-report.sh game-log.jsonl                                    # rank
 Needs the .NET SDK (8+) on any OS, plus the game's assemblies:
 
 1. Copy `<game>/ShadowsOfForbiddenGods_Data/Managed/` → `lib/Managed/` (gitignored, never redistribute).
-2. `./build.sh` — runs the protocol smoke test, builds the mod (Debug + Release), and assembles
-   both `dist/ShadowsMCP/` (local install) and `dist/upload/ShadowsMCP/` (Workshop upload).
+2. `./build.sh` — runs the protocol and save-analysis smoke tests, builds the mod and savecli
+   (Debug + Release), and assembles both `dist/ShadowsMCP/` (local install) and
+   `dist/upload/ShadowsMCP/` (Workshop upload).
 
 Repo map: `src/Core/` = game-independent MCP/JSON/HTTP layer (also compiled into
-`src/TestHost/`, a Linux console host used by `tools/smoke-test.sh`); `src/Mod/` = the
-game-facing mod layer; `docs/` = game data-model reference, modding tutorial, test checklist.
+`src/TestHost/`, a Linux console host used by `tools/smoke-test.sh`); `src/SaveAnalysis/` =
+save-file reading engine shared by `src/SaveCli/` (see below) and, potentially later, the mod;
+`src/Mod/` = the game-facing mod layer; `docs/` = game data-model reference, modding tutorial,
+test checklist.
+
+## Save analysis (no game required)
+
+`savecli` reads the game's save files (`*.sv` in `ApplicationData/ShadowsForbiddenGodsSaves`)
+directly from disk — for playthrough post-mortems and state debugging without launching the game.
+Saves are a text header plus the whole `Map` object graph as FullSerializer JSON; the analyzer
+resolves the `$id`/`$ref`/`$type` reference model itself, so it needs no game assemblies.
+(`*.mapsv` files are scenario scripts, not saves.)
+
+```sh
+dotnet build src/SaveCli -c Release
+alias savecli='dotnet src/SaveCli/bin/Release/net10.0/savecli.dll'
+
+savecli list                                  # saves, newest first (--dir to override the folder)
+savecli summary quicksave                     # turn, god, panic, counts, agents, social groups
+savecli inspect quicksave 'locations[4].settlement' --depth 2   # same path syntax as the inspect tool
+savecli raw quicksave 'overmind'              # verbatim subtree, $refs left unresolved
+```
+
+Location/person/social-group indices in the output equal the live `L#`/`P#`/`SG#` ids used by the
+MCP tools, so save output cross-references playthrough transcripts. `U#`/`C#` ids are per-session
+and not recoverable from a save.
+
+The engine (`src/SaveAnalysis/`) is net472-compatible and depends only on `src/Core/Json`, so it
+can later be compiled into the mod to expose `list_saves` / `save_overview` / `inspect_save` MCP
+tools (register via `RegisterServerThread`, no live-map guard) if in-game save analysis turns out
+to be useful.
 
 ## Publishing to the Steam Workshop
 
