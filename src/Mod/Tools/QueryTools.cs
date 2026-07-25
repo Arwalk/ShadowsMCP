@@ -360,7 +360,8 @@ namespace ShadowsMcp.Tools
                 "place (pass heroUnitId). Costs one recruitment point. Archetypes specialise (intrigue = " +
                 "infiltration/rulers, might+command = combat, lore = rituals); each carries placement.eligible " +
                 "+ exampleTargets showing where it can go right now - match the pick to your need, not the " +
-                "first listed.",
+                "first listed. Each archetype's abilities array previews the rituals it unlocks once " +
+                "recruited, with prerequisites - weigh these when choosing.",
                 Schema.Object(),
                 a => WithMap(ctx, map =>
                 {
@@ -370,8 +371,8 @@ namespace ShadowsMcp.Tools
                     int cap = om.getAgentCap();
 
                     JsonValue archetypes = JsonValue.NewArray();
-                    foreach (UAE_Abstraction ab in om.agentsGeneric) archetypes.Add(Summaries.AbstractionSummary(ab, "generic", Summaries.PlacementSummary(map, ab, 4)));
-                    foreach (UAE_Abstraction ab in om.agentsUnique) archetypes.Add(Summaries.AbstractionSummary(ab, "unique", Summaries.PlacementSummary(map, ab, 4)));
+                    foreach (UAE_Abstraction ab in om.agentsGeneric) archetypes.Add(Summaries.AbstractionSummary(ctx, ab, "generic", Summaries.PlacementSummary(map, ab, 4)));
+                    foreach (UAE_Abstraction ab in om.agentsUnique) archetypes.Add(Summaries.AbstractionSummary(ctx, ab, "unique", Summaries.PlacementSummary(map, ab, 4)));
 
                     JsonValue heroes = JsonValue.NewArray();
                     foreach (Unit u in map.units)

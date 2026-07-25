@@ -216,6 +216,14 @@ resolve_decision, end_turn, new_game.
 - F8 (opportunistic): if `availableEnthrallments` reaches 0, a further `recruit_agent` errors "no
   recruitment points"; if `nEnthralled` reaches `agentCap`, it errors "agent cap reached". Test whichever
   you can reach; SKIP the rest.
+- F9 (ability previews): every archetype entry carries an `abilities` array of `{name, desc, prereq}`
+  objects previewing the rituals it unlocks at recruitment (empty array allowed — e.g. the Bandit King,
+  code -4, has no recruit-unlocked rituals and instead carries an `abilityNote` string; `abilityNote` may
+  also accompany a non-empty array). Spot-check content: the Hierophant (code -1) lists three "Preach
+  Gospel" abilities each requiring 100% infiltration; if the Aristocrat (code 12) is offered, it lists
+  "Crisis Vote: Plague" with a plague >50% prereq. (These fields are present only while the in-game
+  "Discovery mode" mod config option is off — the default. If every archetype lacks `abilities`, note that
+  Discovery mode is likely on rather than failing the check.)
 
 **G. Decisions & blocking**
 - G1: when nothing is pending, `get_pending_decision` returns `{pending:false}` and

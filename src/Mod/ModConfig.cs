@@ -10,6 +10,10 @@ namespace ShadowsMcp
         /// <summary>Listen on all interfaces (LAN-reachable). false → 127.0.0.1 only.</summary>
         public bool ListenLan = true;
 
+        /// <summary>Hide the archetype ability previews in list_recruitable_agents so an AI can
+        /// discover the game blind. false (default) → previews shown.</summary>
+        public bool DiscoveryMode = false;
+
         public int Port = 8017;
 
         /// <summary>How long an HTTP worker waits for the main thread to run one tool.</summary>

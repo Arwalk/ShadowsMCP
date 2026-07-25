@@ -95,7 +95,9 @@ is already covered) and build your strategy around exercising them. The menu:
 
 - Powers (`list_powers` / `use_power`) — costs, targets, what actually changes.
 - Recruitment (`list_recruitable_agents` / `recruit_agent`) — different archetypes, placement
-  restrictions, corrupting a hero in place.
+  restrictions, corrupting a hero in place. Each archetype's `abilities` array previews the
+  rituals it unlocks once recruited and their prerequisites — pick archetypes whose prereqs
+  your plan can actually meet.
 - Challenges (`list_challenges` / `perform_challenge`) — enshadowment, infiltration, the long
   rituals and what protects them.
 - Agent-vs-agent (`command_agent`) — attack, rob, trade, follow; the ritual-cancel-on-attack rule.

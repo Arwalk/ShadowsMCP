@@ -13,6 +13,11 @@
       "name": "Listen on LAN",
       "description": "Accept connections from other machines on your network. Off = this PC only (localhost).",
       "defaultBoolValue": "true"
+    },
+    {
+      "name": "Discovery mode",
+      "description": "Hide archetype ability previews from the AI so it discovers the game blind. Off = previews shown (default).",
+      "defaultBoolValue": "false"
     }
   ]
 }

@@ -95,6 +95,11 @@ namespace ShadowsMcp
                 Log.Info("config: listen on LAN -> " + value);
                 RestartTransport();
             }
+            if (optName == "Discovery mode" && value != _ctx.Config.DiscoveryMode)
+            {
+                _ctx.Config.DiscoveryMode = value;
+                Log.Info("config: discovery mode -> " + value);
+            }
         }
 
         // ---------- boot / shutdown (statics only) ----------

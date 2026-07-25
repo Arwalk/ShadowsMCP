@@ -206,8 +206,11 @@ namespace ShadowsMcp
 
         /// <summary>An agent archetype you can enthrall (from overmind.agentsGeneric/agentsUnique).
         /// When <paramref name="placement"/> is supplied it is attached as a "placement" object saying
-        /// where this archetype can actually be enthralled right now (see <see cref="PlacementSummary"/>).</summary>
-        public static JsonValue AbstractionSummary(UAE_Abstraction abstr, string category, JsonValue placement = null)
+        /// where this archetype can actually be enthralled right now (see <see cref="PlacementSummary"/>).
+        /// Unless the player enabled Discovery mode, an "abilities" preview of the rituals the archetype
+        /// unlocks at recruitment (see <see cref="AbilityCatalog"/>) is attached so recruitment can be
+        /// planned around prerequisites.</summary>
+        public static JsonValue AbstractionSummary(GameContext ctx, UAE_Abstraction abstr, string category, JsonValue placement = null)
         {
             JsonValue o = JsonValue.NewObject()
                 .Set("code", abstr.code)
@@ -220,6 +223,21 @@ namespace ShadowsMcp
                     .Set("command", abstr.getStatCommand()))
                 .Set("restrictions", SafeName(() => abstr.getRestrictions()))
                 .Set("desc", SafeName(() => abstr.getDesc()));
+            if (!ctx.Config.DiscoveryMode)
+            {
+                ArchetypeAbilities cat = AbilityCatalog.Get(abstr.code);
+                if (cat != null)
+                {
+                    JsonValue abilities = JsonValue.NewArray();
+                    foreach (AbilityPreview a in cat.Rituals)
+                        abilities.Add(JsonValue.NewObject()
+                            .Set("name", a.Name)
+                            .Set("desc", a.Desc)
+                            .Set("prereq", a.Prereq));
+                    o.Set("abilities", abilities);
+                    if (cat.Note != null) o.Set("abilityNote", cat.Note);
+                }
+            }
             if (placement != null) o.Set("placement", placement);
             return o;
         }
