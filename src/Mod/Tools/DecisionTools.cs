@@ -22,7 +22,8 @@ namespace ShadowsMcp.Tools
                 "popup instance - pass it to resolve_decision.expectedDecisionId to guarantee you " +
                 "answer the popup you read (chained popups reuse option indices but get fresh ids).",
                 Schema.Object(),
-                a => QueryTools.WithMap(ctx, map => ToolResult.Ok(DecisionRegistry.Current(ctx)))));
+                a => QueryTools.WithMap(ctx, map =>
+                    ToolResult.Ok(Boilerplate.CompactDecision(ctx, DecisionRegistry.Current(ctx))))));
 
             host.Register(new ToolDefinition(
                 "resolve_decision",

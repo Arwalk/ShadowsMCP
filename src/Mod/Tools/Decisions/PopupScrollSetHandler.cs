@@ -75,12 +75,8 @@ namespace ShadowsMcp.Tools.Decisions
                 .Set("text", BodyText(set))
                 .Set("selectedIndex", selected)
                 .Set("options", options)
-                .Set("note", "These options are the REAL list entries, not carousel arrows: resolve_decision " +
-                    "optionIndex picks one directly (no need to scroll). \"selected\" marks the entry the " +
-                    "game currently highlights - it is just the starting position, NOT a recommendation. " +
-                    "force=true cancels and FORFEITS the choice (e.g. a completed Cause Scandal ritual then " +
-                    "picks nobody), so prefer an optionIndex.")
-                .Set("resolveWith", "resolve_decision with optionIndex, or force=true to cancel (forfeits the choice)");
+                .Set("note", Boilerplate.NoteCarousel)
+                .Set("resolveWith", Boilerplate.RwCarousel);
         }
 
         public ToolResult Resolve(GameContext ctx, GameObject blocker, JsonValue args)

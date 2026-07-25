@@ -660,3 +660,71 @@ bodies in `QueryTools.cs`.
 - **Latent base-game bug (not fixable mod-side)**: `Rt_DarkEmpire.complete()` guards its whole effect
   block on `shadow == 1.0` EXACTLY while `validFor` accepts `> 0.99` — a cast finishing at 0.991-0.999
   "completes" with zero effect.
+
+## Agent-battle flee, game identity, Iastur endgame, treadmill signals (verified 0.8.0)
+
+- **Flee legality (PopupBattleAgent.cs:191-217)**: the retreat buttons activate only when
+  `battle.round > 1 && battle.state == 0` (left side also checks `outcome == OUTCOME_UNRESOLVED`);
+  the round-1 label is "Unable to flee until end of round 1" and the round-2 label is "If you flee
+  you will lose all your minions" (safe from round 3+). The mod's `fleeAsap` combat option loops
+  `bStep()` until exactly that condition holds, then clicks `bRetreatLeft/Right()` by side
+  (`fledLostMinions` at round 2, `retreated` at 3+, `fleeAsapEndedFirst` if the battle
+  closes/decides first).
+- **`Map.seed` is the stable identity of a game** (`public long seed`, Map.cs:149): set once at
+  worldgen, serialized, and never touched again — a save/load recreates the `Map` object but keeps
+  the seed. Since 0.8.0 `ModCore.OnMapSeen` clears one-shot state (ShownTips, boilerplate counts,
+  seen event titles) only when the seed CHANGES; entity-id epochs still bump on every map swap.
+- **`Person.isInsane()` = carries `T_Insane`** (Person.cs:617). Insanity does not strip stats,
+  minions, or the quest AI — an insane hero can keep hunting agents (the `insane_heroes_hunt` tip's
+  trigger scans living non-commandable UAs for it).
+- **Iastur endgame (God_LaughingKing.cs:143, Pr_Iastur.cs, Ch_WavesOfMadness.cs, Params.cs:1638-1640)**:
+  awakening lays "Iastur's Soul" bare at the Elder Tomb as a `Pr_Iastur` property (exists nowhere
+  before that — its presence IS the endgame signal, used by the `iastur_soul` tip). The game's own
+  text: modifier at 0% → Iastur dies (loss), 300% → win. `Ch_WavesOfMadness` charges it and applies
+  `ch_strengthenIasturMenace`/`ch_strengthenIasturProfile` = **40/40** to the performer.
+- **Treadmill / Alliance signals**: `SHADOW_DRIVEN_BACK` UnifiedMessages come from
+  `Ch_DriveBackShadow.cs:134,138` and `Ch_Consacrate.cs:91`; the mod's `RecentEventLog.CountSince`
+  (0.8.0) counts them per turn-window for the `shadow_treadmill` tip (3+ in 20 turns).
+  `Society.isAlliance` is a plain public bool (Society.cs:38); Alliance razing of enshadowed
+  settlements raises `ALLIANCE_OUTPOST` (Society.cs:653).
+
+## Ritual placement, unique archetypes, channelled heat, mid-challenge events (verified 0.9.0)
+
+- **A ritual's stored location is dead data**: item rituals are constructed against
+  `map.locations[0]` (`I_LaughingTome.cs:17-18`) and the game never reads it — `UA.
+  playerTriesToStartChallenge` (UA.cs:870) starts rituals with no location check, the UI admits
+  them regardless of tile (`UIScroll_Unit.cs:427`: `c2 is Ritual || c2.location == ua.location`),
+  and even `Task_GoToPerformChallenge.turnTick` short-circuits `challenge is Ritual` to
+  perform-in-place (Task_GoToPerformChallenge.cs:45). `Rti_DropTome.complete` uses `u.location`
+  (Rti_DropTome.cs:93-95). The mod's perform_challenge skips the travel branch for `c is Ritual`
+  since 0.9.0.
+- **Unique archetypes are consumed**: recruit codes are compile-time constants
+  (`UAE_Abstraction.cs:8-44`; -4..-1 generic/repeatable, 1..15 unique), but `createAgent` runs
+  `map.overmind.agentsUnique.Remove(this)` for every unique (e.g. Seeker at
+  `UAE_Abstraction.cs:1195-1199`) — so a previously-valid positive code legitimately stops
+  resolving. The lists are built once in `Overmind.addDefaultElements` (Overmind.cs:220-258);
+  Buccaneer/Shaman exist only with orcs enabled.
+- **Channelled heat lands at cast START**: `Task_PerformChallenge.cs:66-74` applies
+  `getCompletionMenaceAfterDifficulty()`/`getCompletionProfile()` on the first tick when
+  `isChannelled()`, and the completion block at `:166-202` explicitly skips it for channelled
+  challenges. `Ch_WavesOfMadness.isChannelled()` is true (Ch_WavesOfMadness.cs:151-154).
+- **`Settlement.isInfiltrated` is the orc-takeover flag** (Settlement.cs:24): set only by orc /
+  claim paths (`Ch_Orcs_Expand.cs:143`, `Rt_Orcs_ClaimTerritory.cs:152`, …), never by human-city
+  infiltration (`Ch_Infiltrate.cs:157-162` sets the SUB flag). `Settlement.infiltration`
+  (Settlement.cs:56-83) is the computed fraction of infiltratable subs infiltrated and forces 1.0
+  when the flag is set — so flag false + fraction 1.0 is a normal fully-infiltrated human city.
+  The mod emits derived `fullyInfiltrated` since 0.9.0.
+- **Mid-challenge events** ("Watched", "Life Continues", "Merchant of Antiquities", …) are JSON
+  `MIDCHALLENGE` events under `data/coreData/` selected by `Task_PerformChallenge.cs:239-336`:
+  gated on `map.opt_evMidCh` (Map.cs:207, from the `eventsMidChallenge` game option), skipped for
+  channelled / Lay Low / Rest / ExploreRuins, a 50% coin flip per tick plus
+  `param.ch_midchallengePeriod`, then weighted roulette over matching events. No auto-resolve
+  exists game-side; the mod's `RoutineEvents` whitelist (0.9.0) answers three curated titles under
+  the `passRoutineEvents` opt-in.
+- **A settlement can gain districts silently mid-game**: `Ch_H_BuildTemple.complete`
+  (Ch_H_BuildTemple.cs:95-134) adds a `Sub_Temple` with no UnifiedMessage (auto-infiltrated if the
+  settlement is already >= 50% infiltrated or the builder is yours); the City Palace (`Sub_City`)
+  infiltrate is gated in `Ch_Infiltrate.valid()` (Ch_Infiltrate.cs:112-129) on every OTHER
+  infiltratable sub being done — so a new district re-locks it.
+- **The "now likes X …" confirmation string is game text**: `Sel2_ForIdleHands.cs:51` /
+  `Sel2_DevilMakesWork.cs:51`, verbatim, including the broken grammar.

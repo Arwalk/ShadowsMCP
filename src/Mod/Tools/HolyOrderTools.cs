@@ -293,8 +293,10 @@ namespace ShadowsMcp.Tools
         {
             JsonValue pd = DecisionRegistry.FullOrNull(ctx);
             if (!pd.IsNull)
-                o.Set("pendingDecision", pd.Set("resolveHint",
-                    "pick an option by its index: resolve_decision with optionIndex (or end_turn with resolveOptionIndex)"));
+            {
+                Boilerplate.CompactDecision(ctx, pd);
+                o.Set("pendingDecision", pd.Set("resolveHint", Boilerplate.ResolveHint(ctx)));
+            }
             return ToolResult.Ok(o);
         }
 

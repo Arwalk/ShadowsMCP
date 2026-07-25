@@ -133,6 +133,9 @@ namespace ShadowsMcp.Tools
                 "(level-up trait pick, trading, list selections). " +
                 "Idle recurs every turn, so a count>1 batch stops on the first idle turn unless every agent " +
                 "holds a standing order or you pass passIdleAgents:true. " +
+                "passRoutineEvents:true additionally auto-answers a curated whitelist of recurring " +
+                "low-stakes mid-challenge events with a fixed sensible option (each reported in " +
+                "digest.autoResolvedEvents); all other events still block. " +
                 "count advances several turns (force=true recommended); the batch stops early with a " +
                 "stopReason on any decision, game over, the loss of one of your units " +
                 "(stopReason:\"unitLost\"), or a meaningful threat escalation (threatAlert names the agents " +
@@ -146,6 +149,7 @@ namespace ShadowsMcp.Tools
                     Schema.Prop("count", Schema.Integer("Advance up to this many turns (default 1, max 10); stops early per the rules above, and the digest covers every turn advanced.")),
                     Schema.Prop("force", Schema.Boolean("Auto-spend skill points and dismiss informational popups; never skips a real choice (see tool description). Every dismissal is named in the digest - nothing is lost.")),
                     Schema.Prop("passIdleAgents", Schema.Boolean("Bulk-pass every idle agent each turn (a visible 'Passing Turn') so a batch doesn't stop on the recurring idle alert. A conscious choice to waste those turns - prefer standing orders. Combat and events still block.")),
+                    Schema.Prop("passRoutineEvents", Schema.Boolean("Auto-answer a curated whitelist of recurring low-stakes mid-challenge events ('Watched' -> Silence them, 'Life Continues' -> Subtly disrupt the party, 'Merchant of Antiquities' -> refuse) with a fixed sensible option so they don't stop the batch. Every auto-answer is reported in digest.autoResolvedEvents (title, chose, outcome). All other events still block normally.")),
                     Schema.Prop("resolveOptionIndex", Schema.Integer("Answer the blocking decision with this option index (from pendingDecision.options), then continue ending the turn.")),
                     Schema.Prop("expectedDecisionId", Schema.String("Optional, with resolveOptionIndex: only resolve if the pending decision still matches this decisionId (from pendingDecision); a mismatch clicks nothing and is reported in resolveWarning.")),
                     Schema.Prop("stopOnThreatMotivation", Schema.Integer("Stop the batch once any hunter's motivation toward one of your agents is AT OR ABOVE this percent (level-triggered; can exceed 100 for a strongly-inclined hunter). Omit or 0 to disable."))),
@@ -273,7 +277,11 @@ namespace ShadowsMcp.Tools
             if (warning != null && !a["force"].AsBool()) return ToolResult.Error(warning);
 
             // Remote challenge: travel there first (the game uses Task_GoToPerformChallenge for this).
-            if (u.location != c.location)
+            // NEVER for rituals: a ritual acts wherever its carrier stands and its stored location is a
+            // dead placeholder (item rituals are constructed against map.locations[0] — I_LaughingTome.cs);
+            // the game itself starts rituals in place with no location check (UA.playerTriesToStartChallenge,
+            // and Task_GoToPerformChallenge converts a ritual to perform-in-place on its first tick).
+            if (!(c is Ritual) && u.location != c.location)
             {
                 Location[] path = map.getPathTo(u.location, c.location, u, !u.society.isAtWar());
                 if (path == null) path = map.getPathTo(u.location, c.location, u);
@@ -315,12 +323,15 @@ namespace ShadowsMcp.Tools
             int menaceOnCompletion, profileOnCompletion;
             try { menaceOnCompletion = c.getCompletionMenaceAfterDifficulty(); } catch { menaceOnCompletion = 0; }
             try { profileOnCompletion = c.getCompletionProfile(); } catch { profileOnCompletion = 0; }
-            return ToolResult.Ok(JsonValue.NewObject()
+            JsonValue started = JsonValue.NewObject()
                 .Set("unit", Summaries.UnitRef(ctx, u))
                 .Set("challenge", c.getName())
                 .Set("status", "started")
                 .Set("menaceGain", menaceOnCompletion)
-                .Set("profileGain", profileOnCompletion));
+                .Set("profileGain", profileOnCompletion);
+            if (c is Ritual)
+                started.Set("performedAt", Summaries.LocationRef(u.location));
+            return ToolResult.Ok(started);
         }
 
         /// <summary>A stale/unknown-challenge error that also lists challenge ids+names the agent can retry
@@ -501,7 +512,7 @@ namespace ShadowsMcp.Tools
                 int code = a["agentCode"].AsInt();
                 abstr = FindAbstraction(om, code);
                 if (abstr == null)
-                    return ToolResult.Error("unknown agent code " + code + " - see list_recruitable_agents.");
+                    return ToolResult.Error(UnknownAgentCodeError(om, code));
                 target = Summaries.ResolveId(ctx, a["locationId"].AsString()) as Location;
                 if (target == null)
                 {
@@ -569,6 +580,66 @@ namespace ShadowsMcp.Tools
             foreach (UAE_Abstraction ab in om.agentsGeneric) if (ab.code == code) return ab;
             foreach (UAE_Abstraction ab in om.agentsUnique) if (ab.code == code) return ab;
             return null;
+        }
+
+        /// <summary>The "unknown agent code" error done right: codes are stable constants, but unique
+        /// (positive-code) archetypes are REMOVED from the game's recruitable list after their single
+        /// recruitment — so a code that worked earlier legitimately stops resolving. Name the archetype,
+        /// say why it is gone, and list what is still recruitable.</summary>
+        private static string UnknownAgentCodeError(Overmind om, int code)
+        {
+            string name = ArchetypeName(code);
+            string msg;
+            if (code > 0 && name != null)
+                msg = "agent code " + code + " (" + name + ") is a unique archetype that is no longer " +
+                    "available - uniques can be recruited only ONCE per game (it was already recruited, " +
+                    "or this game's options exclude it).";
+            else if (name != null)
+                msg = "agent code " + code + " (" + name + ") is not available in this game.";
+            else
+                msg = "unknown agent code " + code + ".";
+            var parts = new List<string>();
+            try
+            {
+                foreach (UAE_Abstraction ab in om.agentsGeneric) parts.Add(ab.code + " (" + ab.getName() + ")");
+                foreach (UAE_Abstraction ab in om.agentsUnique) parts.Add(ab.code + " (" + ab.getName() + ")");
+            }
+            catch { }
+            if (parts.Count > 0)
+                msg += " Archetypes recruitable right now: " + string.Join(", ", parts) +
+                    " - see list_recruitable_agents.";
+            else
+                msg += " See list_recruitable_agents.";
+            return msg;
+        }
+
+        /// <summary>Static code → display name (mirrors UAE_Abstraction.getName()), so a CONSUMED unique
+        /// can still be named in errors after the game removed its abstraction from the list.</summary>
+        private static string ArchetypeName(int code)
+        {
+            switch (code)
+            {
+                case -4: return "A Bandit King";
+                case -3: return "A Warlock";
+                case -2: return "A Warlord";
+                case -1: return "A Heirophant";
+                case 1: return "The Baroness";
+                case 2: return "The Trickster";
+                case 3: return "The Survivor";
+                case 4: return "The Plague Doctor";
+                case 5: return "The Courtier";
+                case 6: return "The Monarch";
+                case 7: return "The Cursed";
+                case 8: return "The Harvester";
+                case 9: return "The Buccaneer";
+                case 10: return "The Dissident";
+                case 11: return "The Shaman";
+                case 12: return "The Aristocrat";
+                case 13: return "The Spellbinder";
+                case 14: return "The Exile";
+                case 15: return "The Seeker";
+                default: return null;
+            }
         }
 
         // ---------- commandable-military special orders (raze / drive back / attack) ----------
@@ -922,7 +993,8 @@ namespace ShadowsMcp.Tools
                 Decisions.DecisionRegistry.PumpQueue(ctx);
                 pending = Decisions.DecisionRegistry.FullOrNull(ctx);
             }
-            if (!pending.IsNull) result.Set("pendingDecision", pending).Set("hint", hint);
+            if (!pending.IsNull)
+                result.Set("pendingDecision", Boilerplate.CompactDecision(ctx, pending)).Set("hint", hint);
             return result;
         }
 
@@ -954,9 +1026,11 @@ namespace ShadowsMcp.Tools
         {
             private const int MaxDismissed = 20;
             private const int MaxEvents = 20;
+            private const int MaxAutoResolved = 20;
 
             private readonly JsonValue _dismissed = JsonValue.NewArray();
             private readonly JsonValue _events = JsonValue.NewArray();
+            private readonly JsonValue _autoResolved = JsonValue.NewArray();
             private JsonValue _lost = JsonValue.Null;
             private int _truncated;
 
@@ -965,6 +1039,13 @@ namespace ShadowsMcp.Tools
             {
                 Append(_dismissed, dismissedItems, MaxDismissed);
                 Append(_events, events, MaxEvents);
+            }
+
+            /// <summary>Routine events answered on the caller's behalf (passRoutineEvents) — each entry
+            /// is {turn, title, chose, outcome?} so the opt-in trades attention, not information.</summary>
+            public void AbsorbAutoResolved(JsonValue records)
+            {
+                Append(_autoResolved, records, MaxAutoResolved);
             }
 
             public void SetLost(JsonValue lost) { _lost = lost; }
@@ -982,10 +1063,12 @@ namespace ShadowsMcp.Tools
             /// <summary>The digest object, or null when the call had nothing to report.</summary>
             public JsonValue ToJson()
             {
-                if (_dismissed.Count == 0 && _events.Count == 0 && _lost.IsNull) return JsonValue.Null;
+                if (_dismissed.Count == 0 && _events.Count == 0 && _autoResolved.Count == 0 && _lost.IsNull)
+                    return JsonValue.Null;
                 JsonValue o = JsonValue.NewObject();
                 if (_dismissed.Count > 0) o.Set("dismissed", _dismissed);
                 if (_events.Count > 0) o.Set("events", _events);
+                if (_autoResolved.Count > 0) o.Set("autoResolvedEvents", _autoResolved);
                 if (!_lost.IsNull) o.Set("lost", _lost);
                 if (_truncated > 0)
                     o.Set("truncated", _truncated)
@@ -1013,7 +1096,15 @@ namespace ShadowsMcp.Tools
                 var digest1 = new TurnDigest();
                 StepStatus st1;
                 JsonValue payload1 = AdvanceOneTurn(ctx, map, world, force, applyResolve: true, args, digest1, out st1);
-                if (st1 == StepStatus.Error) return ToolResult.Error(payload1["error"].AsString());
+                if (st1 == StepStatus.Error)
+                {
+                    // The error text must carry the resolve outcome: a resolveOptionIndex that was consumed
+                    // (or ignored) on the way to this error would otherwise vanish without a trace.
+                    string msg1 = payload1["error"].AsString();
+                    string rw1 = payload1["resolveWarning"].AsString();
+                    if (rw1 != null) msg1 += " (also: " + rw1 + ")";
+                    return ToolResult.Error(msg1);
+                }
                 if (st1 == StepStatus.Advanced)
                 {
                     // Losses first: a unit you no longer have outranks any warning about one you still do.
@@ -1042,6 +1133,7 @@ namespace ShadowsMcp.Tools
             int advancedBy = 0;
             string stopReason = null;
             JsonValue firstResolved = JsonValue.Null;
+            string firstResolveWarning = null;
             // Dismissals accumulate over the WHOLE batch (this used to keep only the last turn's object,
             // so a 10-turn force batch reported turn 10 and silently dropped turns 1-9).
             int dismissTotal = 0;
@@ -1056,6 +1148,16 @@ namespace ShadowsMcp.Tools
             {
                 StepStatus st;
                 JsonValue payload = AdvanceOneTurn(ctx, map, world, force, applyResolve: i == 0, args, digest, out st);
+                // Harvest the first turn's resolve outcome HERE, whatever branch follows: the Blocked /
+                // NotAdvanced / GameOver / Error exits below used to drop it, making a consumed
+                // resolveOptionIndex look like a silent no-op ("advancedBy:0, no resolved, no warning").
+                // Captured before the transient retry too - the retry runs applyResolve:false and its
+                // payload never carries the resolve fields.
+                if (i == 0)
+                {
+                    if (!payload["resolved"].IsNull) firstResolved = payload["resolved"];
+                    firstResolveWarning = payload["resolveWarning"].AsString();
+                }
                 if (st == StepStatus.Error && payload["transient"].AsBool())
                 {
                     // Benign mid-tick collision (an event mutated a world collection): retry this turn once
@@ -1065,7 +1167,12 @@ namespace ShadowsMcp.Tools
 
                 if (st == StepStatus.Error)
                 {
-                    if (advancedBy == 0) return ToolResult.Error(payload["error"].AsString());
+                    if (advancedBy == 0)
+                    {
+                        string msg = payload["error"].AsString();
+                        if (firstResolveWarning != null) msg += " (also: " + firstResolveWarning + ")";
+                        return ToolResult.Error(msg);
+                    }
                     stopReason = "error"; break;
                 }
                 if (st == StepStatus.GameOver) { gameOverPayload = payload; stopReason = "gameOver"; break; }
@@ -1074,7 +1181,6 @@ namespace ShadowsMcp.Tools
 
                 // Advanced.
                 advancedBy++;
-                if (i == 0 && !payload["resolved"].IsNull) firstResolved = payload["resolved"];
                 JsonValue ad = payload["autoDismissed"];
                 if (!ad.IsNull)
                 {
@@ -1113,6 +1219,7 @@ namespace ShadowsMcp.Tools
                 .Set("stoppedEarly", advancedBy < count);
             if (advancedBy < count && stopReason != null) result.Set("stopReason", stopReason);
             if (!firstResolved.IsNull) result.Set("resolved", firstResolved);
+            if (firstResolveWarning != null) result.Set("resolveWarning", firstResolveWarning);
             if (dismissTotal > 0)
             {
                 JsonValue ad = JsonValue.NewObject()
@@ -1175,6 +1282,12 @@ namespace ShadowsMcp.Tools
                 ? Decisions.DecisionRegistry.AutoDismissInformational(ctx)
                 : JsonValue.Null;
             if (digest != null && !preDismiss.IsNull) digest.Absorb(preDismiss["items"], JsonValue.Null);
+
+            // Opt-in: answer whitelisted routine events (Watched, Life Continues, …) with their curated
+            // option so they don't stop the batch. Runs with or without force — it is its own opt-in —
+            // and anything not on the whitelist still blocks like any narrative event.
+            bool passRoutine = args["passRoutineEvents"].AsBool();
+            if (passRoutine && digest != null) digest.AbsorbAutoResolved(SweepRoutineEvents(ctx));
 
             // If the caller passed a choice for a blocking decision, answer it before advancing (first
             // iteration of a batch only). This lets an agent resolve popups through end_turn alone, without
@@ -1281,6 +1394,10 @@ namespace ShadowsMcp.Tools
                     "and call end_turn again.");
             }
 
+            // A routine event raised DURING the tick would otherwise surface as pendingDecision and stop
+            // the batch — sweep again post-advance so the opt-in covers both sides of the turn.
+            if (passRoutine && digest != null) digest.AbsorbAutoResolved(SweepRoutineEvents(ctx));
+
             // Name every popup force just cleared into the digest, whether or not the turn advanced.
             if (digest != null) digest.Absorb(autoDismiss["items"], JsonValue.Null);
             // One combined report for the caller: the pre-advance sweep and the post-advance sweep are a
@@ -1309,7 +1426,7 @@ namespace ShadowsMcp.Tools
                 JsonValue nowPending = Decisions.DecisionRegistry.FullOrNull(ctx);
                 if (!nowPending.IsNull &&
                     !(args["passIdleAgents"].AsBool() && nowPending["kind"].AsString() == "idleAgents"))
-                    result.Set("pendingDecision", DecorateResolveHint(nowPending));
+                    result.Set("pendingDecision", DecorateResolveHint(ctx, nowPending));
                 return result;
             }
 
@@ -1329,7 +1446,7 @@ namespace ShadowsMcp.Tools
                     .Set("advanced", false)
                     // Call combat out by name so the agent (and the batch stopReason) sees why force didn't skip it.
                     .Set("blockedBy", pending["kind"].AsString() == "combat" ? "combat" : "decision")
-                    .Set("pendingDecision", DecorateResolveHint(pending));
+                    .Set("pendingDecision", DecorateResolveHint(ctx, pending));
                 if (!resolved.IsNull) result.Set("resolved", resolved);
                 if (resolveWarning != null) result.Set("resolveWarning", resolveWarning);
                 return result;
@@ -1356,6 +1473,22 @@ namespace ShadowsMcp.Tools
             JsonValue err = JsonValue.NewObject().Set("error", "the turn did not advance: " + diag);
             if (resolveWarning != null) err.Set("resolveWarning", resolveWarning);
             return err;
+        }
+
+        /// <summary>Answer consecutive whitelisted routine events (passRoutineEvents): each successful
+        /// auto-resolve may uncover another queued popup, so loop — bounded — until the blocker is
+        /// anything but a routine event. Returns the {turn,title,chose,outcome?} records (or Null).</summary>
+        private static JsonValue SweepRoutineEvents(GameContext ctx)
+        {
+            JsonValue records = JsonValue.Null;
+            for (int guard = 0; guard < 6; guard++)
+            {
+                JsonValue rec = Decisions.PopupEventHandler.TryAutoResolveRoutine(ctx);
+                if (rec.IsNull) break;
+                if (records.IsNull) records = JsonValue.NewArray();
+                records.Add(rec);
+            }
+            return records;
         }
 
         /// <summary>Combine the pre-advance and post-advance informational sweeps into one report:
@@ -1386,12 +1519,15 @@ namespace ShadowsMcp.Tools
             return o;
         }
 
-        /// <summary>Tag a pending-decision object with how to answer it through end_turn.</summary>
-        private static JsonValue DecorateResolveHint(JsonValue pending)
+        /// <summary>Tag a pending-decision object with how to answer it through end_turn, and shrink
+        /// its repeated boilerplate (this IS a presentation point — the object goes to the client).</summary>
+        private static JsonValue DecorateResolveHint(GameContext ctx, JsonValue pending)
         {
             if (!pending.IsNull)
-                pending.Set("resolveHint", "call end_turn again with resolveOptionIndex set to the index " +
-                    "of your chosen option (or force=true to skip/dismiss where allowed).");
+            {
+                Boilerplate.CompactDecision(ctx, pending);
+                pending.Set("resolveHint", Boilerplate.ResolveHint(ctx));
+            }
             return pending;
         }
 

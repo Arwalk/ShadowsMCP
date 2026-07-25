@@ -63,9 +63,16 @@ across playthroughs. At the START of every session, read all three before touchi
   is the wider early-warning belt) and menace is huntable — manage
   those stats on purpose, not by accident.
 - Give EVERY agent a job every turn (a challenge, a move, a power target). Then `end_turn`. For
-  quiet stretches, batch with `end_turn {"count":N,"passIdleAgents":true}` and use
-  `stopOnThreatMotivation` so a hunter closing in wakes you up; read the returned `digest`
-  (events / dismissed popups / `lost` units) instead of assuming nothing happened.
+  quiet stretches, batch with `end_turn {"count":N,"passIdleAgents":true,"passRoutineEvents":true}`
+  and use `stopOnThreatMotivation` so a hunter closing in wakes you up; read the returned `digest`
+  (events / dismissed popups / auto-resolved routine events / `lost` units) instead of assuming
+  nothing happened.
+- Rituals (`Cr-` ids) are performed IN PLACE, wherever the carrying unit stands — to place an item
+  (e.g. the Laughing Tome) somewhere specific, move the carrier there first, then perform the
+  ritual. Entries marked `channelled` pay their whole menace/profile cost on the FIRST turn of
+  casting; interrupting doesn't refund it.
+- Unique archetypes (positive agent codes) can be recruited only ONCE per game — the code stays
+  valid as an identifier, but the archetype leaves the recruitable list after you take it.
 - Verify what you did actually happened: query state before and after any consequential action
   (power cast, recruitment, tenet influence). If the state didn't change the way the result claimed,
   that's an MCP finding.
@@ -93,8 +100,13 @@ across playthroughs. At the START of every session, read all three before touchi
   type for the whole game.
 - Battles: an attacked agent raises a `kind:"combat"` decision. Open it, read the odds
   (`attacker`/`defender` blocks), and decide to fight, step, or flee like it matters — fleeing a bad
-  fight is often correct. Starting a duel yourself (`command_agent` attack) cancels the target's
-  ritual even if you then retreat; that is a weapon, use it.
+  fight is often correct, and the "flee as soon as possible" option does the whole step-and-retreat
+  sequence in one call (round 2 escape costs ALL minions; round 3+ is safe). Starting a duel
+  yourself (`command_agent` attack) cancels the target's ritual even if you then retreat; that is a
+  weapon, use it.
+- Trades (`kind:"itemTrading"`): the composite options ("Take all and close", "Swap top items and
+  close") finish the whole exchange in one call and report exactly what moved — prefer them over
+  clicking individual buttons unless you need a partial trade.
 
 ### Experimentation program
 

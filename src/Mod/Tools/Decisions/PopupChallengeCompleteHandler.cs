@@ -64,8 +64,7 @@ namespace ShadowsMcp.Tools.Decisions
                 .Set("popupType", "PopupChallengeComplete")
                 .Set("title", BodyText(p))
                 .Set("options", options)
-                .Set("resolveWith", "resolve_decision with optionIndex (2 = repeat, when enabled); " +
-                    "force=true just dismisses");
+                .Set("resolveWith", Boilerplate.RwChallengeComplete);
             string flavour = FlavourText(p);
             if (!string.IsNullOrEmpty(flavour)) o.Set("flavour", flavour);
             try { if (p.unit != null) o.Set("unit", Summaries.UnitRef(ctx, p.unit)); } catch { }

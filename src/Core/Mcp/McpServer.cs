@@ -24,16 +24,23 @@ namespace ShadowsMcp.Core.Mcp
         private readonly string _serverName;
         private readonly string _serverVersion;
         private readonly string _instructions;
+        private readonly Action _onInitialize;
 
         /// <param name="instructions">Optional MCP initialize.instructions text (a standing brief the client
         /// injects into the model's context). Kept out of this game-agnostic core: the caller supplies any
         /// game-specific onboarding. When null/empty, the initialize result simply omits the field.</param>
-        public McpServer(IToolHost host, string serverName, string serverVersion, string instructions = null)
+        /// <param name="onInitialize">Optional callback invoked on every MCP initialize request — the one
+        /// protocol-level signal that a client (re)connected with a fresh context. Kept as a plain callback
+        /// so this core stays game-agnostic. Runs on the transport thread; exceptions are swallowed so a
+        /// listener can never break the handshake.</param>
+        public McpServer(IToolHost host, string serverName, string serverVersion, string instructions = null,
+            Action onInitialize = null)
         {
             _host = host;
             _serverName = serverName;
             _serverVersion = serverVersion;
             _instructions = instructions;
+            _onInitialize = onInitialize;
         }
 
         /// <summary>
@@ -114,6 +121,12 @@ namespace ShadowsMcp.Core.Mcp
 
         private JsonValue HandleInitialize(RpcRequest req)
         {
+            if (_onInitialize != null)
+            {
+                try { _onInitialize(); }
+                catch (Exception ex) { Log.Error("onInitialize listener threw", ex); }
+            }
+
             string requested = req.Params["protocolVersion"].AsString();
             string negotiated = DefaultProtocolVersion;
             foreach (string v in SupportedProtocolVersions)

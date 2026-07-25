@@ -45,6 +45,8 @@ The entire game state. Serialized wholesale into save files.
 | Member | Type | Meaning |
 |---|---|---|
 | `turn` | int | current turn number |
+| `seed` | long | worldgen seed, set once at generation and serialized — the stable identity of a *game* across save/load (Map objects are recreated on every load; `seed` is what tells "same game reloaded" from "different game"). The mod keys its one-shot state (tips, shown-once boilerplate) to it |
+| `turnUnifiedMessages` | `List<UnifiedMessage>` | the turn's status feed (idle agents, wars, seals, hero actions). **Wiped at the top of every `turnTick()`** — anything cross-turn must snapshot it before ending the turn (the mod's `RecentEventLog` does) |
 | `locations` | `List<Location>` | every location on the map |
 | `units` | `List<Unit>` | every unit (agents and armies) |
 | `persons` | `List<Person>` | every person, alive or dead |
@@ -140,7 +142,10 @@ optional `getChallenges()`. Examples: `Pr_Devastation`, `Pr_Ward`, `Pr_DeepOneCu
 ## 3. Settlements
 
 `Settlement` (abstract): `name`, `shadow` (0–1 enshadowment), `defences`, `isHuman`,
-`isInfiltrated`, `subs: List<Subsettlement>`, `getChallenges()`, `turnTick()`.
+`isInfiltrated` (a whole-settlement takeover flag set only by orc/claim paths — human-city
+infiltration sets the per-`Subsettlement` `infiltrated` flags instead, and the computed
+`infiltration` property is the fraction of infiltratable subs done, forced to 1.0 when the flag
+is set), `subs: List<Subsettlement>`, `getChallenges()`, `turnTick()`.
 
 - `SettlementHuman` adds population/prosperity mechanics and `ruler` (a `Person`, via
   `rulerIndex`). Human types: `Set_City`, `Set_MinorHuman`, `Set_DwarvenCity`,
@@ -200,7 +205,7 @@ and `Ch_HungersPromise` appends `H_TheFeast` at runtime. Always enumerate `order
 | `isDead`, `age`, `gold`, `prestige` | | vitals |
 | `shadow` | double | 0–1 corruption by the player |
 | `awareness` | double | 0–1 awareness of the shadow |
-| `sanity` / `maxSanity` | double/int | madness track |
+| `sanity` / `maxSanity` | double/int | madness track; `isInsane()` = carries the `T_Insane` trait (an insane hero keeps its quest AI and can still hunt agents — madness is not pacification) |
 | `stat_might`, `stat_lore`, `stat_intrigue`, `stat_command` | int | the four stats |
 | `level`, `XP`, `skillPoints` | int | progression |
 | `traits` | `List<Trait>` | `T_*` subclasses (94), `getName()`/effects via hooks |

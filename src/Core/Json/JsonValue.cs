@@ -83,6 +83,15 @@ namespace ShadowsMcp.Core.Json
             return Kind == JsonKind.Object && _members.ContainsKey(key);
         }
 
+        /// <summary>Remove an object member (no-op when absent). Unlike Set(key, Null), the key is
+        /// gone from the serialized output entirely.</summary>
+        public JsonValue Remove(string key)
+        {
+            RequireKind(JsonKind.Object, "Remove");
+            if (_members.Remove(key)) _keys.Remove(key);
+            return this;
+        }
+
         /// <summary>Object member lookup; returns JsonValue.Null when absent (never throws, never returns null).</summary>
         public JsonValue Get(string key)
         {

@@ -261,7 +261,10 @@ deadlock.
 **Lifetime.** All server state is static (`ModCore` has zero instance fields — see
 Lesson 4 for why). Map tracking is defensive: every hook that receives a `Map` calls the
 same `OnMapSeen`, and when the reference changes (new game, load), session entity ids are
-reset.
+reset. One subtlety: loading a save *recreates* the `Map` object for the same logical
+game, so per-game one-shot state (shown-once tips and boilerplate) is keyed to `map.seed`
+— set once at worldgen and serialized — rather than to the `Map` instance. A reload keeps
+that state; a genuinely new game (different seed) clears it.
 
 **Fidelity.** Action tools replicate the UI's guard+commit sequences verbatim — the same
 engagement/disruption checks before moving, the same claim bookkeeping before challenges,

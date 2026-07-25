@@ -98,6 +98,25 @@ namespace ShadowsMcp
             }
         }
 
+        /// <summary>How many logged events of <paramref name="type"/> (an enum name like
+        /// "SHADOW_DRIVEN_BACK", or a custom message type) happened on turn <paramref name="sinceTurn"/>
+        /// or later. Used by tip triggers to detect patterns ("the same setback keeps recurring") that no
+        /// single-turn game accessor can express.</summary>
+        public int CountSince(string type, int sinceTurn)
+        {
+            lock (_lock)
+            {
+                int n = 0;
+                for (int i = _entries.Count - 1; i >= 0; i--)
+                {
+                    Entry e = _entries[i];
+                    if (e.Turn < sinceTurn) break; // entries are appended in turn order
+                    if (string.Equals(e.Type, type, System.StringComparison.Ordinal)) n++;
+                }
+                return n;
+            }
+        }
+
         /// <summary>Drop everything — called when a new game or save is loaded.</summary>
         public void Clear()
         {

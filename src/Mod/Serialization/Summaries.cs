@@ -783,7 +783,10 @@ namespace ShadowsMcp
                     .Set("shadow", Round2(st.shadow))
                     .Set("defences", Round2(st.defences))
                     .Set("isHuman", st.isHuman)
-                    .Set("isInfiltrated", st.isInfiltrated)
+                    // NOT the game's raw isInfiltrated bool: that flag means an orc-style whole-settlement
+                    // takeover and is never set by human-city infiltration, so it read as a contradiction
+                    // next to infiltration==1.0. fullyInfiltrated is derived from the fraction instead.
+                    .Set("fullyInfiltrated", Safe(() => st.infiltration >= 1.0, false))
                     // Fraction of infiltratable sub-districts infiltrated (0..1); 1.0 == fully infiltrated.
                     // Several challenges (Enshadow, Desecrate) gate on this reaching 1.0.
                     .Set("infiltration", Round2(Safe(() => st.infiltration, 0.0)));
@@ -1193,9 +1196,15 @@ namespace ShadowsMcp
                 .Set("id", ChallengeId(ctx, c))
                 .Set("name", SafeName(() => c.getName()))
                 .Set("type", c.GetType().Name)
-                .Set("isRitual", c is Ritual)
-                .Set("location", LocationRef(c.location))
-                .Set("valid", Safe(() => c.valid(), false))
+                .Set("isRitual", c is Ritual);
+            // A ritual acts wherever its carrier stands; its stored location is a dead placeholder the
+            // game never reads (item rituals are constructed against map.locations[0]) — emitting it sent
+            // agents marching to an irrelevant hex. Location challenges keep their real location.
+            if (c is Ritual)
+                o.Set("performsAt", "the unit's current location (rituals are performed in place, wherever the carrier stands)");
+            else
+                o.Set("location", LocationRef(c.location));
+            o.Set("valid", Safe(() => c.valid(), false))
                 // The heat the unit actually receives on completion (what Task_PerformChallenge applies
                 // and the in-game UI shows) — NOT Challenge.getMenace()/getProfile(), which are the
                 // engine AI's utility-scoring inputs and can be negative or wildly off from applied heat.
@@ -1210,6 +1219,16 @@ namespace ShadowsMcp
                 o.Set("heatNote", "indefinite challenge: menaceGain/profileGain are one-time completion "
                     + "values (often 0); its real effect is applied per turn while active and is stated "
                     + "in 'description' (e.g. Lay Low REDUCES menace and profile each turn).");
+            }
+            // Channelled casts pay their whole heat bill up front (Task_PerformChallenge applies the
+            // completion menace/profile on the FIRST casting tick and skips it at completion) — without
+            // this note the listed gains read like completion costs an interrupt would avoid.
+            if (Safe(() => c.isChannelled(), false))
+            {
+                o.Set("channelled", true);
+                o.Set("heatNote", "channelled: the listed menaceGain/profileGain are applied IN FULL on "
+                    + "the first turn of casting (interrupting or abandoning does NOT spare them), and "
+                    + "nothing further is applied on completion.");
             }
             // Lay Low's speed is location-dependent but neither its restriction nor its description says
             // so — hand-written note (AbilityCatalog precedent), always emitted even in terse mode
@@ -1238,6 +1257,23 @@ namespace ShadowsMcp
             {
                 string restriction = c.getRestriction();
                 if (!string.IsNullOrEmpty(restriction)) o.Set("restriction", restriction);
+            }
+            catch { }
+            // Exclusive challenge actively in use by ANOTHER unit (the exact predicate perform_challenge
+            // rejects on): surface it in restriction so "only one at a time" is visible before the call,
+            // not just as an error after it. claimedBy alone proved too easy to overlook (game 7's agent
+            // hit the Lay Low rejection blind).
+            try
+            {
+                if (!c.allowMultipleUsers() && c.claimedBy != null && c.claimedBy != forUnit &&
+                    c.claimedBy.location == c.location &&
+                    c.claimedBy.task is Task_PerformChallenge activeClaim && activeClaim.challenge == c)
+                {
+                    string inUse = "currently being performed by " + c.claimedBy.getName() +
+                        " - only one unit may perform this at a time";
+                    string existing = o["restriction"].AsString();
+                    o.Set("restriction", string.IsNullOrEmpty(existing) ? inUse : existing + ". " + inUse);
+                }
             }
             catch { }
             // Market stalls: always show the wares (even terse) — the three stalls share one display
@@ -2224,7 +2260,7 @@ namespace ShadowsMcp
                     .Set("type", st.GetType().Name)
                     .Set("shadow", Round2(st.shadow))
                     .Set("defences", Round2(st.defences))
-                    .Set("isInfiltrated", st.isInfiltrated)
+                    .Set("fullyInfiltrated", Safe(() => st.infiltration >= 1.0, false))
                     .Set("infiltration", Round2(Safe(() => st.infiltration, 0.0)));
                 SettlementHuman sh = st as SettlementHuman;
                 if (sh != null) sset.Set("population", sh.population);

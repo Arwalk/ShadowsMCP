@@ -185,7 +185,12 @@ namespace ShadowsMcp.Tools
                         if (!row["orders"].IsNull) anyOrders = true;
                         return row;
                     });
-                    if (anyOrders) payload.Set("ordersLegend", Summaries.OrdersLegend);
+                    if (anyOrders)
+                    {
+                        string legend = Boilerplate.Emit(ctx, "ordersLegend", Summaries.OrdersLegend,
+                            "orders legend shown earlier; get_unit carries full per-order call hints");
+                        if (legend != null) payload.Set("ordersLegend", legend);
+                    }
                     return ToolResult.Ok(payload);
                 })));
 
@@ -794,8 +799,10 @@ namespace ShadowsMcp.Tools
         {
             JsonValue pd = DecisionRegistry.FullOrNull(ctx);
             if (!pd.IsNull)
-                pd.Set("resolveHint", "answer via end_turn resolveOptionIndex (or resolve_decision " +
-                    "optionIndex); force=true dismisses only pure notices.");
+            {
+                Boilerplate.CompactDecision(ctx, pd);
+                pd.Set("resolveHint", Boilerplate.ResolveHint(ctx));
+            }
             return pd;
         }
 

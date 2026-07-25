@@ -53,11 +53,8 @@ namespace ShadowsMcp.Tools.Decisions
                 .Set("title", idle.Count + (idle.Count == 1 ? " of your agents is idle" : " of your agents are idle"))
                 .Set("idleAgents", agents)
                 .Set("options", options)
-                .Set("note", "These agents have no order and will waste this turn. Give them orders with " +
-                    "move_unit / perform_challenge / use_power (then they leave this list), or resolve_decision " +
-                    "with optionIndex 0 to pass them all. force will NOT pass them: like combat, the idle alert " +
-                    "blocks even under force (end_turn passIdleAgents:true is the explicit multi-turn escape).")
-                .Set("resolveWith", "resolve_decision with optionIndex 0 (order them instead if you can — force does not pass idle)");
+                .Set("note", Boilerplate.NoteIdleAgents)
+                .Set("resolveWith", Boilerplate.RwIdleAgents);
         }
 
         public ToolResult Resolve(GameContext ctx, JsonValue args)

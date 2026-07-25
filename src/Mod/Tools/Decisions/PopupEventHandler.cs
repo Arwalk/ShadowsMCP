@@ -40,8 +40,7 @@ namespace ShadowsMcp.Tools.Decisions
                 .Set("popupType", "PopupEvent")
                 .Set("title", Title(popup))
                 .Set("description", Description(popup))
-                .Set("resolveWith", "pick an option by index: end_turn with resolveOptionIndex " +
-                    "(or resolve_decision with optionIndex); force=true takes the first available choice");
+                .Set("resolveWith", Boilerplate.RwEvent);
 
             JsonValue options = JsonValue.NewArray();
             Button[] buttons = popup.options;
@@ -143,6 +142,67 @@ namespace ShadowsMcp.Tools.Decisions
                     "Check the relevant unit/location if you need to confirm.");
             }
             return ToolResult.Ok(ok);
+        }
+
+        /// <summary>Auto-resolve the CURRENT blocker iff it is a routine (whitelisted) narrative event —
+        /// the machinery behind end_turn's <c>passRoutineEvents</c> opt-in. The curated option is found
+        /// by LABEL (never index) and only clicked while enabled; any mismatch — unlisted title, missing
+        /// or disabled option, not a PopupEvent — returns Null and the popup blocks normally, so a game
+        /// data change degrades to the old behavior instead of a wrong click. Returns
+        /// <c>{turn, title, chose, outcome?}</c> on success and records the resolution in the event log.</summary>
+        internal static JsonValue TryAutoResolveRoutine(GameContext ctx)
+        {
+            try
+            {
+                DecisionRegistry.PumpQueue(ctx);
+                UIMaster ui = SafeUi(ctx);
+                if (ui == null || ui.blocker == null) return JsonValue.Null;
+                GameObject blocker = ui.blocker;
+                PopupEvent popup = blocker.GetComponent<PopupEvent>();
+                if (popup == null) return JsonValue.Null;
+
+                string title = Title(popup);
+                string want = RoutineEvents.PreferredOption(title);
+                if (want == null) return JsonValue.Null;
+
+                Button target = null;
+                if (popup.options != null)
+                {
+                    foreach (Button b in popup.options)
+                    {
+                        if (b == null || !b.gameObject.activeSelf) continue;
+                        string lbl = ButtonLabel(b);
+                        if (lbl != null && string.Equals(lbl.Trim(), want, StringComparison.OrdinalIgnoreCase))
+                        {
+                            target = b;
+                            break;
+                        }
+                    }
+                }
+                if (target == null || !IsEnabled(target)) return JsonValue.Null;
+
+                target.onClick.Invoke();
+                if (!(blocker == null || ui.blocker != blocker)) return JsonValue.Null; // click didn't take
+
+                // Keep the 0.8.0 recurring-event compaction consistent: this title has now been "seen"
+                // even though it was never described to the client this time.
+                try { ctx.SeenEventTitles.Add(title); } catch { }
+
+                JsonValue rec = JsonValue.NewObject()
+                    .Set("turn", TurnOf(ctx))
+                    .Set("title", title)
+                    .Set("chose", want);
+                string outcomeText = ReadAndDismissOutcomeMsg(ctx, ui);
+                if (outcomeText != null) rec.Set("outcome", FirstLine(outcomeText));
+                try
+                {
+                    ctx.Events.RecordPopup(TurnOf(ctx), "event", title,
+                        "auto-resolved (passRoutineEvents): " + want);
+                }
+                catch { }
+                return rec;
+            }
+            catch { return JsonValue.Null; }
         }
 
         /// <summary>If the new live blocker is exactly a <see cref="PopupMsg"/> (the outcome-description

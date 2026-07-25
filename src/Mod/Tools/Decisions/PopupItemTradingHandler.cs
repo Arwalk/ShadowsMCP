@@ -51,6 +51,23 @@ namespace ShadowsMcp.Tools.Decisions
                     .Set("label", PopupButtons.LabelFor(buttons[i]))
                     .Set("enabled", true));
 
+            // Composite one-click verbs at FIXED synthetic indices after the real buttons (count and
+            // count+1), each listed only while its underlying button exists. A playtest showed nearly
+            // every trade ends in exactly these sequences, at 2-4 round trips apiece.
+            if (FindByMethod(buttons, "bTakeAll") != null)
+                options.Add(JsonValue.NewObject()
+                    .Set("index", buttons.Count)
+                    .Set("label", "Take all and close (take ALL of side B's items + gold, then Done; stays " +
+                        "open with a warning instead if side A's inventory can't fit everything)")
+                    .Set("enabled", true)
+                    .Set("composite", true));
+            if (FindByMethod(buttons, "swapTop") != null)
+                options.Add(JsonValue.NewObject()
+                    .Set("index", buttons.Count + 1)
+                    .Set("label", "Swap top items and close (side A's top item goes to B, B's top to A, then Done)")
+                    .Set("enabled", true)
+                    .Set("composite", true));
+
             return JsonValue.NewObject()
                 .Set("pending", true)
                 .Set("kind", "itemTrading")
@@ -58,11 +75,8 @@ namespace ShadowsMcp.Tools.Decisions
                 .Set("title", TitleText(p))
                 .Set("sides", SidesJson(p))
                 .Set("options", options)
-                .Set("note", "Items move by carousel, not free drag: to give one of side A's items to side B, " +
-                    "rotate side A until that item is on top (item[0], marked \"top\"), then use the 'swap the " +
-                    "top item of each side' option. 'Take all' pulls every item + gold from side B to side A. " +
-                    "Resolve with resolve_decision optionIndex; force=true just finishes/closes (Done).")
-                .Set("resolveWith", "resolve_decision with optionIndex, or force=true to finish/close");
+                .Set("note", Boilerplate.NoteItemTrading)
+                .Set("resolveWith", Boilerplate.RwItemTrading);
         }
 
         public ToolResult Resolve(GameContext ctx, GameObject blocker, JsonValue args)
@@ -85,9 +99,15 @@ namespace ShadowsMcp.Tools.Decisions
 
             List<Button> buttons = PopupButtons.Enumerate(blocker);
             int wanted = args["optionIndex"].AsInt(-1);
+
+            // The composite verbs live at the fixed synthetic indices right after the real buttons.
+            if (wanted == buttons.Count || wanted == buttons.Count + 1)
+                return ResolveComposite(ui, blocker, buttons, wanted == buttons.Count ? "bTakeAll" : "swapTop");
+
             if (wanted < 0 || wanted >= buttons.Count)
                 return ToolResult.Error("optionIndex " + wanted + " is out of range (there are " +
-                    buttons.Count + (buttons.Count == 1 ? " option)." : " options)."));
+                    buttons.Count + " button option(s), plus the composite options at indices " +
+                    buttons.Count + " and " + (buttons.Count + 1) + ").");
 
             string label = PopupButtons.LabelFor(buttons[wanted]);
             string method = PopupButtons.FirstPersistentMethod(buttons[wanted]);
@@ -116,32 +136,108 @@ namespace ShadowsMcp.Tools.Decisions
                 if (p != null)
                 {
                     o.Set("sides", SidesJson(p));
-
-                    List<string> itemsA1 = ItemNames(p.traderA);
-                    List<string> itemsB1 = ItemNames(p.traderB);
-                    JsonValue movedToA = NamesJson(MultisetDiff(itemsA1, itemsA0));
-                    JsonValue movedToB = NamesJson(MultisetDiff(itemsB1, itemsB0));
-                    if (movedToA.Count > 0) o.Set("itemsMovedToA", movedToA);
-                    if (movedToB.Count > 0) o.Set("itemsMovedToB", movedToB);
-                    int goldDeltaA = GoldOf(p.traderA) - goldA0;
-                    int goldDeltaB = GoldOf(p.traderB) - goldB0;
-                    if (goldDeltaA != 0) o.Set("goldDeltaA", goldDeltaA);
-                    if (goldDeltaB != 0) o.Set("goldDeltaB", goldDeltaB);
-
-                    if (method == "bTakeAll")
-                    {
-                        int leftBehind = ItemNames(p.traderB).Count;
-                        if (leftBehind > 0)
-                            o.Set("warning", "receiver's inventory was full - " + leftBehind + " item(s) could " +
-                                "not be taken and remain with " + (TraderName(p, false) ?? "side B") +
-                                (goldDeltaA > 0 ? " (their gold still transferred)" : "") +
-                                ". Free a slot on side A (swap an item away) and Take All again to get the rest.");
-                        else if (movedToA.Count == 0 && goldDeltaA == 0)
-                            o.Set("warning", "nothing moved - side B had no items or gold to take.");
-                    }
+                    DiffAndWarn(o, p, itemsA0, itemsB0, goldA0, goldB0, method);
                 }
             }
             return ToolResult.Ok(o);
+        }
+
+        /// <summary>One-click composite: perform the exchange (Take All / swap-top) and then Done, the
+        /// sequence a playtest showed nearly every trade ends in anyway. The action button is re-found by
+        /// its wired method name — never by index — so Unity button-list drift between Describe and
+        /// Resolve yields a clean re-read error instead of a mis-click. A Take All that could not fit
+        /// everything does NOT close: the agent gets the warning and can free a slot and take again,
+        /// which silent closing would have made impossible.</summary>
+        private ToolResult ResolveComposite(UIMaster ui, GameObject blocker, List<Button> buttons, string method)
+        {
+            Button action = FindByMethod(buttons, method);
+            if (action == null)
+                return ToolResult.Error("the '" + (method == "bTakeAll" ? "Take all and close" : "Swap top items and close") +
+                    "' option is not available on this trade window any more - re-read get_pending_decision.");
+
+            PopupItemTrading pre = blocker.GetComponent<PopupItemTrading>();
+            if (pre == null) return ToolResult.Error("the trade window is no longer open.");
+            List<string> itemsA0 = ItemNames(pre.traderA);
+            List<string> itemsB0 = ItemNames(pre.traderB);
+            int goldA0 = GoldOf(pre.traderA);
+            int goldB0 = GoldOf(pre.traderB);
+
+            string label = method == "bTakeAll" ? "Take all and close" : "Swap top items and close";
+            action.onClick.Invoke();
+
+            JsonValue o = JsonValue.NewObject()
+                .Set("resolved", true)
+                .Set("kind", "itemTrading")
+                .Set("clicked", label)
+                .Set("steps", JsonValue.NewArray().Add(method).Add("dismiss"));
+
+            // Diff while the popup is still open (the exchange itself never closes it).
+            bool exchangeClosed = blocker == null || ui == null || ui.blocker != blocker;
+            if (!exchangeClosed)
+            {
+                PopupItemTrading p = blocker.GetComponent<PopupItemTrading>();
+                if (p != null)
+                {
+                    DiffAndWarn(o, p, itemsA0, itemsB0, goldA0, goldB0, method);
+                    if (method == "bTakeAll" && ItemNames(p.traderB).Count > 0)
+                    {
+                        // Partial take: keep the window open so the rest is still reachable.
+                        o.Set("closed", false)
+                         .Set("sides", SidesJson(p))
+                         .Set("note", "not closed, so you can free a slot on side A (swap an item away) " +
+                            "and Take All again to get the rest - or resolve the 'Done' option to close anyway.");
+                        return ToolResult.Ok(o);
+                    }
+                    try { p.dismiss(); } catch { }
+                }
+            }
+
+            bool closed = blocker == null || ui == null || ui.blocker != blocker;
+            o.Set("closed", closed);
+            if (closed && ui != null && ui.blocker != null)
+                o.Set("nextDecision", "another decision is now pending - call get_pending_decision to see it");
+            else if (!closed)
+                o.Set("warning", "could not close the trade window - it is still open.");
+            return ToolResult.Ok(o);
+        }
+
+        /// <summary>Attach the movement diff (items/gold per side) and the Take-All warnings to a resolve
+        /// result. Shared by the single-button path and the composite verbs so the "receiver full" logic
+        /// exists exactly once.</summary>
+        private static void DiffAndWarn(JsonValue o, PopupItemTrading p, List<string> itemsA0,
+            List<string> itemsB0, int goldA0, int goldB0, string method)
+        {
+            List<string> itemsA1 = ItemNames(p.traderA);
+            List<string> itemsB1 = ItemNames(p.traderB);
+            JsonValue movedToA = NamesJson(MultisetDiff(itemsA1, itemsA0));
+            JsonValue movedToB = NamesJson(MultisetDiff(itemsB1, itemsB0));
+            if (movedToA.Count > 0) o.Set("itemsMovedToA", movedToA);
+            if (movedToB.Count > 0) o.Set("itemsMovedToB", movedToB);
+            int goldDeltaA = GoldOf(p.traderA) - goldA0;
+            int goldDeltaB = GoldOf(p.traderB) - goldB0;
+            if (goldDeltaA != 0) o.Set("goldDeltaA", goldDeltaA);
+            if (goldDeltaB != 0) o.Set("goldDeltaB", goldDeltaB);
+
+            if (method == "bTakeAll")
+            {
+                int leftBehind = ItemNames(p.traderB).Count;
+                if (leftBehind > 0)
+                    o.Set("warning", "receiver's inventory was full - " + leftBehind + " item(s) could " +
+                        "not be taken and remain with " + (TraderName(p, false) ?? "side B") +
+                        (goldDeltaA > 0 ? " (their gold still transferred)" : "") +
+                        ". Free a slot on side A (swap an item away) and Take All again to get the rest.");
+                else if (movedToA.Count == 0 && goldDeltaA == 0)
+                    o.Set("warning", "nothing moved - side B had no items or gold to take.");
+            }
+        }
+
+        /// <summary>The enumerated button whose persistent onClick target is <paramref name="method"/>.</summary>
+        private static Button FindByMethod(List<Button> buttons, string method)
+        {
+            foreach (Button b in buttons)
+                if (string.Equals(PopupButtons.FirstPersistentMethod(b), method, StringComparison.Ordinal))
+                    return b;
+            return null;
         }
 
         // ---------- reading popup fields ----------

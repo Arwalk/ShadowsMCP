@@ -75,12 +75,8 @@ namespace ShadowsMcp.Tools.Decisions
              .Set("defender", SideJson(b, b.def, youDef));
 
             o.Set("options", OptionsJson(BuildActions(p)));
-            o.Set("note", "A multi-round duel. 'Fight to the end' resolves the whole battle in one call " +
-                "(pick it when your dangerEstimate beats theirs); 'Step one exchange' advances a single round " +
-                "so you can watch the odds and then flee. Flee/Retreat unlock from round 2 — round 2 is Flee " +
-                "(you lose ALL your minions), round 3+ is a safe Retreat. Winning opens a 'Loot the Fallen " +
-                "Foe' trade next. force=true fights to the end.");
-            return o.Set("resolveWith", "resolve_decision with optionIndex, or force=true to fight to the end");
+            o.Set("note", Boilerplate.NoteCombat);
+            return o.Set("resolveWith", Boilerplate.RwCombat);
         }
 
         public ToolResult Resolve(GameContext ctx, GameObject blocker, JsonValue args)
@@ -136,6 +132,8 @@ namespace ShadowsMcp.Tools.Decisions
                     try { if (youAtt) p.bRetreatLeft(); else p.bRetreatRight(); }
                     catch (Exception e) { return ToolResult.Error("retreat failed: " + e.Message); }
                     return ClosedResult(ui, blocker, b, "fled");
+                case "fleeAsap":
+                    return FleeAsap(ui, blocker, p, b, youAtt);
                 case "minionUp":
                     try { if (youAtt) p.bAttMoveUp(); else p.bDefMoveUp(); } catch { }
                     return StateResult(ui, blocker, p, b, "reordered");
@@ -151,7 +149,8 @@ namespace ShadowsMcp.Tools.Decisions
         /// <summary>Press Step until this popup closes (bStep advances an exchange, then once the battle is
         /// decided the next press applies the outcome and removes the blocker). Capped so a stuck state can't
         /// spin forever.</summary>
-        private ToolResult FightToEnd(UIMaster ui, GameObject blocker, PopupBattleAgent p, BattleAgents b)
+        private ToolResult FightToEnd(UIMaster ui, GameObject blocker, PopupBattleAgent p, BattleAgents b,
+            string how = "foughtToEnd")
         {
             for (int i = 0; i < StepCap; i++)
             {
@@ -159,7 +158,33 @@ namespace ShadowsMcp.Tools.Decisions
                 try { p.bStep(); }
                 catch (Exception e) { return ToolResult.Error("battle step failed: " + e.Message); }
             }
-            return ClosedResult(ui, blocker, b, "foughtToEnd");
+            return ClosedResult(ui, blocker, b, how);
+        }
+
+        /// <summary>Press Step until fleeing is legal (round 2+, top of round, still unresolved — the exact
+        /// condition <c>PopupBattleAgent.populate</c> uses to activate its retreat buttons), then flee.
+        /// The one-call escape for an outmatched agent, so it never has to burn HP stepping manually while
+        /// waiting for the flee window. If the battle is decided before flee unlocks (your agent can die in
+        /// round 1), the remaining steps apply the outcome and the result says so ("fleeAsapEndedFirst") —
+        /// the caller must not assume the agent escaped.</summary>
+        private ToolResult FleeAsap(UIMaster ui, GameObject blocker, PopupBattleAgent p, BattleAgents b, bool youAtt)
+        {
+            for (int i = 0; i < StepCap; i++)
+            {
+                if (blocker == null || ui == null || ui.blocker != blocker)
+                    return ClosedResult(ui, blocker, b, "fleeAsapEndedFirst"); // closed before flee was legal
+                if (b.outcome != BattleAgents.OUTCOME_UNRESOLVED || p.complete)
+                    return FightToEnd(ui, blocker, p, b, "fleeAsapEndedFirst"); // decided: apply outcome & close
+                if (b.round > 1 && b.state == 0)
+                {
+                    try { if (youAtt) p.bRetreatLeft(); else p.bRetreatRight(); }
+                    catch (Exception e) { return ToolResult.Error("retreat failed: " + e.Message); }
+                    return ClosedResult(ui, blocker, b, b.round == 2 ? "fledLostMinions" : "retreated");
+                }
+                try { p.bStep(); }
+                catch (Exception e) { return ToolResult.Error("battle step failed: " + e.Message); }
+            }
+            return StateResult(ui, blocker, p, b, "fleeAsapStepCap"); // cap safety: popup may still be open
         }
 
         /// <summary>Result for an action that closed the battle (flee/fight-to-end/close): reports the outcome
@@ -246,6 +271,22 @@ namespace ShadowsMcp.Tools.Decisions
                 acts.Add(new Act { Action = "minionUp", Label = "Reorder: swap your front minion with the 2nd (changes who absorbs blows first)" });
                 acts.Add(new Act { Action = "minionDown", Label = "Reorder: swap your front minion with the 3rd" });
             }
+
+            // One-call escape hatch, born from a playtest where outmatched agents died stepping exchange
+            // by exchange: auto-step until fleeing becomes legal, then flee. Appended LAST so the
+            // established indices (0=fight, 1=step, conditional flee/reorder) never shift.
+            if (you != null && alive && b.outcome == BattleAgents.OUTCOME_UNRESOLVED)
+                acts.Add(new Act
+                {
+                    Action = "fleeAsap",
+                    Label = b.round <= 1
+                          ? "Flee as soon as possible (auto-steps through round 1, flees at round 2 — you " +
+                            "LOSE ALL your minions; if the battle ends first, the outcome applies instead)"
+                        : b.round == 2 && b.state == 0
+                          ? "Flee as soon as possible (flees right now — you LOSE ALL your minions)"
+                          : "Flee as soon as possible (steps to the next round top, then withdraws — " +
+                            "safe from round 3, minions kept)",
+                });
 
             return acts;
         }

@@ -138,9 +138,13 @@ resolve_decision, end_turn, new_game.
   hero-side "good" challenge (e.g. `Ch_CombatBanditry` — the game hides `isGoodTernary()==1` entries from
   agents), and that `perform_challenge` on such an id (if you have one cached) errors with "heroes-only".
   If no such challenge exists nearby, SKIP.
-- D5d (item rituals visible): if any of your agents carries a ritual-granting item (e.g. Iastur's Laughing
-  Tome, a Horde Banner — check `get_unit`'s person items), assert `list_challenges` for it lists the item's
-  ritual(s) in `unitRituals` tagged `fromItem`, and that `perform_challenge` accepts the `Cr-` id. Else SKIP.
+- D5d (item rituals visible AND performed in place): if any of your agents carries a ritual-granting item
+  (e.g. Iastur's Laughing Tome, a Horde Banner — check `get_unit`'s person items), assert `list_challenges`
+  for it lists the item's ritual(s) in `unitRituals` tagged `fromItem`, that each ritual entry carries a
+  `performsAt` marker saying it runs at the unit's CURRENT location and NO `location` field (item rituals
+  used to report a bogus far-away hex), and that `perform_challenge` on the `Cr-` id starts IMMEDIATELY in
+  place: the result must say `status:"started"` with a `performedAt` naming the unit's current location —
+  any "travelling to …" status for a ritual is a FAIL. Else SKIP.
 - D5b (nothing silently filtered): in the `performableOnly:true` call of D5, if the unfiltered call had
   more entries, assert the result carries `hiddenNotPerformable` with a `count` equal to the difference and
   `items:[{id,name,restriction?}]` naming what was hidden (plus a `hint`). This is how gated families
@@ -179,6 +183,16 @@ resolve_decision, end_turn, new_game.
   `etaTurns` differ when their governing stat differs (the rate is unit-relative). For an army (UM),
   `list_challenges` entries now also carry `progressPerTurn`/`complexity` (and `etaTurns` when the rate
   is > 0).
+- D13 (channelled heat is start-time, and says so): find a challenge/ritual entry with `channelled:true`
+  (channelled spells, e.g. Iastur's Waves of Madness; SKIP if none listed). Assert it carries a `heatNote`
+  stating the listed `menaceGain`/`profileGain` are applied in FULL on the first turn of casting and that
+  interrupting does not spare them. Opportunistic deep-check: start one and assert the unit's
+  menace/profile jump by the advertised amounts on the FIRST end_turn, not on completion.
+- D10b (exclusive challenge names its performer): when a single-user challenge (e.g. Lay Low) is actively
+  being performed by one of your agents, `list_challenges` for a SECOND agent at that location must show
+  the entry with a `restriction` containing "currently being performed by <name>" (and `claimedBy` set);
+  `perform_challenge` by the second agent then errors with the same performer name. SKIP if you never have
+  two co-located agents wanting the same exclusive challenge.
 - D11 (market stalls are distinct): move an agent to a location with a market (SKIP if none reachable):
   `list_challenges` there returns THREE `Ch_BuyItem` entries with three DISTINCT `id`s, each carrying
   `itemForSale.name` (assert present even with `terse:true`). `perform_challenge` with the 2nd or 3rd id
@@ -229,6 +243,11 @@ resolve_decision, end_turn, new_game.
 - F8 (opportunistic): if `availableEnthrallments` reaches 0, a further `recruit_agent` errors "no
   recruitment points"; if `nEnthralled` reaches `agentCap`, it errors "agent cap reached". Test whichever
   you can reach; SKIP the rest.
+- F10 (consumed uniques are explained, opportunistic): after successfully recruiting a UNIQUE archetype
+  (positive `code`, e.g. 15 The Seeker), call `recruit_agent` again with the same code. Assert the error
+  says the archetype "is a unique archetype" recruitable "only ONCE per game" (NOT a bare "unknown agent
+  code") and lists the archetypes still recruitable as `code (name)` pairs. Codes themselves are stable
+  constants — only the availability changes. SKIP if no unique was recruited this run.
 - F9 (ability previews): every archetype entry carries an `abilities` array of `{name, desc, prereq}`
   objects previewing the rituals it unlocks at recruitment (empty array allowed — e.g. the Bandit King,
   code -4, has no recruit-unlocked rituals and instead carries an `abilityNote` string; `abilityNote` may
@@ -290,6 +309,14 @@ resolve_decision, end_turn, new_game.
   moved; when side A's inventory is full and side B still holds items, a `warning` naming how many items
   could NOT be taken (the base game silently skips them; gold still transfers). "clicked Take All" with no
   movement fields and no warning is a FAIL.
+- G6e (composite trade verbs, opportunistic): in any `kind:"itemTrading"` decision, assert the `options`
+  list ALSO carries synthetic entries after the real buttons — "Take all and close" at index
+  `<real button count>` and/or "Swap top items and close" at `<real button count>+1`, each flagged
+  `composite:true` (each is listed only when its underlying button exists). Resolve the take-all composite
+  and assert the result reports `steps:["bTakeAll","dismiss"]`, the movement fields of G6b, and
+  `closed:true` (plus `nextDecision` if a follow-up popup chained). Exception: when side A's inventory
+  can't fit everything, the composite must NOT close — assert `closed:false` with the leftover `warning`
+  and a `note` explaining how to take the rest. SKIP if no trade appears.
 - G6c (event outcomes are never silent): whenever you resolve a narrative `kind:"event"` choice, assert the
   result carries — besides `chose` — EITHER `outcomeText` (the outcome description the game rolled, read
   and cleared for you) OR an explicit `outcome` field stating the choice applied one of its weighted
@@ -300,6 +327,14 @@ resolve_decision, end_turn, new_game.
   completed `challenge` {id,name}. Resolve index 2 when enabled and assert the unit's task became the
   challenge again (`get_unit`); when disabled, assert index 2 returns a clean error (NOT a silent
   dismiss). Assert `end_turn {"force":true}` does NOT auto-dismiss this popup (it holds a real choice).
+- G12 (routine events auto-resolve under the opt-in, opportunistic): if a whitelisted routine event
+  ("Watched", "Life Continues", "Merchant of Antiquities") appears during a
+  `end_turn {"count":N,"passRoutineEvents":true,...}` batch, assert the batch does NOT stop on it and the
+  result's `digest.autoResolvedEvents` contains an entry with that `title`, the `chose` label (the curated
+  option: Silence them / Subtly disrupt the party / the refusal), a `turn`, and possibly an `outcome`;
+  `get_recent_events` must also record the auto-resolution. A NON-whitelisted `kind:"event"` popup must
+  still stop the batch even with the flag set. Without the flag, whitelisted events must still block as
+  before. SKIP if no routine event fires.
 - G11 (cancelled tasks surface in the digest): if a unit's in-progress challenge/ritual is ever
   invalidated mid-cast (e.g. its location's requirements degrade), assert the `end_turn` result's
   `digest.events` contains a `TASK_CANCELLED` entry naming the unit and challenge — the unit going idle
@@ -400,6 +435,14 @@ resolve_decision, end_turn, new_game.
   `resolve_decision {"force":true}` and assert pending becomes false. The on-disk write (`Autosave_*.sv`) is
   host-verified only — the MCP surface reads no save file (see `docs/manual-test-checklist.md` §7). If the run
   can't reach turn 15 within budget, SKIP with the reached turn noted.
+- H9 (batch resolve is acknowledged even when the batch doesn't advance): with a decision pending that
+  `end_turn` can answer (an idle-agents alert is the easiest to arrange — leave an agent idle), call
+  `end_turn {"count":3,"resolveOptionIndex":0}`. Assert the result carries a `resolved` object (or a
+  `resolveWarning` explaining why the resolve was ignored/failed) **even if** `advancedBy` is 0 or the
+  batch stopped on turn 1 — and that a batch Error result appends the resolveWarning text to its message.
+  A batch result with neither `resolved` nor `resolveWarning` after a provided `resolveOptionIndex` is a
+  FAIL (this was the 0.7.0 silent-drop bug). Variant: `end_turn {"count":3,"resolveOptionIndex":0}` with
+  NOTHING pending must carry the G3b `resolveWarning` too.
 
 **I. Robustness / soak**
 - I1: run `end_turn {"force":true,"passIdleAgents":true}` for ~5–10 turns in a row; assert it never stalls
@@ -452,7 +495,10 @@ resolve_decision, end_turn, new_game.
   Assert present.
 - K3 (settlement economy): find a human settlement (`list_locations`, then a `get_location` whose
   `settlement.isHuman` is true) and assert `settlement.population` (number) and `settlement.food` (object)
-  are present. If no human settlement turns up, SKIP.
+  are present. Also assert the settlement carries `fullyInfiltrated` (a bool derived from the infiltration
+  fraction) and NOT the old raw `isInfiltrated` key (which meant orc-style takeover and contradicted
+  `infiltration:1.0` on fully-infiltrated human cities); same two assertions on a `world_summary` row.
+  If no human settlement turns up, SKIP.
 - K4 (person sheet): `get_person` on any `P*` returns `traits` and `items` as arrays of `{name, desc}`
   objects, plus `xp`, `relationships` and `alerts`. Assert a trait entry has a `name` field.
 - K5 (agent internals): `get_unit` on one of your agents (`list_units {"scope":"mine"}`) returns an `agent`
@@ -519,7 +565,29 @@ resolve_decision, end_turn, new_game.
   assert each entry is `{id, title, body}` and that its `id` resolves
   via `get_tips {"id":...}`, and that the same tip does NOT reappear on the next same-tool call (one-shot per
   game). If none appears within the run, SKIP with a note. (The core-mechanics primer also ships in the
-  server's `initialize` instructions, which this checklist does not read directly.)
+  server's `initialize` instructions, which this checklist does not read directly.) NOT opportunistic:
+  independently of whether any fires, assert the `get_tips` index includes the four 0.8.0 contextual ids
+  `insane_heroes_hunt`, `shadow_treadmill`, `alliance_razing` and `iastur_soul`, and that each returns a
+  `body` via `get_tips {"id":...}`.
+- K17 (one-shot tips survive a same-game reload, opportunistic/host-assisted): contextual tips are one-shot
+  per GAME (keyed to the map seed), not per Map object — if the host loads a save of the SAME game mid-run
+  (not agent-forcible; the host's Player.log logs "same game: one-shot tips kept"), assert tips that
+  already fired do NOT re-fire afterwards. Conversely after `new_game` (a different seed — see O2), the
+  one-shot set is fresh. SKIP unless a reload happens.
+- K18 (boilerplate is shown once, partly opportunistic): the FIRST decision of a kind (itemTrading /
+  idleAgents / combat / event) carries its full `note` and `resolveWith` strings; subsequent decisions of
+  the SAME kind in the same session carry a short brief `note` and OMIT `resolveWith` (the brief still
+  states the resolve call shape — nothing needed to act is lost). Same rule for `list_units`'
+  `ordersLegend` and the `resolveHint` on banner-carrying tools. Opportunistic parts: every ~10th
+  suppressed repeat re-emits the full text, and an MCP reconnect (`initialize`) resets all keys to full —
+  assert if you can observe either; otherwise assert just the first/brief transition (needs ≥2 decisions
+  of one kind; SKIP if never seen twice).
+- K19 (recurring narrative events are compacted, opportunistic): when a `kind:"event"` decision with a
+  TITLE you have already seen this session appears again, assert its `description` is truncated to the
+  dynamic tail (e.g. the "…performing challenge…, progress N/M" line) plus the marker
+  "(recurring event; full text shown earlier)", while its `options` (labels, descriptions, `enabled`) stay
+  complete. A never-before-seen title must always carry the full description. SKIP if no event title
+  repeats.
 
 **L. Commandable-army orders (`command_army`)**
 - L1 (error, wrong unit type): pick one of your agents (a `UA`, `kind:"agent"` from `list_units
@@ -575,8 +643,10 @@ control (M0, M6–M9): move an agent onto a tile that holds a hostile hero — h
   `battles` + per-battle `verdict` via `get_pending_decision`), `resolve_decision {"optionIndex":0}`. Assert
   the result reports the battle opened, and a follow-up `get_pending_decision` now returns
   `popupType:"PopupBattleAgent"` with `attacker`/`defender` blocks (name, hp, attack, minions), `round`/
-  `state`, and an `options` list containing "fight to the end" and "step" (plus flee/retreat only from round
-  2). Else SKIP.
+  `state`, and an `options` list containing "fight to the end", "step", AND — appended LAST, so the
+  existing indices are unchanged — a "flee as soon as possible" option (id `fleeAsap`, present from round
+  1 while your side is alive and the battle undecided; its label spells out the round-2 "lose ALL minions"
+  cost vs the safe round-3+ retreat). Direct flee/retreat buttons still appear only from round 2. Else SKIP.
 - M4 (opportunistic, resolve the battle): from the open battle menu, `resolve_decision` with the fight-to-the-
   end option (or `{"force":true}`); assert it closes with an `outcome` and, on a win, a `victor`/`defeated`
   (and possibly a chained "Loot the Fallen Foe" `PopupItemTrading` as the next `pendingDecision`). Confirm the
@@ -608,6 +678,12 @@ control (M0, M6–M9): move an agent onto a tile that holds a hostile hero — h
   the call, and assert the result reports `profileGained`/`menaceGained`, that the two stats rose by those
   amounts, and that a `PopupItemTrading` decision is returned inline. A second `rob` in the same 5 turns must
   then fail with the cooldown error. Else SKIP.
+- M10 (opportunistic, flee-as-soon-as-possible): in any open `PopupBattleAgent` you'd rather not fight,
+  resolve the `fleeAsap` option (see M3). Assert the battle stops blocking `end_turn` and the result's
+  `action` is one of: `retreated` (fled at round 3+), `fledLostMinions` (fled at round 2 — then assert
+  `get_unit` shows the agent's `agent.minions` is now empty), or `fleeAsapEndedFirst` (the battle closed or
+  was decided before fleeing unlocked — the result then reports the final state instead). A
+  `fleeAsapStepCap` fallback must still report the live battle state, never hang. Else SKIP.
 
 **N. Holy-order doctrine (`influence_holy_order_tenet`, `oppose_divinity`)** — if `list_holy_orders` is
 empty, mark N1–N8 SKIP. Spending influence is irreversible; that is fine on this expendable game.

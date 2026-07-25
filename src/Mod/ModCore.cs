@@ -137,7 +137,9 @@ namespace ShadowsMcp
 
                 // The core mechanics primer becomes the MCP initialize.instructions (always-on onboarding);
                 // situational tips ride game_overview / end_turn, and get_tips is the on-demand catalog.
-                _server = new McpServer(_host, "shadows-mcp", ModVersion, TipEngine.BuildInstructions());
+                // initialize doubles as the "client context is fresh" signal: re-emit shown-once boilerplate.
+                _server = new McpServer(_host, "shadows-mcp", ModVersion, TipEngine.BuildInstructions(),
+                    () => _ctx.RequestBoilerplateReset());
                 RestartTransport();
             }
             catch (Exception ex)
@@ -175,8 +177,24 @@ namespace ShadowsMcp
                 _ctx.Map = map;
                 _ctx.Registry.Reset(); // new game or loaded save: session ids start over
                 _ctx.Events.Clear();   // ...and the recent-events feed, so events never leak between games
-                _ctx.ShownTips.Clear(); // ...and the one-shot contextual tips, so they can fire again next game
-                Log.Info("tracking map (turn " + map.turn + ") - entity ids reset");
+
+                // One-shot teaching state (tips, boilerplate, event prose) is keyed to the WORLD, not the
+                // Map instance: Map.seed is generated once and serialized with the world, so a reload or a
+                // mid-session Map swap of the same game keeps the sets (no re-spamming texts the agent
+                // already read), while a genuinely different world clears them. seed==0 (edge/legacy saves)
+                // degrades to the old always-clear behavior.
+                long seed = 0;
+                try { seed = map.seed; } catch { }
+                bool sameGame = seed != 0 && seed == _ctx.KnownMapSeed;
+                if (!sameGame)
+                {
+                    _ctx.ShownTips.Clear();
+                    _ctx.BoilerplateCounts.Clear();
+                    _ctx.SeenEventTitles.Clear();
+                }
+                _ctx.KnownMapSeed = seed;
+                Log.Info("tracking map (turn " + map.turn + ") - entity ids reset" +
+                    (sameGame ? " (same game: one-shot tips kept)" : ""));
             }
         }
 

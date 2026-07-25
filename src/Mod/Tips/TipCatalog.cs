@@ -287,6 +287,47 @@ namespace ShadowsMcp.Tips
                 "enshadowing the order's settlements, and an agent can also fund an order to add half the cash " +
                 "as influence."),
 
+            Ctx("insane_heroes_hunt", "Insane heroes still hunt you", "tactics", AnyInsaneHero,
+                "A hero has gone insane - madness is NOT pacification; insane heroes keep hunting your agents.",
+                "A hero in the world has gone insane. Do not treat that as neutralised: madness does not " +
+                "pacify a hero. An insane hero keeps its stats, minions and quest AI, and often keeps hunting " +
+                "your agents at high motivation - the practical difference is who it also endangers (its own " +
+                "side) and that human rulers may eventually execute it. If an insane hero is hunting one of " +
+                "your agents, treat it exactly like a sane hunter: check get_threats, pull the agent out of " +
+                "range or lie low, or kill the hero. Driving heroes mad is a tool for wrecking human society, " +
+                "not a defence for an exposed agent."),
+
+            Ctx("shadow_treadmill", "Heroes are erasing your shadow", "infiltration", ShadowTreadmill,
+                "Shadow keeps getting driven back where you spread it - break the treadmill, don't out-grind it.",
+                "Heroes have repeatedly driven back your shadow in the last stretch of turns (see " +
+                "get_recent_events, type SHADOW_DRIVEN_BACK). Re-enshadowing the same places while cleansers " +
+                "work is a treadmill: they remove it about as fast as you add it, and your agents pay profile " +
+                "and menace for every pass while the heroes pay nothing. Break the loop instead: kill or " +
+                "divert the cleansing heroes (attack them, give them worse problems elsewhere), spread shadow " +
+                "somewhere they are not watching, or enshadow the local RULERS - heroes at 100% personal " +
+                "shadow stop cleansing altogether, and an enshadowed ruler stops inviting the defence in."),
+
+            Ctx("alliance_razing", "The Alliance razes what you corrupted", "faction", AllianceActive,
+                "The Alliance destroys enshadowed settlements and executes insane rulers - your score dies with them.",
+                "The Alliance is active, and it does not merely resist you - it AMPUTATES: enshadowed " +
+                "settlements are razed and replaced with clean outposts, and insane or fallen rulers are " +
+                "deposed or executed. Every razed settlement and every executed enshadowed ruler is score you " +
+                "lose (check get_victory_breakdown for which qualifiers your points rest on). Near Alliance " +
+                "territory, favour assets it cannot raze or redeem: kill its crusading armies before they " +
+                "arrive, keep your highest-value enshadowed rulers defended or use them before they are " +
+                "purged, and put new corruption far from the shieldwall rather than adjacent to it."),
+
+            Ctx("iastur_soul", "Iastur: the Soul at the Tomb decides the game", "god", IasturSoulPresent,
+                "Iastur's Soul now exists at the Tomb: 300% charge = victory, 0% = defeat - escort the performers.",
+                "Your awakening has laid Iastur's Soul bare at the Elder Tomb, and the endgame is now a single " +
+                "meter: raise the Iastur's Soul modifier to 300% and you WIN outright; let it fall to 0% and " +
+                "Iastur dies and you LOSE, regardless of points. Your side raises it by performing the Waves " +
+                "of Madness challenge at the Tomb - each performance also adds +40 menace and +40 profile to " +
+                "the performer, so performers become prime hunting targets - while heroes and humanity work " +
+                "it back down. The Tomb starts undefended: escort your performing agents past hunters, keep " +
+                "replacements coming, and treat any hero or army heading for the Tomb as the most important " +
+                "threat on the map. Points-scoring elsewhere is now secondary to this one location."),
+
             // ---------- REFERENCE-ONLY: available via get_tips, no automatic trigger ----------
             RefDyn("tags", "Tags (NPC motivation)", "politics",
                 "Tags are likes/dislikes that add or subtract motivation for a task - the lever hierophants pull.",
@@ -566,6 +607,57 @@ namespace ShadowsMcp.Tips
                 HolyOrder ho = sg as HolyOrder;
                 if (ho == null) continue;
                 try { if (ho.influenceElder >= ho.influenceElderReq) return true; } catch { }
+            }
+            return false;
+        }
+
+        // Fires when any living hero (a non-commandable UA) has gone insane (Person.isInsane). Insane
+        // heroes keep their quest AI and often keep hunting agents - the trap the tip warns about.
+        private static bool AnyInsaneHero(GameContext c)
+        {
+            Map m = c != null ? c.Map : null;
+            if (m == null || m.units == null) return false;
+            foreach (Unit u in m.units)
+            {
+                UA hero = u as UA;
+                if (hero == null || hero.isDead || hero.isCommandable()) continue;
+                try { if (hero.person != null && hero.person.isInsane()) return true; } catch { }
+            }
+            return false;
+        }
+
+        // Fires when heroes have driven shadow back 3+ times inside the last 20 turns - read from the
+        // mod's own event log, since no single-turn game accessor can express "this keeps happening".
+        private static bool ShadowTreadmill(GameContext c)
+        {
+            Map m = c != null ? c.Map : null;
+            if (m == null || c.Events == null) return false;
+            return c.Events.CountSince("SHADOW_DRIVEN_BACK", m.turn - 20) >= 3;
+        }
+
+        // Fires when the Alliance has formed (complements the reference-only 'alliance' tip: this one is
+        // about what the Alliance does to score qualifiers you already banked).
+        private static bool AllianceActive(GameContext c)
+        {
+            Map m = c != null ? c.Map : null;
+            if (m == null || m.socialGroups == null) return false;
+            foreach (SocialGroup sg in m.socialGroups)
+                if (sg is Society s && s.isAlliance) return true;
+            return false;
+        }
+
+        // Fires once Iastur's awakening has laid the Soul bare at the Elder Tomb - the Pr_Iastur property
+        // exists nowhere until God_LaughingKing's awakening places it, so its presence IS the endgame signal.
+        private static bool IasturSoulPresent(GameContext c)
+        {
+            if (!GodIsLaughingKing(c)) return false;
+            Map m = c.Map;
+            if (m == null || m.locations == null) return false;
+            foreach (Location l in m.locations)
+            {
+                if (l == null || l.properties == null) continue;
+                foreach (Property p in l.properties)
+                    if (p is Pr_Iastur) return true;
             }
             return false;
         }

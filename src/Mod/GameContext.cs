@@ -31,11 +31,49 @@ namespace ShadowsMcp
         public readonly RecentEventLog Events = new RecentEventLog();
 
         /// <summary>Ids of contextual tips already surfaced this game (the mod-side analogue of the base
-        /// game's HintSystem.hasShown[]). A tip fires at most once per game. Reset on new game / load
-        /// alongside <see cref="Registry"/> / <see cref="Events"/> (see ModCore.OnMapSeen), so one-shot
-        /// tips never leak across games loaded in the same process. Touched only on the main thread
-        /// (single-flighted by the dispatcher), so a plain HashSet needs no lock.</summary>
+        /// game's HintSystem.hasShown[]). A tip fires at most once per game. Cleared only when a
+        /// genuinely different game is loaded (Map.seed changed - see ModCore.OnMapSeen), NOT on every
+        /// Map-instance swap: reloading or mid-session Map replacement of the same world must not
+        /// re-spam tips the agent already read. Touched only on the main thread (single-flighted by
+        /// the dispatcher), so a plain HashSet needs no lock.</summary>
         public readonly HashSet<string> ShownTips = new HashSet<string>();
+
+        /// <summary>Per-boilerplate-key emission counters for the shown-once machinery (see
+        /// <see cref="Boilerplate"/>): fixed how-to texts (trading carousel note, resolve hints,
+        /// orders legend...) are sent in full the first time, then shrunk/omitted, with periodic
+        /// full re-emissions. Same lifecycle as <see cref="ShownTips"/> (cleared on a new world,
+        /// kept across same-game Map swaps). Main-thread only.</summary>
+        public readonly Dictionary<string, int> BoilerplateCounts = new Dictionary<string, int>();
+
+        /// <summary>Titles of narrative event popups (kind "event") already rendered in full this
+        /// game. A recurring event of the same title re-renders with only its dynamic tail (the
+        /// "X is performing challenge Y, progress N/M" line) - the static prose was already paid
+        /// for. Same lifecycle as <see cref="ShownTips"/>. Main-thread only.</summary>
+        public readonly HashSet<string> SeenEventTitles = new HashSet<string>();
+
+        /// <summary>Map.seed of the world the one-shot sets above belong to (0 = none tracked yet).
+        /// The seed is generated once per world and serialized with it, so it is identical across
+        /// every Map instance of the same logical game - the stable identity that distinguishes
+        /// "same game, new Map object" (keep the sets) from "different game" (clear them).</summary>
+        public long KnownMapSeed;
+
+        // The MCP initialize request arrives on the HTTP worker thread while all the shown-once
+        // state above is main-thread-only, so the reconnect signal crosses over as a lone volatile
+        // flag: initialize raises it, and the next main-thread Boilerplate emission consumes it
+        // (clearing the counters so a fresh-context client gets the full texts again).
+        private volatile bool _boilerplateReset;
+
+        /// <summary>Signal (from any thread) that the MCP client re-initialized and its context is
+        /// presumed gone: all shown-once boilerplate should be re-emitted in full.</summary>
+        public void RequestBoilerplateReset() { _boilerplateReset = true; }
+
+        /// <summary>Consume the reconnect signal (main thread). True at most once per initialize.</summary>
+        public bool ConsumeBoilerplateReset()
+        {
+            if (!_boilerplateReset) return false;
+            _boilerplateReset = false;
+            return true;
+        }
 
         /// <summary>The last decision banner stamped onto a tool result (see GameToolHost.Stamp).
         /// While the same decision stays pending, repeat stamps shrink to a one-liner — the full
