@@ -558,7 +558,9 @@ resolve_decision, end_turn, new_game.
   {"id":"infiltration"}` returns one tip with a `body` string, and `get_tips {"id":"menace"}` and `get_tips
   {"id":"profile"}` each return a `body` that names the huntable thresholds (50 / 25); `get_tips
   {"category":"god"}` returns a `tips` array (all in that topic); `get_tips {"id":"nope"}` returns a clean
-  "unknown tip id" error (isError). Assert all.
+  "unknown tip id" error (isError). Assert all. If playing Iastur, also assert `get_tips {"id":"iastur_regen"}`
+  returns a `body` noting that the in-game hint popup is WRONG about regen stopping while the Tome is unread
+  (the real rule is half rate) — do not report that tip-vs-popup mismatch as a defect; the popup is the stale one.
 - K16 (contextual tips, opportunistic): a `tips` array may appear on `game_overview` and/or `end_turn` when a
   mechanic first becomes relevant (world panic crossing a threshold, a war starting, an agent entering the
   menace/profile danger band → the `agent_exposed` tip, a god- or faction-specific rule). If one appears,

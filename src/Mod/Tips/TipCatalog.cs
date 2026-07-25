@@ -240,7 +240,8 @@ namespace ShadowsMcp.Tips
                 "while the Laughing Tome is being read by mortal eyes: held unbound by a ruler or an independent " +
                 "hero (your own agents' reading does not count), or present in a location as the 'Laughing " +
                 "King's Tome' modifier. While it is unread, your power regenerates at only HALF the normal " +
-                "rate - keep the Tome in play."),
+                "rate - keep the Tome in play. Note: the game's own hint popup wrongly claims regen stops " +
+                "entirely while the Tome is unread; the game code halves it. Trust this tip, not the popup."),
 
             CtxDyn("ophanim_faith", "Ophanim: faith growth", "god", GodIsOphanim, OphanimFaithBody,
                 "Ophanim's Faith grows from fear of shadow - fastest from shadow in a location itself."),
