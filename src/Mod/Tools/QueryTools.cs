@@ -446,7 +446,8 @@ namespace ShadowsMcp.Tools
                 + "to plan a move. Pass terse=true to drop the long prose descriptions, performableOnly=true "
                 + "to list only what this unit can act on right now (anything filtered out is summarized in "
                 + "hiddenNotPerformable so nothing is silently dropped). Interchangeable duplicate offers "
-                + "(e.g. two market stalls selling the same item) collapse into one entry with a 'copies' count.",
+                + "(e.g. two market stalls selling the same item) collapse into one entry with a 'copies' count. "
+                + "A 'heroOnly' block names enemy-side challenges present here that your agents can never perform.",
                 Schema.Object(
                     Schema.Prop("unitId", Schema.String("Unit id, e.g. U17"), required: true),
                     Schema.Prop("locationId", Schema.String("Look at this location instead of the unit's current one")),
@@ -565,12 +566,24 @@ namespace ShadowsMcp.Tools
                         }
                     }
                     JsonValue arr = JsonValue.NewArray();
+                    // Hero-side challenges are excluded from the actionable list (the game UI hides
+                    // them from agents too), but count and name them so this tool and the stale-id
+                    // error agree about what EXISTS at a location - unflagged invisibility read as
+                    // "the mod is hiding content" (G14-#14/#24).
+                    var heroOnlyNames = new HashSet<string>();
+                    JsonValue heroOnlyItems = JsonValue.NewArray();
                     foreach (Challenge c in loc.GetChallenges())
                     {
                         // The game shows an agent only non-"good" challenges (UIScroll_Unit filters
                         // isGoodTernary()==1 from BOTH its valid and invalid sections): a hero-side
                         // challenge like Combat Banditry would undo the player's own work. Mirror that.
-                        if (uaF != null && Summaries.IsHeroOnly(c)) continue;
+                        if (uaF != null && Summaries.IsHeroOnly(c))
+                        {
+                            string hn = Summaries.ChallengeName(c);
+                            if (hn != null && heroOnlyNames.Add(hn) && heroOnlyItems.Count < 12)
+                                heroOnlyItems.Add(JsonValue.Of(hn));
+                            continue;
+                        }
                         // For an army the game UI offers no location challenges at all — only the
                         // subclasses that explicitly implement validFor(UM) are genuinely army-usable.
                         if (umF != null && !Summaries.OverridesValidForUM(c)) continue;
@@ -583,6 +596,14 @@ namespace ShadowsMcp.Tools
                         .Set("location", Summaries.LocationRef(loc))
                         .Set("challenges", arr)
                         .Set("unitRituals", rituals);
+                    if (heroOnlyNames.Count > 0)
+                        result.Set("heroOnly", JsonValue.NewObject()
+                            .Set("count", heroOnlyNames.Count)
+                            .Set("names", heroOnlyItems)
+                            .Set("note", "heroes-only challenges also present at this location - " +
+                                "enemy/neutral content your agents can NEVER perform (a hard rule, " +
+                                "not a restriction to work around); named so location content is " +
+                                "never invisible."));
                     if (hiddenCount > 0)
                     {
                         JsonValue hidden = JsonValue.NewObject()

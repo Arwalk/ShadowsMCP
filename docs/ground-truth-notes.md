@@ -680,8 +680,18 @@ bodies in `QueryTools.cs`.
 - **Iastur endgame (God_LaughingKing.cs:143, Pr_Iastur.cs, Ch_WavesOfMadness.cs, Params.cs:1638-1640)**:
   awakening lays "Iastur's Soul" bare at the Elder Tomb as a `Pr_Iastur` property (exists nowhere
   before that — its presence IS the endgame signal, used by the `iastur_soul` tip). The game's own
-  text: modifier at 0% → Iastur dies (loss), 300% → win. `Ch_WavesOfMadness` charges it and applies
+  text: modifier at 0% → Iastur dies (loss), 300% → win. `Ch_WavesOfMadness` applies
   `ch_strengthenIasturMenace`/`ch_strengthenIasturProfile` = **40/40** to the performer.
+  **CORRECTION (0.12.0, after two playtests watched the meter sit at 100%)**: the 0.8.0 claim here
+  that Waves of Madness "charges it" was wrong, and so is the game's own 300%-win text. NOTHING in
+  the game raises `Pr_Iastur.charge`: the only writers are `God_LaughingKing.cs:133-134` (created
+  at 100) and `Ch_BindIastur.complete` (Ch_BindIastur.cs:99-116), which SUBTRACTS a param-scaled
+  amount after `overmind.power` absorbs what it can, and calls `overmind.defeat(...)` at
+  `charge <= 0`. There is no `>= 300` check anywhere. `Ch_WavesOfMadness.complete`
+  (Ch_WavesOfMadness.cs:105-139) only calls `goInsane()` on the nearest param-fraction of eligible
+  persons — which pays off through `Overmind.computeVictoryProgress` (Overmind.cs:426-467,
+  `victory_insane` per insane ruler/hero, `victory_insaneAndShadow` when enshadowed ≥ 0.5). The
+  Soul modifier is loss-only; the tip/`mechanicsNote`/`outcomeNote` say so since 0.12.0.
 - **Treadmill / Alliance signals**: `SHADOW_DRIVEN_BACK` UnifiedMessages come from
   `Ch_DriveBackShadow.cs:134,138` and `Ch_Consacrate.cs:91`; the mod's `RecentEventLog.CountSince`
   (0.8.0) counts them per turn-window for the `shadow_treadmill` tip (3+ in 20 turns).
@@ -728,3 +738,39 @@ bodies in `QueryTools.cs`.
   infiltratable sub being done — so a new district re-locks it.
 - **The "now likes X …" confirmation string is game text**: `Sel2_ForIdleHands.cs:51` /
   `Sel2_DevilMakesWork.cs:51`, verbatim, including the broken grammar.
+
+## Trading caps, discard sides, repeat predicate, minion stats, force spends (verified 0.12.0)
+
+- **Gold-capped trades**: `PrefabStore.popItemTrade(a, b, text, maxA, maxB)` populates
+  `PopupItemTrading.maxTradeA/maxTradeB` (PopupItemTrading.cs:61-63, default -1 = uncapped) with
+  `initialGoldA/B` snapshots; every gold button (`bSwapGoldA1/2/3`, `bSwapGoldB1/2/3`,
+  PopupItemTrading.cs:291-385) clamps so the RUNNING TOTAL moved never exceeds the cap, and
+  `bTakeAll` (:204-225) routes its gold through `bSwapGoldA1` — so items are never capped, gold
+  always is. `Ch_AccessVaultLimited.complete` passes `param.ch_accessVaultMinorLimit` as maxA;
+  a second "Move ALL gold" click after the cap is used up computes a 0 transfer. All fields are
+  public — the mod reads them for `goldTransferLimit` since 0.12.0.
+- **Discard sides**: `ItemToWorldExchange` (ItemToWorldExchange.cs) is the `ItemTradeInterface`
+  named "Discard Items"; its `endTrading()` is a no-op, so items still on it when the window
+  closes are simply dropped from play (the Laughing Tome then re-materialises later via its own
+  purge/inert machinery at an arbitrary holder's location). `Ch_SummonLaughingTome.complete`
+  (Ch_SummonLaughingTome.cs) purges the tome and pops exactly this trade — the completion flavour
+  "arrives in the hand" is written BEFORE the player has taken anything. The mod guards closes on
+  a non-empty discard side (confirmDiscard) since 0.12.0.
+- **Challenge-complete repeat**: the game re-evaluates repeatability every frame in
+  `PopupChallengeComplete.Update` (PopupChallengeComplete.cs:28-45): `valid() && claimedBy == null
+  && validFor(ua) && location.GetChallenges().Contains(ch) && task == null && !isDead`, toggling
+  `bRepeat.gameObject`; `dismissRepeat` (:89-107) re-checks the same predicate and silently plain-
+  dismisses when it fails. Headless resolves can run before any frame, so the button state is
+  stale at read time — the mod evaluates the predicate directly since 0.12.0.
+- **Minion stats**: `Minion.innerDefence` (Minion.cs:19) is battle-eroded scratch state the
+  constructor never initialises (only `innerHP = getMaxHP()`); real stats are the getters
+  `getAttack()`/`getMaxDefence()`/`getMaxHP()`/`getCommandCost()` (Minion.cs:75-88), which every
+  popup renders. `MinionSummary` uses the getters since 0.12.0.
+- **Force skill spends**: `World.bEndTurn(forceThrough)` (World.cs:689-698) auto-spends ONE banked
+  point per agent per forced call (`uA.spendSkillPoint()` = AI-picked trait), and its idle guard
+  (World.cs:699) is skipped entirely under `forceThrough` — the mod's own idle/hard-choice gating
+  is what makes force safe. The digest names each auto-spend (`autoResolvedLevelUps`) since
+  0.12.0.
+- **Well of Shadows existence**: `Ch_WellOfShadows` is constructed against a `SettlementHuman`
+  (`hum`, used unguarded in `valid()`, Ch_WellOfShadows.cs:77-85), so the challenge object never
+  exists at ruins/wilderness — the vanilla restriction text omits that precondition.

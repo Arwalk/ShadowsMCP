@@ -124,7 +124,9 @@ namespace ShadowsMcp.Tools
                 "game_overview.pendingDecision); answer it by passing resolveOptionIndex (a failed or " +
                 "unneeded resolve is reported in resolveWarning, never silently ignored). " +
                 "force=true auto-resolves ONLY what carries no choice: one unspent skill point per agent " +
-                "per turn is auto-spent (AI-picked trait), and purely-informational popups are dismissed " +
+                "per turn is auto-spent (AI-picked trait; each named in digest.autoResolvedLevelUps - " +
+                "note the FIRST level-up is the only shot at a magic mastery, so consider spending it " +
+                "yourself), and purely-informational popups are dismissed " +
                 "(message boxes, death notices; the periodic autosave is written to disk first). " +
                 "Everything with a real choice blocks even under force: a pending agent battle " +
                 "(blockedBy:\"combat\" - fight, flee, or retreat), the idle-agent alert (kind:\"idleAgents\" " +
@@ -139,8 +141,8 @@ namespace ShadowsMcp.Tools
                 "count advances several turns (force=true recommended); the batch stops early with a " +
                 "stopReason on any decision, game over, the loss of one of your units " +
                 "(stopReason:\"unitLost\"), or a meaningful threat escalation (threatAlert names the agents " +
-                "affected and why); stopOnThreatMotivation adds an opt-in halt at a hunter-motivation " +
-                "percentage. EVERY call returns a 'digest' covering every turn of the batch - " +
+                "affected and why); set stopOnThreatMotivation to make a hunter-motivation percentage the " +
+                "ONLY threat stop instead. EVERY call returns a 'digest' covering every turn of the batch - " +
                 "digest.dismissed (each popup force cleared), digest.events (notable news; your units " +
                 "tagged mine:true), digest.lost (your units that died). Read it: it is the only place a " +
                 "batch's news appears in full (get_recent_events keeps the unabridged log). A 'tips' array " +
@@ -148,11 +150,13 @@ namespace ShadowsMcp.Tools
                 Schema.Object(
                     Schema.Prop("count", Schema.Integer("Advance up to this many turns (default 1, max 10); stops early per the rules above, and the digest covers every turn advanced.")),
                     Schema.Prop("force", Schema.Boolean("Auto-spend skill points and dismiss informational popups; never skips a real choice (see tool description). Every dismissal is named in the digest - nothing is lost.")),
-                    Schema.Prop("passIdleAgents", Schema.Boolean("Bulk-pass every idle agent each turn (a visible 'Passing Turn') so a batch doesn't stop on the recurring idle alert. A conscious choice to waste those turns - prefer standing orders. Combat and events still block.")),
+                    Schema.Prop("passIdleAgents", Schema.Boolean("Bulk-pass every idle agent each turn (a visible 'Passing Turn') so a batch doesn't stop on the recurring idle alert - including agents that go idle MID-batch (e.g. a challenge completes). A conscious choice to waste those turns - prefer standing orders. Combat and events still block.")),
                     Schema.Prop("passRoutineEvents", Schema.Boolean("Auto-answer a curated whitelist of recurring low-stakes mid-challenge events ('Watched' -> Silence them, 'Life Continues' -> Subtly disrupt the party, 'Merchant of Antiquities' -> refuse) with a fixed sensible option so they don't stop the batch. Every auto-answer is reported in digest.autoResolvedEvents (title, chose, outcome). All other events still block normally.")),
                     Schema.Prop("resolveOptionIndex", Schema.Integer("Answer the blocking decision with this option index (from pendingDecision.options), then continue ending the turn.")),
+                    Schema.Prop("resolveOptionLabel", Schema.String("Answer the blocking decision by option LABEL instead of index (exact match preferred, else unique substring; case-insensitive) - safer on lists whose indices shift between reads.")),
                     Schema.Prop("expectedDecisionId", Schema.String("Optional, with resolveOptionIndex: only resolve if the pending decision still matches this decisionId (from pendingDecision); a mismatch clicks nothing and is reported in resolveWarning.")),
-                    Schema.Prop("stopOnThreatMotivation", Schema.Integer("Stop the batch once any hunter's motivation toward one of your agents is AT OR ABOVE this percent (level-triggered; can exceed 100 for a strongly-inclined hunter). Omit or 0 to disable."))),
+                    Schema.Prop("confirmDiscard", Schema.Boolean("With resolveOptionIndex/-Label on an item-trading decision: confirm closing a trade window whose 'Discard Items' side still holds items, deliberately releasing them to the world.")),
+                    Schema.Prop("stopOnThreatMotivation", Schema.Integer("Your threat-stop threshold: when set (>0) the batch stops for threats ONLY once a hunter's motivation toward one of your agents is AT OR ABOVE this percent (level-triggered; can exceed 100 for a strongly-inclined hunter) - it REPLACES the default new-hunter/worse-odds stops, so batches no longer halt on every minor escalation. Omit or 0 for the default: stop on any meaningful danger change."))),
                 a =>
                 {
                     bool force = a["force"].AsBool();
@@ -373,7 +377,26 @@ namespace ShadowsMcp.Tools
             string where = target != null
                 ? "at " + targetName + " (the location encoded in your id)"
                 : "at " + u.getName() + "'s current location";
+            // Enumerate with the SAME filters, sources and dedupe as list_challenges (hero-only and
+            // non-army entries excluded, item rituals included), so this error and that tool can never
+            // disagree about what exists here. The old version listed the raw location list with a cap
+            // of 12: hero-side entries ate the cap and the player's real options fell off the end,
+            // which read as "this challenge does not exist" (G14-#3/#14/#15).
             var lines = new List<string>();
+            int total = 0, heroOnlyCount = 0;
+            const int MaxLines = 24;
+            var seen = new HashSet<string>();
+            UA uaList = u as UA;
+            UM umList = u as UM;
+            Action<Challenge> addLine = c =>
+            {
+                string cid;
+                try { cid = Summaries.ChallengeId(ctx, c); } catch { cid = null; }
+                if (cid == null || !seen.Add(cid)) return; // interchangeable duplicates collapse
+                total++;
+                if (lines.Count < MaxLines)
+                    lines.Add(cid + " (" + Summaries.ChallengeName(c) + ")");
+            };
             try
             {
                 if (loc != null)
@@ -382,16 +405,24 @@ namespace ShadowsMcp.Tools
                     foreach (Challenge c in loc.GetChallenges())
                     {
                         if (c == null) continue;
-                        lines.Add(Summaries.ChallengeId(ctx, c) + " (" + Summaries.ChallengeName(c) + ")");
-                        if (lines.Count >= 12) break;
+                        if (uaList != null && Summaries.IsHeroOnly(c)) { heroOnlyCount++; continue; }
+                        if (umList != null && !Summaries.OverridesValidForUM(c)) continue;
+                        addLine(c);
                     }
                 }
                 if (u.rituals != null)
                     foreach (Challenge r in u.rituals)
+                        if (r != null) addLine(r);
+                // Item-granted rituals (Laughing Tome, banners…) are part of list_challenges' set too.
+                if (uaList != null && uaList.person != null && uaList.person.items != null)
+                    foreach (Item it in uaList.person.items)
                     {
-                        if (r == null) continue;
-                        lines.Add(Summaries.ChallengeId(ctx, r) + " (" + Summaries.ChallengeName(r) + ")");
-                        if (lines.Count >= 16) break;
+                        if (it == null) continue;
+                        List<Ritual> granted;
+                        try { granted = it.getRituals(uaList); } catch { continue; }
+                        if (granted == null) continue;
+                        foreach (Ritual r in granted)
+                            if (r != null) addLine(r);
                     }
             }
             catch { }
@@ -399,10 +430,38 @@ namespace ShadowsMcp.Tools
             string tail = target != null && target != u.location
                 ? " Note: " + u.getName() + " is not there; perform_challenge handles the travel itself."
                 : "";
+            // When the failed id's challenge TYPE is absent from the location's whole current list, the
+            // offer itself has lapsed - say so, or the disappearance reads as a dead end (G14-#10:
+            // Learn Secret vanished when the Arcane Secret was destroyed; Enshadow at max shadow).
+            try
+            {
+                int d1 = id != null ? id.IndexOf('-') : -1;
+                int d2 = id != null ? id.LastIndexOf('-') : -1;
+                if (d1 > 0 && d2 > d1)
+                {
+                    string type = id.Substring(d1 + 1, d2 - d1 - 1);
+                    bool stillOffered = false;
+                    if (loc != null)
+                        foreach (Challenge c in loc.GetChallenges())
+                            if (c != null && c.GetType().Name == type) { stillOffered = true; break; }
+                    if (!stillOffered && type.Length > 0)
+                        tail += " The location no longer offers any '" + type + "' challenge at all: " +
+                            "its enabling condition has lapsed since you read the id (typical causes: " +
+                            "the thing it acted on was consumed or destroyed, or the location already " +
+                            "reached the state the challenge creates - e.g. 100% shadow for Enshadow).";
+                }
+            }
+            catch { }
+            if (heroOnlyCount > 0)
+                tail += " (" + heroOnlyCount + " heroes-only challenge(s) here are not listed - your " +
+                    "agents cannot perform them; list_challenges names them under heroOnly.)";
             if (lines.Count > 0)
-                return head + "Challenges " + where + " (plus " + u.getName() + "'s rituals): " +
-                    string.Join(", ", lines.ToArray()) + "." + tail;
-            return head + "Re-run list_challenges for " + u.getName() + ".";
+                return head + "Challenges " + where + " for " + u.getName() + " (same set as " +
+                    "list_challenges, including its rituals): " + string.Join(", ", lines.ToArray()) +
+                    (total > lines.Count
+                        ? ", … plus " + (total - lines.Count) + " more - run list_challenges for the full set."
+                        : ".") + tail;
+            return head + "Re-run list_challenges for " + u.getName() + "." + tail;
         }
 
         // ---------- powers ----------
@@ -1040,10 +1099,12 @@ namespace ShadowsMcp.Tools
             private const int MaxDismissed = 20;
             private const int MaxEvents = 20;
             private const int MaxAutoResolved = 20;
+            private const int MaxLevelUps = 10;
 
             private readonly JsonValue _dismissed = JsonValue.NewArray();
             private readonly JsonValue _events = JsonValue.NewArray();
             private readonly JsonValue _autoResolved = JsonValue.NewArray();
+            private readonly JsonValue _levelUps = JsonValue.NewArray();
             private JsonValue _lost = JsonValue.Null;
             private int _truncated;
 
@@ -1061,6 +1122,14 @@ namespace ShadowsMcp.Tools
                 Append(_autoResolved, records, MaxAutoResolved);
             }
 
+            /// <summary>Skill points force auto-spent by the game's bEndTurn(force) path — each entry is
+            /// {turn, unit, chose, ...}. Level-ups used to be the one force side effect no result named:
+            /// an AI-picked trait can permanently cost a magic-mastery line (G14-#5).</summary>
+            public void AbsorbAutoLevelUps(JsonValue records)
+            {
+                Append(_levelUps, records, MaxLevelUps);
+            }
+
             public void SetLost(JsonValue lost) { _lost = lost; }
 
             private void Append(JsonValue into, JsonValue from, int cap)
@@ -1076,12 +1145,14 @@ namespace ShadowsMcp.Tools
             /// <summary>The digest object, or null when the call had nothing to report.</summary>
             public JsonValue ToJson()
             {
-                if (_dismissed.Count == 0 && _events.Count == 0 && _autoResolved.Count == 0 && _lost.IsNull)
+                if (_dismissed.Count == 0 && _events.Count == 0 && _autoResolved.Count == 0 &&
+                    _levelUps.Count == 0 && _lost.IsNull)
                     return JsonValue.Null;
                 JsonValue o = JsonValue.NewObject();
                 if (_dismissed.Count > 0) o.Set("dismissed", _dismissed);
                 if (_events.Count > 0) o.Set("events", _events);
                 if (_autoResolved.Count > 0) o.Set("autoResolvedEvents", _autoResolved);
+                if (_levelUps.Count > 0) o.Set("autoResolvedLevelUps", _levelUps);
                 if (!_lost.IsNull) o.Set("lost", _lost);
                 if (_truncated > 0)
                     o.Set("truncated", _truncated)
@@ -1095,7 +1166,8 @@ namespace ShadowsMcp.Tools
             World world = map.world;
             if (world == null) return ToolResult.Error("game world not ready");
 
-            int count = args["count"].AsInt(1);
+            int requestedCount = args["count"].AsInt(1);
+            int count = requestedCount;
             if (count < 1) count = 1;
             if (count > MaxTurnBatch) count = MaxTurnBatch;
             int motivationStopPct = args["stopOnThreatMotivation"].AsInt(0);
@@ -1157,16 +1229,22 @@ namespace ShadowsMcp.Tools
             JsonValue threatAlert = JsonValue.Null;
             JsonValue gameOverPayload = JsonValue.Null;
 
+            // One idle-alert retry per turn of the batch: the pre-advance Task_PassTurn sweep can miss an
+            // agent that goes idle DURING the tick (its challenge completed, its travel ended), and the
+            // resulting idleAgents block used to halt a passIdleAgents batch anyway (G14-#21).
+            bool idleRetried = false;
+            int attempt = 0;
             for (int i = 0; i < count; i++)
             {
+                attempt++;
                 StepStatus st;
-                JsonValue payload = AdvanceOneTurn(ctx, map, world, force, applyResolve: i == 0, args, digest, out st);
+                JsonValue payload = AdvanceOneTurn(ctx, map, world, force, applyResolve: attempt == 1, args, digest, out st);
                 // Harvest the first turn's resolve outcome HERE, whatever branch follows: the Blocked /
                 // NotAdvanced / GameOver / Error exits below used to drop it, making a consumed
                 // resolveOptionIndex look like a silent no-op ("advancedBy:0, no resolved, no warning").
                 // Captured before the transient retry too - the retry runs applyResolve:false and its
                 // payload never carries the resolve fields.
-                if (i == 0)
+                if (attempt == 1)
                 {
                     if (!payload["resolved"].IsNull) firstResolved = payload["resolved"];
                     firstResolveWarning = payload["resolveWarning"].AsString();
@@ -1189,11 +1267,25 @@ namespace ShadowsMcp.Tools
                     stopReason = "error"; break;
                 }
                 if (st == StepStatus.GameOver) { gameOverPayload = payload; stopReason = "gameOver"; break; }
-                if (st == StepStatus.Blocked) { pending = payload["pendingDecision"]; stopReason = "decision"; break; }
+                if (st == StepStatus.Blocked)
+                {
+                    // passIdleAgents' contract is "idle never stops the batch": when the block IS the
+                    // idle alert, pass the stragglers through the decision itself and retry this turn
+                    // once, instead of surfacing the alert the caller explicitly opted past.
+                    if (args["passIdleAgents"].AsBool() && !idleRetried &&
+                        payload["pendingDecision"]["kind"].AsString() == "idleAgents")
+                    {
+                        ToolResult passed = Decisions.DecisionRegistry.Resolve(ctx,
+                            JsonValue.NewObject().Set("optionIndex", 0));
+                        if (passed != null && !passed.IsError) { idleRetried = true; i--; continue; }
+                    }
+                    pending = payload["pendingDecision"]; stopReason = "decision"; break;
+                }
                 if (st == StepStatus.NotAdvanced) { stopReason = payload["reason"].AsString("notAdvanced"); break; }
 
                 // Advanced.
                 advancedBy++;
+                idleRetried = false; // the retry guard is per-turn, not per-batch
                 JsonValue ad = payload["autoDismissed"];
                 if (!ad.IsNull)
                 {
@@ -1228,8 +1320,13 @@ namespace ShadowsMcp.Tools
             JsonValue result = JsonValue.NewObject()
                 .Set("turn", map.turn)
                 .Set("advancedBy", advancedBy)
-                .Set("requestedCount", count)
+                // What the caller ASKED for, not the clamped value - requestedCount:10 against an input
+                // of 20 silently rewrote the caller's own number (G14-#16).
+                .Set("requestedCount", requestedCount)
                 .Set("stoppedEarly", advancedBy < count);
+            if (requestedCount != count)
+                result.Set("countNote", "count " + requestedCount + " was clamped to the max batch size of " +
+                    MaxTurnBatch + " - call end_turn again to continue");
             if (advancedBy < count && stopReason != null) result.Set("stopReason", stopReason);
             if (!firstResolved.IsNull) result.Set("resolved", firstResolved);
             if (firstResolveWarning != null) result.Set("resolveWarning", firstResolveWarning);
@@ -1309,15 +1406,18 @@ namespace ShadowsMcp.Tools
             // "advancedBy:0 with the same decision re-presented" is indistinguishable from a no-op otherwise.
             JsonValue resolved = JsonValue.Null;
             string resolveWarning = null;
-            if (applyResolve && !args["resolveOptionIndex"].IsNull)
+            if (applyResolve && (!args["resolveOptionIndex"].IsNull || !args["resolveOptionLabel"].IsNull))
             {
                 if (Decisions.DecisionRegistry.FullOrNull(ctx).IsNull)
                 {
-                    resolveWarning = "resolveOptionIndex was provided but no decision was pending - it was ignored.";
+                    resolveWarning = "resolveOptionIndex/resolveOptionLabel was provided but no decision was pending - it was ignored.";
                 }
                 else
                 {
-                    JsonValue rargs = JsonValue.NewObject().Set("optionIndex", args["resolveOptionIndex"]);
+                    JsonValue rargs = JsonValue.NewObject();
+                    if (!args["resolveOptionIndex"].IsNull) rargs.Set("optionIndex", args["resolveOptionIndex"]);
+                    if (!args["resolveOptionLabel"].IsNull) rargs.Set("optionLabel", args["resolveOptionLabel"]);
+                    if (!args["confirmDiscard"].IsNull) rargs.Set("confirmDiscard", args["confirmDiscard"]);
                     // Optional stale-decision guard: with expectedDecisionId the resolve refuses (and
                     // reports via resolveWarning) when the pending decision is no longer the one read.
                     if (!args["expectedDecisionId"].IsNull)
@@ -1376,13 +1476,19 @@ namespace ShadowsMcp.Tools
             int before = map.turn;
             int after;
             JsonValue autoDismiss;
+            // Deny force while combat, the idle-agent alert, or a real-choice popup is pending, so
+            // bEndTurn stops (pops the battle / selects the idle unit / leaves the popup blocking)
+            // instead of auto-resolving, silently wasting, or ticking past them.
+            bool allowForce = force && !combatEngaged && !idleBlocks && !hardChoiceOpen;
+            // A forced bEndTurn auto-spends one banked skill point per agent (World.cs:689-697,
+            // AI-picked trait) and used to do so with no trace in any result (G14-#5): snapshot the
+            // agents it will touch so the digest can name the level-up and the trait it chose.
+            List<SkillPointSnap> lvlSnap = allowForce && digest != null ? SnapshotPendingSkillPoints(map) : null;
             try
             {
-                // Deny force while combat, the idle-agent alert, or a real-choice popup is pending, so
-                // bEndTurn stops (pops the battle / selects the idle unit / leaves the popup blocking)
-                // instead of auto-resolving, silently wasting, or ticking past them.
-                world.bEndTurn(force && !combatEngaged && !idleBlocks && !hardChoiceOpen);
+                world.bEndTurn(allowForce);
                 after = map.turn;
+                if (lvlSnap != null) digest.AbsorbAutoLevelUps(EvaluateAutoLevelUps(ctx, map, lvlSnap));
 
                 // Capture this turn's status messages (idle agents, wars, seals, hero actions) into the
                 // mod's own recent-events feed before the next turnTick wipes map.turnUnifiedMessages.
@@ -1576,6 +1682,88 @@ namespace ShadowsMcp.Tools
                 if (u.task == null && u.movesTaken == 0) return true;
             }
             return false;
+        }
+
+        /// <summary>One agent's pre-bEndTurn levelling state, for diffing what the game's force path
+        /// auto-spent (see <see cref="SnapshotPendingSkillPoints"/>).</summary>
+        private sealed class SkillPointSnap
+        {
+            public UA Agent;
+            public int SkillPoints;
+            public List<string> TraitNames;
+        }
+
+        /// <summary>The commandable agents whose banked skill point a forced bEndTurn is about to
+        /// auto-spend (the exact World.cs:689 predicate), with their current trait names so the picked
+        /// trait can be identified afterwards. Null when none qualify.</summary>
+        private static List<SkillPointSnap> SnapshotPendingSkillPoints(Map map)
+        {
+            List<SkillPointSnap> snaps = null;
+            try
+            {
+                foreach (Unit u in map.units)
+                {
+                    UA ua = u as UA;
+                    if (ua == null || ua.isDead || !ua.isCommandable() || ua.person == null) continue;
+                    if (ua.person.skillPoints <= 0 || ua.person.cachedOutOfTraits) continue;
+                    var names = new List<string>();
+                    try
+                    {
+                        if (ua.person.traits != null)
+                            foreach (Trait t in ua.person.traits)
+                                if (t != null) names.Add(TraitName(t));
+                    }
+                    catch { }
+                    if (snaps == null) snaps = new List<SkillPointSnap>();
+                    snaps.Add(new SkillPointSnap
+                    {
+                        Agent = ua,
+                        SkillPoints = ua.person.skillPoints,
+                        TraitNames = names,
+                    });
+                }
+            }
+            catch { }
+            return snaps;
+        }
+
+        /// <summary>Diff the snapshot against the post-bEndTurn state: every agent whose point count fell
+        /// gets a digest record naming the trait the AI picked for it. Null when nothing was spent.</summary>
+        private static JsonValue EvaluateAutoLevelUps(GameContext ctx, Map map, List<SkillPointSnap> before)
+        {
+            JsonValue arr = JsonValue.NewArray();
+            foreach (SkillPointSnap s in before)
+            {
+                try
+                {
+                    if (s.Agent == null || s.Agent.isDead || s.Agent.person == null) continue;
+                    if (s.Agent.person.skillPoints >= s.SkillPoints) continue; // nothing spent
+                    var gained = new List<string>();
+                    if (s.Agent.person.traits != null)
+                        foreach (Trait t in s.Agent.person.traits)
+                        {
+                            if (t == null) continue;
+                            string n = TraitName(t);
+                            if (!s.TraitNames.Remove(n)) gained.Add(n);
+                        }
+                    arr.Add(JsonValue.NewObject()
+                        .Set("turn", map.turn)
+                        .Set("unit", Summaries.UnitRef(ctx, s.Agent))
+                        .Set("chose", gained.Count > 0 ? string.Join(", ", gained.ToArray())
+                            : "(trait could not be identified)")
+                        .Set("level", s.Agent.person.level)
+                        .Set("skillPointsRemaining", s.Agent.person.skillPoints)
+                        .Set("note", "skill point auto-spent by force (AI-picked trait); to choose " +
+                            "yourself next time, end_turn without force and answer the level-up popup"));
+                }
+                catch { }
+            }
+            return arr.Count > 0 ? arr : JsonValue.Null;
+        }
+
+        private static string TraitName(Trait t)
+        {
+            try { return t.getName(); } catch { return t.GetType().Name; }
         }
 
         private static string DiagnoseEndTurnBlock(Map map, World world)

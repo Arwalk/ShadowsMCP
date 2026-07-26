@@ -225,6 +225,20 @@ resolve_decision, end_turn, new_game.
   assert no `id` appears twice across `challenges` + `unitRituals` + `hiddenNotPerformable.items` —
   interchangeable twins (same-item market stalls, rituals granted by duplicate carried items) must
   collapse into one entry with a `copies` count instead.
+- D15 (heroes-only content is flagged, not invisible): find a location whose challenge list the game
+  restricts to heroes (most settlements have some — e.g. Reduce Unrest). `list_challenges` for an agent
+  there must NOT include the hero-side entries in `challenges`, but when any exist the result carries a
+  `heroOnly` block with `count`, `names` and a note saying agents can NEVER perform them. Then
+  `perform_challenge` is not needed to discover this. SKIP if no location with hero-side challenges is
+  visited.
+- D16 (stale-id error enumerates the SAME set as list_challenges): call `perform_challenge` with a
+  syntactically-valid but stale id for a real location (e.g. take a real id and zero its hash:
+  `C<loc>-Ch_X-00000000`). Assert the error's enumeration (a) lists ids+names that match what
+  `list_challenges {unitId, locationId}` returns for that unit/location (same set, modulo its "plus N
+  more" truncation note — which must be present if anything was dropped), (b) does NOT contain hero-only
+  entries (it instead appends a "(N heroes-only challenge(s)…)" note when any exist), and (c) when the
+  stale id's TYPE (the `Ch_X` middle segment) is no longer offered at the location at all, carries the
+  "no longer offers any 'Ch_X' challenge" explanation instead of a bare dead end.
 
 **E. Powers**
 - E1: `list_powers` returns powers with `cost` and a castable flag. Power ids are stable across turns
@@ -412,6 +426,30 @@ resolve_decision, end_turn, new_game.
   refreshed `state` and a NEW `options` list. Assert `resolve_decision {"force":true}` is REFUSED (this is
   a real, permanent choice), then pick a valid kept set and accept: assert the popup closes reporting
   `kept`/`dismissed` name lists, and `get_unit` on the agent matches. SKIP if it never appears.
+- G11 (opportunistic, resolve by label): on any pending decision with labeled options, call
+  `resolve_decision {"optionLabel":"<an option's exact label>"}` (no optionIndex) and assert it clicks
+  that option (result `chose`/`clicked` matches). A label matching nothing (or matching two options as a
+  substring) must be a clean refusal that lists the current labels and clicks NOTHING. On a
+  `kind:"carousel"` decision, also assert the `note` now warns that indices shift between openings and
+  recommends `optionLabel`. SKIP if no labeled decision appears.
+- G12 (opportunistic, capped gold trades are labeled): when an `itemTrading` decision opens from a
+  LIMITED vault challenge (`Ch_AccessVaultLimited` "Subtle Thievery" — side B is a ruler), assert the
+  decision carries `goldTransferLimit` with `maxGoldToA`/`goldRemainingToA` and a note that 'Move ALL
+  gold' moves at most the remaining cap. Click "Move ALL gold to side A": the result echoes
+  `goldTransferLimit`, and a SECOND identical click must return a `warning` saying no gold moved because
+  the cap is used up (never a bare success). An UNLIMITED vault (`Ch_AccessVault`) must carry no
+  `goldTransferLimit`. SKIP if neither vault trade occurs.
+- G13 (opportunistic, discard-side close is guarded): when an `itemTrading` decision's side B is named
+  "Discard Items" and still holds items (the Summon Laughing Tome completion opens exactly this),
+  assert (a) the decision carries a `warning` that closing releases the items to the world (naming the
+  LAUGHING TOME specially when present), (b) closing it — Done button, or `resolve_decision
+  {"force":true}` — is REFUSED with instructions, (c) `resolve_decision` with the same close plus
+  `confirmDiscard:true` then succeeds, OR taking the items via 'Take all and close' succeeds without any
+  guard. SKIP if no discard-side trade appears.
+- G14 (opportunistic, challengeComplete repeat honesty): on a `kind:"challengeComplete"` decision, if
+  option 2 ("Repeat this challenge immediately") shows `enabled:true`, resolving `{"optionIndex":2}`
+  must SUCCEED (the flag is now computed from live game state, not a stale button); if it shows
+  `enabled:false` it must carry a `why`. A refusal after `enabled:true` is a FAIL. SKIP if none appears.
 - G10 (opportunistic, trailing battle notices never stall a force loop): during a multi-army field battle
   (several units `inBattle:true` on one tile), run `end_turn {"force":true}` repeatedly. Assert no call is
   ever blocked by a "Battle" notice (`PopupMsgUnified`): a battle popup the game raises late in one call is
@@ -463,6 +501,28 @@ resolve_decision, end_turn, new_game.
   used to be missed) or rises to it mid-batch. Also confirm `motivationPct` can now read >100 when the game's
   own threat text does (the flat-100 cap was removed), so a threshold >100 is accepted. SKIP only if no
   hunter with motivation >0 exists.
+- H7b (the threshold GOVERNS the threat stop — the game-14 batch-killer): with hunters active whose
+  motivations are all clearly below some high value (say every `motivationPct` < 200), run
+  `end_turn {"count":5,"force":true,"passIdleAgents":true,"passRoutineEvents":true,
+  "stopOnThreatMotivation":300}`. Assert the batch NEVER stops with `stopReason:"threatEscalation"` —
+  setting the threshold replaces the default new-hunter/worse-odds stops, so below-threshold hunter
+  churn (gained/worsened) must not halt it (decisions, combat, unitLost, gameOver still may). If it
+  stops, the `stopReason` must be one of those others or `threatMotivation` with an entry actually ≥
+  300. SKIP if no hunters exist at all (then nothing can escalate anyway).
+- H10 (count clamp is explicit): `end_turn {"count":20,"force":true,"passIdleAgents":true}` — assert the
+  result's `requestedCount` is **20** (the value you passed, no longer silently rewritten to 10), that
+  `advancedBy` ≤ 10, and that a `countNote` states the clamp to the max batch of 10.
+- H11 (opportunistic, force level-ups are named): whenever an agent has an unspent skill point and you
+  `end_turn {"force":true}`, assert the result's `digest.autoResolvedLevelUps` names it: entries
+  `{turn, unit, chose, level, skillPointsRemaining, note}` with `chose` a trait name. Cross-check
+  `get_unit`: the agent's `agent.skillPoints` dropped by 1 and its person gained that trait. A force
+  call that spends a point with NO such digest entry is a FAIL (the 0.10.0 silent-spend bug). SKIP if
+  no level-up occurs under force.
+- H12 (passIdleAgents covers mid-batch idles): during any `count>1` batch with `passIdleAgents:true`,
+  assert the batch never stops with a `pendingDecision` of `kind:"idleAgents"` — including when an
+  agent's challenge COMPLETES mid-batch and it goes idle (the pre-0.12.0 hole). A stop on the idle
+  alert despite the flag is a FAIL. (Best provoked by starting a 1-2 turn challenge and batching 5+
+  turns with force.)
 - H8 (autosave popup handled every 15 turns): the game raises an autosave notice when `turn` becomes a
   multiple of 15. (a) **force path** — advance in `count`≤10 force batches
   (`end_turn {"count":10,"force":true,"passIdleAgents":true}`, repeated) until `turn` crosses a multiple of 15;
@@ -542,7 +602,15 @@ resolve_decision, end_turn, new_game.
   objects, plus `xp`, `relationships` and `alerts`. Assert a trait entry has a `name` field.
 - K5 (agent internals): `get_unit` on one of your agents (`list_units {"scope":"mine"}`) returns an `agent`
   object with a `minions` array and numeric `attack`, and an `investigation` array (possibly empty). Assert
-  `agent` is present.
+  `agent` is present, and that it now also carries numeric `level`, `xp`, `xpForNextLevel` and
+  `skillPoints` (progression used to be reachable only via `inspect`); when `skillPoints > 0` a
+  `skillPointNote` explains the force auto-spend risk. Cross-check `level`/`xp` against
+  `inspect {"path":"U<n>.person"}`. The same agent's `list_units` row carries `level` (and `skillPoints`
+  only when > 0).
+- K5b (minion stats are the popup's numbers): if any of your agents has minions (recruit one if cheap —
+  else SKIP), assert each `agent.minions[]` entry is `{name, hp, maxHp, attack, defence, commandCost,
+  isDead}` with `attack`/`defence` matching the minion type's real stats (e.g. a Sellsword is 2/2, never
+  `defence:0` with no attack field — that was battle-eroded scratch state).
 - K6 (wars): `list_wars` returns `items`; assert its `total` equals `game_overview.wars`. If non-empty, each
   entry has `attacker`, `defender`, `objective`. (Empty is PASS on a peaceful game — note it.)
 - K7 (investigations): `list_investigations` returns `items`; assert its `total` equals
@@ -610,6 +678,21 @@ resolve_decision, end_turn, new_game.
   independently of whether any fires, assert the `get_tips` index includes the four 0.8.0 contextual ids
   `insane_heroes_hunt`, `shadow_treadmill`, `alliance_razing` and `iastur_soul`, and that each returns a
   `body` via `get_tips {"id":...}`.
+- K20 (opportunistic, event decisions expose location stakes and silent outcomes): (a) when a
+  `kind:"event"` decision has an acting person at a location with modifiers, assert it carries
+  `locationModifiers` (`[{type, name, charge}]`, with `max:300` flagged on Devastation) and a
+  `locationModifiersNote` — the numbers option deltas apply to; (b) when resolving an event returns the
+  "applied without an outcome message" text, assert that any directly-observable numeric effect it had
+  (actor menace/profile/gold, a location modifier charge) is reported in `observedChanges` instead of
+  needing a confirming `get_unit`/`get_location` — verify one diff against a before-snapshot. SKIP parts
+  that never occur.
+- K21 (opportunistic, god-gated — Iastur endgame corrections): if playing the Laughing King, assert
+  (a) `get_player_state.progression` carries a `mechanicsNote` correcting the vanilla waves-of-madness
+  victory blurb (the Soul meter is loss-only; the win is via victory points); (b) `get_tips
+  {"id":"iastur_soul"}`'s body says the "300% = win" text is dead vanilla text and nothing raises the
+  Soul charge; (c) a listed `Ch_WavesOfMadness` entry carries an `outcomeNote` saying waves score
+  victory points and do NOT move the Soul meter. Do not report the vanilla awakening message's 300%
+  claim as a mod defect — the mod deliberately annotates rather than rewrites it. SKIP on other gods.
 - K17 (one-shot tips survive a same-game reload, opportunistic/host-assisted): contextual tips are one-shot
   per GAME (keyed to the map seed), not per Map object — if the host loads a save of the SAME game mid-run
   (not agent-forcible; the host's Player.log logs "same game: one-shot tips kept"), assert tips that
@@ -744,6 +827,10 @@ empty, mark N1–N8 SKIP. Spending influence is irreversible; that is fine on th
 - N5 (error, unknown tenet): with a real `orderId`, pass `"tenet":"H_NotAThing"`; assert a clean error that
   **lists that order's actual tenets** (they differ per order — some are removed at worldgen, some added
   mid-game).
+- N5b (tenetType alias): repeat any N-section influence call using `"tenetType":"H_..."` INSTEAD of
+  `"tenet"` — assert it is accepted as a full alias (no "unknown parameter 'tenetType'" and no "missing
+  required parameter(s): tenet" — the field is named `type` in list_holy_orders output, so the alias must
+  work). Passing NEITHER parameter errors cleanly telling you to pass one.
 - N6 (error, not enough influence): find an order with `canChangeTenet:false` and try to influence any of
   its tenets; assert a clean error reporting have/need (e.g. "12/40 Elder influence") and, when the order is
   gaining influence, an estimate in turns. If every order is ready, SKIP.

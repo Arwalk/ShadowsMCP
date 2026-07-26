@@ -29,7 +29,11 @@ namespace ShadowsMcp.Tools
                 + "Dogmatic raises every later price. get_tips id=holy_tenets explains what darkened tenets do.",
                 Schema.Object(
                     Schema.Prop("orderId", Schema.String("The holy order's social group id, e.g. SG5 (from list_holy_orders)"), required: true),
-                    Schema.Prop("tenet", Schema.String("Which tenet, by class type (e.g. H_CandleCircles, H_Alignment) or display name (e.g. \"Candle Circles\"), from that order's holyOrder.tenets"), required: true),
+                    // Not schema-required: tenetType is an accepted alias (list_holy_orders labels the
+                    // class type field "type", which repeatedly led to tenetType guesses - G14-#18);
+                    // the handler requires one of the two.
+                    Schema.Prop("tenet", Schema.String("Which tenet, by class type (e.g. H_CandleCircles, H_Alignment - the 'type' field in list_holy_orders) or display name (e.g. \"Candle Circles\"), from that order's holyOrder.tenets")),
+                    Schema.Prop("tenetType", Schema.String("Alias of 'tenet' - either parameter works")),
                     Schema.Prop("direction", Schema.StringEnum(
                         "toward_elder = one step darker (status-1; for a structural tenet simply 'negative'). "
                         + "toward_human = one step toward humanity (status+1).",
@@ -65,7 +69,10 @@ namespace ShadowsMcp.Tools
             if (err != null) return err;
 
             string wanted = a["tenet"].AsString();
-            if (string.IsNullOrEmpty(wanted)) return ToolResult.Error("tenet is required");
+            if (string.IsNullOrEmpty(wanted)) wanted = a["tenetType"].AsString();
+            if (string.IsNullOrEmpty(wanted))
+                return ToolResult.Error("tenet is required (tenetType works too) - pass the tenet's class "
+                    + "type or display name from list_holy_orders");
             HolyTenet t = FindTenet(ho, wanted);
             if (t == null)
                 return ToolResult.Error("no tenet '" + wanted + "' in " + Summaries.SafeDisplayName(ho)

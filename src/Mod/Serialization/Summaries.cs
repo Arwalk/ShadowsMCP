@@ -353,6 +353,17 @@ namespace ShadowsMcp
             // follow (command_agent). Omitted (null) when no such order applies right now.
             JsonValue orders = UnitOrders(ctx, u, orderHints);
             if (!orders.IsNull) o.Set("orders", orders);
+            // Your own agents' progression at list granularity (get_player_state.agents / list_units):
+            // level everywhere, plus a skillPoints flag whenever a point is banked - the pick is
+            // strategic (first level-up gates magic mastery) and end_turn(force) spends it silently
+            // otherwise (G14-#5/#6). Full XP numbers live in get_unit.agent.
+            UA uaSummary = u as UA;
+            if (!dead && uaSummary != null && u.isCommandable() && uaSummary.person != null)
+            {
+                o.Set("level", uaSummary.person.level);
+                if (uaSummary.person.skillPoints > 0)
+                    o.Set("skillPoints", uaSummary.person.skillPoints);
+            }
             // Active combat, surfaced in list views so an under-attack agent / in-battle army is visible without
             // a get_unit round-trip (agents were reaching combat via no other signal). engagedThisTurn is the
             // fight-icon condition (UIE_AgentRoster.bFight): a battle is pending — resolve it via
@@ -553,13 +564,28 @@ namespace ShadowsMcp
                     foreach (Minion m in ua.minions)
                         if (m != null && !m.isDead) minions.Add(MinionSummary(m));
                 }
-                o.Set("agent", JsonValue.NewObject()
+                JsonValue agent = JsonValue.NewObject()
                     .Set("corrupted", ua.corrupted)
                     .Set("attack", Safe(() => ua.getStatAttack(), 0))
                     .Set("challengesSinceRest", ua.challengesSinceRest)
                     .Set("turnsIdle", ua.turnsIdle)
                     .Set("disruptionExhaustion", ua.disruptionExhaustion)
-                    .Set("minions", minions));
+                    .Set("minions", minions);
+                // Level/XP/skill points were only reachable via inspect (G14-#6), yet they gate the
+                // magic-mastery pick (first level-up) and end_turn(force) auto-spends banked points.
+                if (ua.person != null)
+                {
+                    agent.Set("level", ua.person.level)
+                        .Set("xp", ua.person.XP)
+                        .Set("xpForNextLevel", ua.person.XPForNextLevel)
+                        .Set("skillPoints", ua.person.skillPoints);
+                    if (ua.person.skillPoints > 0)
+                        agent.Set("skillPointNote", "unspent skill point(s): pick the trait yourself " +
+                            "via the level-up popup (end_turn without force surfaces it) - " +
+                            "end_turn(force) auto-spends ONE per turn on an AI-picked trait, which can " +
+                            "permanently forfeit a magic-mastery choice");
+                }
+                o.Set("agent", agent);
 
                 // Combat readiness for risk management. dangerEstimate is the strength number the engine
                 // compares unit-vs-unit (UA.getDangerEstimate: hp + defence + attack + minions) — read a
@@ -1244,11 +1270,21 @@ namespace ShadowsMcp
                     + "and (Ophanim god only) 100% Ophanim faith here. progressPerTurn is the actual "
                     + "per-turn menace AND profile reduction at this location (progressBreakdown names the "
                     + "active boosts); an infiltrated or enshadowed settlement can be 2-4x faster than an "
-                    + "untouched one.");
+                    + "untouched one. If a city stops offering Lay Low (e.g. an army at rest patrols "
+                    + "there), the wilderness variant 'Lay Low (Wilderness)' works from any wilderness "
+                    + "hex - list_challenges there to find it.");
             else if (c is Ch_LayLowWilderness)
                 o.Set("locationNote", "Wilderness Lay Low runs at a base rate, doubled only if the "
                     + "settlement here is 100% infiltrated; progressPerTurn is the actual rate at this "
                     + "location.");
+            // The description's "leading to your victory" is via VICTORY POINTS (insane rulers/heroes
+            // score), NOT via the Iastur's Soul modifier - which no game code ever raises. Without this
+            // note the vanilla text sends players grinding a meter that cannot move (G14-#12/#17).
+            else if (c is Ch_WavesOfMadness)
+                o.Set("outcomeNote", "each completed wave drives the nearest portion of rulers/heroes "
+                    + "insane, which scores standard VICTORY POINTS (double if also enshadowed). It does "
+                    + "NOT raise the Iastur's Soul modifier at the Tomb - despite the game's own text, "
+                    + "nothing raises that meter; it is a loss meter only (see get_tips id=iastur_soul).");
             // Laughing Tome challenges: the summon's vanilla restriction ("a hero is currently binding
             // the tome") is TRUE exactly when some unit is running Ch_BindTome, but nothing lets the
             // player verify that — game 13 concluded the restriction was wrong and the deployed tome
@@ -1275,6 +1311,16 @@ namespace ShadowsMcp
                 if (!string.IsNullOrEmpty(restriction)) o.Set("restriction", restriction);
             }
             catch { }
+            // The vanilla restriction ("shadow > 10% and Well of Shadows modifier < 100%") omits that
+            // the challenge is constructed against a HUMAN SETTLEMENT and simply never exists elsewhere -
+            // a playtest marched an agent to a 100%-shadow ruin on the strength of that text (G14-#19).
+            if (c is Ch_WellOfShadows)
+            {
+                const string wellNote = "Note: only exists at populated human settlements - ruins, " +
+                    "wilderness hexes and non-human sites never offer it, whatever their shadow";
+                string existingR = o["restriction"].AsString();
+                o.Set("restriction", string.IsNullOrEmpty(existingR) ? wellNote : existingR + ". " + wellNote);
+            }
             // Exclusive challenge actively in use by ANOTHER unit (the exact predicate perform_challenge
             // rejects on): surface it in restriction so "only one at a time" is visible before the call,
             // not just as an error after it. claimedBy alone proved too easy to overlook (game 7's agent
@@ -1610,7 +1656,7 @@ namespace ShadowsMcp
             God god = map.overmind.god;
             if (god == null) return JsonValue.Null;
             int maxTurns = Safe(() => god.getMaxTurns(), 0);
-            return JsonValue.NewObject()
+            JsonValue o = JsonValue.NewObject()
                 // getMaxTurns() returns a number even in an endless game (the game ignores it),
                 // so null both time-budget fields there or an agent reads a deadline that isn't real.
                 .Set("endless", map.opt_endless)
@@ -1629,6 +1675,20 @@ namespace ShadowsMcp
                 // victoryAchieved, not endOfGameAchieved, or a defeat would show a mode-0 VICTORY blurb.
                 .Set("victoryMessage", map.overmind.victoryAchieved
                     ? Safe(() => god.getVictoryMessage(map.overmind.victoryMode), null) : null);
+            // The Laughing King's vanilla mechanics blurb (and the seal-9 awakening message) promise a
+            // waves-of-madness win route through the Iastur's Soul modifier - but no code path in the
+            // game ever raises that charge (only Ch_BindIastur lowers it; 0% is a real defeat). Two
+            // playtests were steered into building whole strategies on the dead meter (G14-#12/#17);
+            // annotate the vanilla text rather than rewriting it (mod policy).
+            if (god is God_LaughingKing)
+                o.Set("mechanicsNote", "CORRECTION to the mechanics text above (verified against game " +
+                    "code): the 'win by collapsing humanity's sanity' route works through the STANDARD " +
+                    "victory-points meter - each ruler/hero Waves of Madness drives insane scores " +
+                    "victory points (about double if also enshadowed). The 'Iastur's Soul reaches 300% " +
+                    "= win' claim in the awakening message is dead text: nothing in the game ever " +
+                    "raises the Soul charge. It only FALLS (heroes using the bound Tome), and 0% is a " +
+                    "real defeat - defend it, but do not try to raise it. See get_tips id=iastur_soul.");
+            return o;
         }
 
         private static JsonValue IntArray(int[] a)
@@ -1876,9 +1936,16 @@ namespace ShadowsMcp
         public static JsonValue MinionSummary(Minion m)
         {
             if (m == null) return JsonValue.Null;
+            // attack/defence come from the getters, matching every popup (minion dismissal, combat).
+            // Minion.defence (innerDefence) is battle-eroded scratch state the constructor never
+            // initialises - it read 0 for a fresh minion and made fights look unwinnable (G14-#2).
             return JsonValue.NewObject()
+                .Set("name", SafeName(() => m.getName()))
                 .Set("hp", m.hp)
-                .Set("defence", m.defence)
+                .Set("maxHp", Safe(() => m.getMaxHP(), 0))
+                .Set("attack", Safe(() => m.getAttack(), 0))
+                .Set("defence", Safe(() => m.getMaxDefence(), 0))
+                .Set("commandCost", Safe(() => m.getCommandCost(), 1))
                 .Set("isDead", m.isDead);
         }
 
@@ -2103,12 +2170,15 @@ namespace ShadowsMcp
         /// should stop for threats. Retuned to fire only on *meaningful* danger by default (an agent becomes
         /// huntable, gains a hunter it is NOT favoured against, or its odds worsen) - a merely-in-range,
         /// favoured, non-huntable hunter no longer stops the batch (that was the "fires constantly at low
-        /// motivation" noise). When <paramref name="motivationStopPct"/> &gt; 0 (opt-in), it ALSO flags any
-        /// turn a hunter's motivation toward an agent is AT OR ABOVE that % - level-triggered, so it fires
-        /// even when the hunter was already above at batch start (the edge form silently missed that common
-        /// case). <paramref name="alert"/> gets the per-agent detail (each entry tagged
+        /// motivation" noise). When <paramref name="motivationStopPct"/> &gt; 0, that threshold GOVERNS the
+        /// whole threat stop: the batch halts only for a hunter whose motivation toward an agent is AT OR
+        /// ABOVE the % (level-triggered, so it also fires when the hunter was already above at batch start).
+        /// The default danger triggers below the threshold are then suppressed entirely - a game-14 run had
+        /// every batch halted at 38-180% motivation against an explicit stopOnThreatMotivation:300, because
+        /// the triggers used to be independent stop conditions with no opt-out (G14-#7/#20).
+        /// <paramref name="alert"/> gets the per-agent detail (each entry tagged
         /// with a <c>trigger</c>), or null if nothing; <paramref name="reason"/> is the stopReason
-        /// ("threatEscalation" for danger, "threatMotivation" for the opt-in tripwire, else null).</summary>
+        /// ("threatEscalation" for danger, "threatMotivation" for the threshold, else null).</summary>
         public static void EvaluateThreatStop(GameContext ctx, Map map, List<AgentSafetyInfo> before,
             int motivationStopPct, out JsonValue alert, out string reason)
         {
@@ -2129,22 +2199,21 @@ namespace ShadowsMcp
                                 VerdictRank(s.Verdict()) > VerdictRank(b.Verdict());
                 bool meaningful = becameHuntable || gainedHunter || worsened;
 
-                // Motivation tripwire (opt-in): stop when a hunter's inclination toward this agent is AT OR
-                // ABOVE the threshold - level-triggered, NOT edge-triggered, so it also fires when the hunter
-                // was already above at batch start (the edge form silently never fired in that common case).
-                // The batch loop breaks on the first stop, so this cannot re-fire within a single batch.
                 int nowPct = s.TopHunter != null ? (int)Math.Round(s.TopMotivation * 100.0) : 0;
                 bool atOrAboveThreshold = motivationStopPct > 0 && s.TopHunter != null &&
                                           nowPct >= motivationStopPct;
+                // An explicit threshold replaces the default danger triggers instead of adding to them:
+                // "stopOnThreatMotivation:300" must mean "do NOT stop below 300".
+                if (motivationStopPct > 0) meaningful = false;
 
                 if (meaningful || atOrAboveThreshold)
                 {
                     JsonValue a = AgentSafetyJson(ctx, s);
                     a.Set("message", AgentSafetyLine(ctx, s));
-                    a.Set("trigger", becameHuntable ? "becameHuntable"
+                    a.Set("trigger", atOrAboveThreshold ? "motivation"
+                        : becameHuntable ? "becameHuntable"
                         : worsened ? "worsened"
-                        : gainedHunter ? "gainedHunter"
-                        : "motivation");
+                        : "gainedHunter");
                     alerts.Add(a);
                     if (meaningful) danger = true;
                     if (atOrAboveThreshold) motivation = true;

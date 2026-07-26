@@ -318,16 +318,23 @@ namespace ShadowsMcp.Tips
                 "arrive, keep your highest-value enshadowed rulers defended or use them before they are " +
                 "purged, and put new corruption far from the shieldwall rather than adjacent to it."),
 
-            Ctx("iastur_soul", "Iastur: the Soul at the Tomb decides the game", "god", IasturSoulPresent,
-                "Iastur's Soul now exists at the Tomb: 300% charge = victory, 0% = defeat - escort the performers.",
-                "Your awakening has laid Iastur's Soul bare at the Elder Tomb, and the endgame is now a single " +
-                "meter: raise the Iastur's Soul modifier to 300% and you WIN outright; let it fall to 0% and " +
-                "Iastur dies and you LOSE, regardless of points. Your side raises it by performing the Waves " +
-                "of Madness challenge at the Tomb - each performance also adds +40 menace and +40 profile to " +
-                "the performer, so performers become prime hunting targets - while heroes and humanity work " +
-                "it back down. The Tomb starts undefended: escort your performing agents past hunters, keep " +
-                "replacements coming, and treat any hero or army heading for the Tomb as the most important " +
-                "threat on the map. Points-scoring elsewhere is now secondary to this one location."),
+            Ctx("iastur_soul", "Iastur: the Soul at the Tomb is a LOSS meter; win through victory points", "god", IasturSoulPresent,
+                "Iastur's Soul (Tomb) only ever FALLS - 0% = defeat. The '300% = win' text is dead vanilla text; win via points.",
+                "Your awakening has laid Iastur's Soul bare at the Elder Tomb (modifier starts at 100%). " +
+                "The game's own message says reaching 300% wins the game - that text is WRONG (dead vanilla " +
+                "text): no code path in the game ever RAISES the Soul charge, so treat it purely as a LOSS " +
+                "meter. It falls only when a hero uses the bound Laughing Tome against the Tomb ('Tome " +
+                "Used' messages; your unspent power reserves absorb the hit first), and at 0% Iastur dies " +
+                "and you lose - so keep power banked as a shield, stop heroes from binding the tome, and " +
+                "kill any binder heading for a library. Your actual win route is unchanged from the whole " +
+                "game so far: the standard victory-points meter (game_overview victory progress). Waves of " +
+                "Madness at the Tomb feeds THAT meter - each completed wave drives the nearest chunk of " +
+                "rulers and heroes insane, and every insane ruler/hero scores victory points (roughly " +
+                "double when also enshadowed) - its payoff appears in your points total, never in the Soul " +
+                "modifier, which will sit unchanged at its current % after a successful wave. Each wave " +
+                "also adds +40 menace and +40 profile to the performer (paid up front - it is channelled), " +
+                "so escort or rotate performers. Do NOT abandon points-scoring elsewhere: waves are a " +
+                "points accelerator, not a separate win track."),
 
             // ---------- REFERENCE-ONLY: available via get_tips, no automatic trigger ----------
             RefDyn("tags", "Tags (NPC motivation)", "politics",

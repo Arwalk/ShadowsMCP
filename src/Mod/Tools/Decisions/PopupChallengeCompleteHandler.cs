@@ -134,10 +134,21 @@ namespace ShadowsMcp.Tools.Decisions
                 .Set("action", action));
         }
 
-        /// <summary>The game's own per-frame repeatability check, read off the button it toggles.</summary>
+        /// <summary>The game's own repeatability predicate (PopupChallengeComplete.Update /
+        /// dismissRepeat), evaluated directly against live state. Reading the bRepeat button's active
+        /// flag - what this used to do - served a STALE enabled:true when no Unity frame had run since
+        /// the popup opened (headless resolves happen between frames), advertising a repeat the resolve
+        /// then refused (G14-#22).</summary>
         private static bool RepeatAvailable(PopupChallengeComplete p)
         {
-            try { return p != null && p.bRepeat != null && p.bRepeat.gameObject.activeSelf; }
+            try
+            {
+                UA ua = p != null ? p.unit as UA : null;
+                Challenge ch = p != null ? p.ch : null;
+                if (ua == null || ch == null || ua.isDead || ua.task != null) return false;
+                return ch.valid() && ch.claimedBy == null && ch.validFor(ua) &&
+                       ch.location != null && ch.location.GetChallenges().Contains(ch);
+            }
             catch { return false; }
         }
 

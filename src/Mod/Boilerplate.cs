@@ -69,13 +69,15 @@ namespace ShadowsMcp
 
         public const string NoteCarousel =
             "These options are the REAL list entries, not carousel arrows: resolve_decision " +
-            "optionIndex picks one directly (no need to scroll). \"selected\" marks the entry the " +
-            "game currently highlights - it is just the starting position, NOT a recommendation. " +
-            "force=true cancels and FORFEITS the choice (e.g. a completed Cause Scandal ritual then " +
-            "picks nobody), so prefer an optionIndex.";
+            "optionIndex picks one directly (no need to scroll). CAUTION: indices are NOT stable " +
+            "between openings of the same list (taken entries drop out and everything renumbers) - " +
+            "re-read the list each time, or pick by name with optionLabel. \"selected\" marks the " +
+            "entry the game currently highlights - it is just the starting position, NOT a " +
+            "recommendation. force=true cancels and FORFEITS the choice (e.g. a completed Cause " +
+            "Scandal ritual then picks nobody), so prefer an optionIndex/optionLabel.";
 
         public const string RwCarousel =
-            "resolve_decision with optionIndex, or force=true to cancel (forfeits the choice)";
+            "resolve_decision with optionIndex or optionLabel, or force=true to cancel (forfeits the choice)";
 
         private const string ResolveHintFull =
             "answer via end_turn resolveOptionIndex (or resolve_decision optionIndex); " +
@@ -110,7 +112,8 @@ namespace ShadowsMcp
             new Known { Kind = "event", Field = "resolveWith", Full = RwEvent, Brief = null },
             new Known { Kind = "challengeComplete", Field = "resolveWith", Full = RwChallengeComplete, Brief = null },
             new Known { Kind = "carousel", Field = "note", Full = NoteCarousel,
-                Brief = "real list entries — pick one directly with optionIndex; force forfeits the choice." },
+                Brief = "real list entries — indices shift between openings, so re-read or pick by " +
+                        "optionLabel; force forfeits the choice." },
             new Known { Kind = "carousel", Field = "resolveWith", Full = RwCarousel, Brief = null },
         };
 

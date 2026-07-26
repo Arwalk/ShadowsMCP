@@ -68,7 +68,7 @@ namespace ShadowsMcp.Tools.Decisions
                     .Set("enabled", true)
                     .Set("composite", true));
 
-            return JsonValue.NewObject()
+            JsonValue described = JsonValue.NewObject()
                 .Set("pending", true)
                 .Set("kind", "itemTrading")
                 .Set("popupType", "PopupItemTrading")
@@ -77,6 +77,70 @@ namespace ShadowsMcp.Tools.Decisions
                 .Set("options", options)
                 .Set("note", Boilerplate.NoteItemTrading)
                 .Set("resolveWith", Boilerplate.RwItemTrading);
+            // Limited vault access etc.: gold moves are capped per window, and "Move ALL gold" then
+            // moves at most the remaining cap - state the cap up front instead of letting the label
+            // over-promise (G14-#1). Items are never capped.
+            JsonValue limit = GoldLimitJson(p);
+            if (!limit.IsNull) described.Set("goldTransferLimit", limit);
+            // Items on a "Discard Items" side are RELEASED TO THE WORLD when the window closes - for
+            // the Laughing Tome that means falling asleep at a random location (G14-#9). Closing with
+            // side-B items is guarded in Resolve; warn at read time too.
+            string discard = DiscardWarning(p);
+            if (discard != null) described.Set("warning", discard);
+            return described;
+        }
+
+        /// <summary>{maxGoldToA, goldAlreadyMovedToA, goldRemainingToA, …} while this window caps gold
+        /// transfers (PopupItemTrading.maxTradeA/B, e.g. Subtle Thievery's limited vault access), or
+        /// Null when unlimited. All gold-move buttons AND Take All obey the cap.</summary>
+        private static JsonValue GoldLimitJson(PopupItemTrading p)
+        {
+            try
+            {
+                if (p == null || (p.maxTradeA == -1 && p.maxTradeB == -1)) return JsonValue.Null;
+                JsonValue lim = JsonValue.NewObject();
+                if (p.maxTradeA != -1)
+                {
+                    int moved = (int)Math.Round(p.traderA.getGold() - p.initialGoldA);
+                    lim.Set("maxGoldToA", p.maxTradeA)
+                       .Set("goldAlreadyMovedToA", moved)
+                       .Set("goldRemainingToA", Math.Max(0, p.maxTradeA - moved));
+                }
+                if (p.maxTradeB != -1)
+                {
+                    int moved = (int)Math.Round(p.traderB.getGold() - p.initialGoldB);
+                    lim.Set("maxGoldToB", p.maxTradeB)
+                       .Set("goldAlreadyMovedToB", moved)
+                       .Set("goldRemainingToB", Math.Max(0, p.maxTradeB - moved));
+                }
+                lim.Set("note", "this window caps gold transfers (limited access): 'Move ALL gold' " +
+                    "and 'Take all' move at most the remaining cap, NOT all the gold shown; a " +
+                    "gold-move click with the cap used up moves nothing. Items are not capped.");
+                return lim;
+            }
+            catch { return JsonValue.Null; }
+        }
+
+        /// <summary>A loud warning while a world-discard side (ItemToWorldExchange, titled "Discard
+        /// Items") still holds items: closing the window releases them to the world for good. Null
+        /// when it does not apply.</summary>
+        private static string DiscardWarning(PopupItemTrading p)
+        {
+            try
+            {
+                if (p == null || !(p.traderB is ItemToWorldExchange)) return null;
+                List<string> left = ItemNames(p.traderB);
+                if (left.Count == 0) return null;
+                bool tome = false;
+                foreach (Item it in p.traderB.getItems())
+                    if (it is I_LaughingTome) tome = true;
+                return "side B is a DISCARD side: any item still on it when this window closes is " +
+                    "released to the world and LOST to you (" + string.Join(", ", left.ToArray()) + ")." +
+                    (tome ? " That includes the LAUGHING TOME - dismissing this window drops it to " +
+                        "fall asleep at a random location, undoing the summon. Take it (the 'Take all " +
+                        "and close' option) unless you deliberately want to deploy it elsewhere." : "");
+            }
+            catch { return null; }
         }
 
         public ToolResult Resolve(GameContext ctx, GameObject blocker, JsonValue args)
@@ -89,6 +153,11 @@ namespace ShadowsMcp.Tools.Decisions
                     return ToolResult.Error("pick an option with optionIndex (see get_pending_decision), or " +
                         "pass force=true to finish and close the trade.");
                 PopupItemTrading pd = blocker.GetComponent<PopupItemTrading>();
+                // Closing a window whose discard side still holds items silently releases them to the
+                // world (the Laughing Tome falls asleep at a random location - it cost a game-14 run
+                // its whole engine, G14-#9). Real choice ⇒ force alone must not blow through it.
+                ToolResult discardGuard = GuardDiscardClose(pd, args);
+                if (discardGuard != null) return discardGuard;
                 if (pd != null) { try { pd.dismiss(); } catch { } }
                 else { try { if (ui != null) ui.removeBlocker(blocker); } catch { } }
                 bool done = blocker == null || ui == null || ui.blocker != blocker;
@@ -102,7 +171,7 @@ namespace ShadowsMcp.Tools.Decisions
 
             // The composite verbs live at the fixed synthetic indices right after the real buttons.
             if (wanted == buttons.Count || wanted == buttons.Count + 1)
-                return ResolveComposite(ui, blocker, buttons, wanted == buttons.Count ? "bTakeAll" : "swapTop");
+                return ResolveComposite(ui, blocker, buttons, wanted == buttons.Count ? "bTakeAll" : "swapTop", args);
 
             if (wanted < 0 || wanted >= buttons.Count)
                 return ToolResult.Error("optionIndex " + wanted + " is out of range (there are " +
@@ -116,6 +185,12 @@ namespace ShadowsMcp.Tools.Decisions
             // silently skips every item when side A has no free slot (gold still transfers), so "clicked
             // Take All" alone is NOT evidence anything happened.
             PopupItemTrading pre = blocker.GetComponent<PopupItemTrading>();
+            // The Done button closes the window: same discard guard as the force path.
+            if (string.Equals(method, "dismiss", StringComparison.Ordinal))
+            {
+                ToolResult discardGuard = GuardDiscardClose(pre, args);
+                if (discardGuard != null) return discardGuard;
+            }
             List<string> itemsA0 = ItemNames(pre != null ? pre.traderA : null);
             List<string> itemsB0 = ItemNames(pre != null ? pre.traderB : null);
             int goldA0 = GoldOf(pre != null ? pre.traderA : null);
@@ -148,7 +223,8 @@ namespace ShadowsMcp.Tools.Decisions
         /// Resolve yields a clean re-read error instead of a mis-click. A Take All that could not fit
         /// everything does NOT close: the agent gets the warning and can free a slot and take again,
         /// which silent closing would have made impossible.</summary>
-        private ToolResult ResolveComposite(UIMaster ui, GameObject blocker, List<Button> buttons, string method)
+        private ToolResult ResolveComposite(UIMaster ui, GameObject blocker, List<Button> buttons, string method,
+            JsonValue args)
         {
             Button action = FindByMethod(buttons, method);
             if (action == null)
@@ -186,6 +262,15 @@ namespace ShadowsMcp.Tools.Decisions
                          .Set("sides", SidesJson(p))
                          .Set("note", "not closed, so you can free a slot on side A (swap an item away) " +
                             "and Take All again to get the rest - or resolve the 'Done' option to close anyway.");
+                        return ToolResult.Ok(o);
+                    }
+                    // Swap-top can leave items on a discard side; closing would release them (G14-#9).
+                    if (DiscardWarning(p) != null && !args["confirmDiscard"].AsBool())
+                    {
+                        o.Set("closed", false)
+                         .Set("sides", SidesJson(p))
+                         .Set("warning", DiscardWarning(p) + " Left open: take them, or close with " +
+                            "confirmDiscard:true to discard deliberately.");
                         return ToolResult.Ok(o);
                     }
                     try { p.dismiss(); } catch { }
@@ -229,6 +314,31 @@ namespace ShadowsMcp.Tools.Decisions
                 else if (movedToA.Count == 0 && goldDeltaA == 0)
                     o.Set("warning", "nothing moved - side B had no items or gold to take.");
             }
+
+            // A gold-move click that moved nothing used to report bare success (G14-#1): when this
+            // window caps transfers, say the cap is used up rather than let silence read as progress.
+            bool goldClick = method != null && method.StartsWith("bSwapGold", StringComparison.Ordinal);
+            if (goldClick && goldDeltaA == 0 && goldDeltaB == 0)
+            {
+                JsonValue lim = GoldLimitJson(p);
+                o.Set("warning", !lim.IsNull
+                    ? "no gold moved - this window's gold-transfer cap (limited access) is already " +
+                      "used up; see goldTransferLimit. Clicking again will not move more."
+                    : "no gold moved - the source side has no gold.");
+            }
+            JsonValue limEcho = GoldLimitJson(p);
+            if (!limEcho.IsNull) o.Set("goldTransferLimit", limEcho);
+        }
+
+        /// <summary>Refusal for closing a window whose discard side still holds items, unless the caller
+        /// passed confirmDiscard:true. Null = no guard applies, proceed with the close.</summary>
+        private static ToolResult GuardDiscardClose(PopupItemTrading p, JsonValue args)
+        {
+            if (args["confirmDiscard"].AsBool()) return null;
+            string warning = DiscardWarning(p);
+            if (warning == null) return null;
+            return ToolResult.Error("not closed: " + warning + " To keep them, resolve the 'Take all and " +
+                "close' composite option; to discard DELIBERATELY, retry this close with confirmDiscard:true.");
         }
 
         /// <summary>The enumerated button whose persistent onClick target is <paramref name="method"/>.</summary>

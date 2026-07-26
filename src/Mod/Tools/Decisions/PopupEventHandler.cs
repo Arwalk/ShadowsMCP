@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Assets.Code;
 using ShadowsMcp.Core.Json;
 using ShadowsMcp.Core.Mcp;
@@ -60,7 +61,20 @@ namespace ShadowsMcp.Tools.Decisions
                         .Set("note", "bracketed option requirements (e.g. [Requires: N Gold]) are " +
                             "checked against this person's resources"));
                     Location loc = actor.getLocation();
-                    if (loc != null) o.Set("location", Summaries.LocationRef(loc));
+                    if (loc != null)
+                    {
+                        o.Set("location", Summaries.LocationRef(loc));
+                        // The current charges the option deltas apply to. A GUI player sees the
+                        // devastation/unrest bars behind the popup; a JSON-only player chose "+100
+                        // Devastation" twice with no way to see the city was near its 300 destruction
+                        // cap, and lost the settlement, its ruler and a well (G14-#23).
+                        JsonValue mods = LocationModifiers(loc);
+                        if (!mods.IsNull)
+                            o.Set("locationModifiers", mods)
+                             .Set("locationModifiersNote", "current modifier charges at the event's " +
+                                "location - weigh option deltas against these (Devastation destroys " +
+                                "the settlement outright at 300).");
+                    }
                 }
             }
             catch { }
@@ -130,6 +144,29 @@ namespace ShadowsMcp.Tools.Decisions
             string label = ButtonLabel(target);
             UIMaster ui = SafeUi(ctx);
 
+            // Snapshot the observable numbers an outcome most often moves (actor heat/gold, location
+            // modifiers) BEFORE the click: two thirds of event choices apply their effects with no
+            // outcome text at all, and each used to cost a confirming query (G14-#8).
+            Person snapActor = null;
+            Location snapLoc = null;
+            double menace0 = 0, profile0 = 0;
+            int gold0 = 0;
+            var charges0 = new System.Collections.Generic.Dictionary<string, double>();
+            try
+            {
+                snapActor = popup.person1;
+                if (snapActor != null)
+                {
+                    gold0 = snapActor.gold;
+                    if (snapActor.unit != null) { menace0 = snapActor.unit.menace; profile0 = snapActor.unit.profile; }
+                    snapLoc = snapActor.getLocation();
+                    if (snapLoc != null && snapLoc.properties != null)
+                        foreach (Property pr in snapLoc.properties)
+                            if (pr != null) charges0[pr.GetType().Name] = pr.charge;
+                }
+            }
+            catch { }
+
             // Clicking a valid option runs dismiss(choice, ctx) → removeBlocker: the blocker changes.
             target.onClick.Invoke();
 
@@ -165,7 +202,15 @@ namespace ShadowsMcp.Tools.Decisions
             else if (outcomeText == null)
                 ok.Set("outcome", "applied without an outcome message - this choice rolled one of its " +
                     "weighted outcomes and the game queued no text for it; its effects (if any) are " +
-                    "already applied. Check the relevant unit/location if you need to confirm.");
+                    "already applied. observedChanges below diffs the actor/location for you; anything " +
+                    "it does not cover, check the relevant unit/location.");
+            // Textless outcome: diff the snapshot so the numeric effect is IN the result instead of
+            // costing a confirming get_unit/get_location round-trip.
+            if (outcomeText == null)
+            {
+                JsonValue changes = ObservedChanges(snapActor, snapLoc, menace0, profile0, gold0, charges0);
+                if (!changes.IsNull) ok.Set("observedChanges", changes);
+            }
             return ToolResult.Ok(ok);
         }
 
@@ -354,6 +399,87 @@ namespace ShadowsMcp.Tools.Decisions
         {
             try { return ctx.Map != null && ctx.Map.world != null ? ctx.Map.world.ui : null; }
             catch { return null; }
+        }
+
+        /// <summary>The location's current property charges ({type, name, charge}), capped at 10
+        /// entries. Null when there are none.</summary>
+        private static JsonValue LocationModifiers(Location loc)
+        {
+            try
+            {
+                if (loc == null || loc.properties == null || loc.properties.Count == 0) return JsonValue.Null;
+                JsonValue arr = JsonValue.NewArray();
+                foreach (Property pr in loc.properties)
+                {
+                    if (pr == null) continue;
+                    string name; try { name = pr.getName(); } catch { name = pr.GetType().Name; }
+                    JsonValue e = JsonValue.NewObject()
+                        .Set("type", pr.GetType().Name)
+                        .Set("name", name)
+                        .Set("charge", Math.Round(pr.charge, 1));
+                    if (pr is Pr_Devastation) e.Set("max", 300).Set("atMax", "settlement destroyed");
+                    arr.Add(e);
+                    if (arr.Count >= 10) break;
+                }
+                return arr.Count > 0 ? arr : JsonValue.Null;
+            }
+            catch { return JsonValue.Null; }
+        }
+
+        /// <summary>Diff the pre-click snapshot against the live actor/location: gold, menace, profile
+        /// and each location modifier whose charge moved. Null when nothing observable changed (the
+        /// outcome may still have acted elsewhere - relationships, other people).</summary>
+        private static JsonValue ObservedChanges(Person actor, Location loc, double menace0,
+            double profile0, int gold0, System.Collections.Generic.Dictionary<string, double> charges0)
+        {
+            try
+            {
+                if (actor == null) return JsonValue.Null;
+                JsonValue o = JsonValue.NewObject();
+                bool any = false;
+                if (actor.gold != gold0) { o.Set("actorGoldDelta", actor.gold - gold0); any = true; }
+                if (actor.unit != null)
+                {
+                    double dm = Math.Round(actor.unit.menace - menace0, 1);
+                    double dp = Math.Round(actor.unit.profile - profile0, 1);
+                    if (dm != 0) { o.Set("actorMenaceDelta", dm); any = true; }
+                    if (dp != 0) { o.Set("actorProfileDelta", dp); any = true; }
+                }
+                if (loc != null && loc.properties != null)
+                {
+                    JsonValue mods = JsonValue.NewArray();
+                    var seen = new HashSet<string>();
+                    foreach (Property pr in loc.properties)
+                    {
+                        if (pr == null) continue;
+                        string key = pr.GetType().Name;
+                        seen.Add(key);
+                        double before;
+                        double delta = charges0.TryGetValue(key, out before)
+                            ? Math.Round(pr.charge - before, 1)
+                            : Math.Round(pr.charge, 1); // property newly added by the outcome
+                        if (delta == 0) continue;
+                        string name; try { name = pr.getName(); } catch { name = key; }
+                        mods.Add(JsonValue.NewObject()
+                            .Set("name", name)
+                            .Set("chargeDelta", delta)
+                            .Set("chargeNow", Math.Round(pr.charge, 1)));
+                    }
+                    foreach (var kv in charges0)
+                        if (!seen.Contains(kv.Key) && kv.Value != 0)
+                            mods.Add(JsonValue.NewObject()
+                                .Set("name", kv.Key)
+                                .Set("chargeDelta", Math.Round(-kv.Value, 1))
+                                .Set("chargeNow", 0)
+                                .Set("removed", true));
+                    if (mods.Count > 0) { o.Set("locationModifierDeltas", mods); any = true; }
+                }
+                if (!any) return JsonValue.Null;
+                o.Set("note", "diff of the acting person and their location, before vs after this " +
+                    "choice - the outcome's directly observable numeric effects.");
+                return o;
+            }
+            catch { return JsonValue.Null; }
         }
     }
 }

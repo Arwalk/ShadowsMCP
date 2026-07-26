@@ -257,6 +257,14 @@ namespace ShadowsMcp.Tools.Decisions
                 if (!string.Equals(current, expected, StringComparison.Ordinal))
                     return StaleDecisionError(ctx, expected, current);
             }
+            // optionLabel: pick by what the option SAYS, not where it sits. Carousel-style lists
+            // renumber as taken entries drop out (the tag picker moved 'Danger' off index 4 between
+            // casts and a habitual index bought the wrong dislike, G14-#13); a label survives that.
+            if (args["optionIndex"].IsNull && !string.IsNullOrEmpty(args["optionLabel"].AsString()))
+            {
+                ToolResult labelErr = MapOptionLabel(ctx, args);
+                if (labelErr != null) return labelErr;
+            }
             GameObject blocker = CurrentBlocker(ctx);
             if (blocker != null)
             {
@@ -266,6 +274,54 @@ namespace ShadowsMcp.Tools.Decisions
             INonModalDecision nm = FirstNonModal(ctx);
             if (nm != null) return nm.Resolve(ctx, args);
             return ToolResult.Error("no decision is pending (nothing needs your attention right now).");
+        }
+
+        /// <summary>Translate <c>optionLabel</c> into <c>optionIndex</c> against the live decision:
+        /// exact match (case-insensitive) wins, else a UNIQUE substring match; anything else is a
+        /// refusal that lists the real labels. Writes the resolved index into <paramref name="args"/>
+        /// and returns null on success.</summary>
+        private static ToolResult MapOptionLabel(GameContext ctx, JsonValue args)
+        {
+            string want = args["optionLabel"].AsString().Trim();
+            JsonValue opts;
+            try { opts = Current(ctx)["options"]; }
+            catch { opts = JsonValue.Null; }
+            int exact = -1, partial = -1, partialCount = 0;
+            for (int i = 0; i < opts.Count; i++)
+            {
+                string label = opts[i]["label"].AsString();
+                if (string.IsNullOrEmpty(label)) continue;
+                int idx = opts[i]["index"].AsInt(i);
+                if (string.Equals(label.Trim(), want, StringComparison.OrdinalIgnoreCase))
+                {
+                    exact = idx;
+                    break;
+                }
+                if (label.IndexOf(want, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    partial = idx;
+                    partialCount++;
+                }
+            }
+            int chosen = exact >= 0 ? exact : (partialCount == 1 ? partial : -1);
+            if (chosen < 0)
+            {
+                var sb = new System.Text.StringBuilder();
+                sb.Append("optionLabel \"").Append(want).Append("\" ")
+                  .Append(partialCount > 1 ? "matches more than one option" : "matches no option")
+                  .Append(" - nothing was clicked. Current options: ");
+                for (int i = 0; i < opts.Count && i < 20; i++)
+                {
+                    if (i > 0) sb.Append(", ");
+                    sb.Append(opts[i]["index"].AsInt(i)).Append(": ")
+                      .Append(opts[i]["label"].AsString() ?? "?");
+                }
+                if (opts.Count > 20) sb.Append(", … (").Append(opts.Count).Append(" total)");
+                sb.Append(". Use an exact or unique label, or optionIndex.");
+                return ToolResult.Error(sb.ToString());
+            }
+            args.Set("optionIndex", chosen);
+            return null;
         }
 
         /// <summary>Refusal for a mismatched expectedDecisionId, modeled on ActionTools.StaleChallengeError:

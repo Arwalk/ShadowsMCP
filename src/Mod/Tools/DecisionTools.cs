@@ -34,7 +34,9 @@ namespace ShadowsMcp.Tools
                 "this one is flagged in the result banner.",
                 Schema.Object(
                     Schema.Prop("optionIndex", Schema.Integer("Zero-based index of the option to choose (from get_pending_decision)")),
+                    Schema.Prop("optionLabel", Schema.String("Choose by the option's LABEL instead of its index (exact match preferred, else a unique substring; case-insensitive). Safer than optionIndex on lists whose indices shift between reads, e.g. the tag-pick carousel.")),
                     Schema.Prop("force", Schema.Boolean("Skip a level-up / dismiss an unmodelled popup without choosing (does NOT pass the idle-agent alert — use optionIndex 0 for that)")),
+                    Schema.Prop("confirmDiscard", Schema.Boolean("Item-trading only: confirm closing a trade window whose 'Discard Items' side still holds items, DELIBERATELY releasing them to the world (the guarded close refuses otherwise).")),
                     Schema.Prop("expectedDecisionId", Schema.String("Optional decisionId from get_pending_decision: if the pending decision has changed since you read it, nothing is clicked and the new decision is described instead. Recommended whenever you chain resolves."))),
                 a => QueryTools.WithMap(ctx, map => DecisionRegistry.Resolve(ctx, a))));
         }
