@@ -149,10 +149,26 @@ resolve_decision, end_turn, new_game.
   more entries, assert the result carries `hiddenNotPerformable` with a `count` equal to the difference and
   `items:[{id,name,restriction?}]` naming what was hidden (plus a `hint`). This is how gated families
   (e.g. the Geomancy `Mg_*` challenges at a geomantic locus) stay discoverable. If nothing was filtered,
-  assert `hiddenNotPerformable` is absent.
+  assert `hiddenNotPerformable` is absent. Truncation must be explicit: `truncated:true` plus a
+  `truncatedNote` appear exactly when `count > items.length` (items caps at 20), and both are absent when
+  nothing was dropped. When a unit's OWN ritual (unit or item-granted, `ritual:true`) was filtered
+  alongside 20+ location entries, it must appear WITHIN `items` — the unit's kit is recorded before
+  location challenges and can no longer be pushed out of the window.
 - D6 (error names the reason): find a listed challenge with `valid:false` and `perform_challenge` it; assert
   the error message includes the `restriction` text, not just "requirements … are not met". If none is
   invalid, SKIP.
+- D6b (ritual errors explain no-auto-travel): `perform_challenge` a `Cr-` ritual whose requirements are
+  NOT met (e.g. a location-gated unit ritual while standing elsewhere; SKIP if none): assert the error
+  contains the rituals-are-performed-IN-PLACE / "never auto-travelled" note telling you to `move_unit`
+  first and retry the same `Cr-` id — the location-gated failure must not read like a plain stat gate.
+- D15 (tome state is observable, Iastur only, opportunistic): any listed tome challenge (Summon the Tome /
+  Collect Tome / Bind Tome entries) must carry `tomeStatus` with `state` in {`beingBound`,`held`,
+  `heldBound`,`activeAtLocation`,`inertAtLocation`,`inEther`}, a `note`, and — per state — the binding
+  `unit`+`location`, the `holder`, or the holding `location`. When `state:"beingBound"`, the summon's
+  `restriction` must ALSO name the binder ("right now: being bound by <unit> …") so the vanilla "a hero is
+  currently binding" text is verifiable; a failing `perform_challenge` on the summon must append
+  "Tome status: …" to its error. When `state:"inertAtLocation"`, `list_challenges` at that location must
+  expose the Collect Tome challenge. SKIP on non-Iastur gods or when no tome challenge is listed.
 - D7 (stable ids): `list_challenges` for one of your agents and cache a valid challenge's `id`. `end_turn` a
   few turns (no `force` needed), then `perform_challenge {"unitId":"U...","challengeId":"<cached>"}` WITHOUT
   re-listing — assert it is accepted (a perform/travel task appears via `get_unit`), proving the id survived
@@ -324,9 +340,21 @@ resolve_decision, end_turn, new_game.
   can't fit everything, the composite must NOT close — assert `closed:false` with the leftover `warning`
   and a `note` explaining how to take the rest. SKIP if no trade appears.
 - G6c (event outcomes are never silent): whenever you resolve a narrative `kind:"event"` choice, assert the
-  result carries — besides `chose` — EITHER `outcomeText` (the outcome description the game rolled, read
-  and cleared for you) OR an explicit `outcome` field stating the choice applied one of its weighted
-  outcomes without disclosure text. A result with only `chose` is a FAIL.
+  result carries — besides `chose` — at least one of: `outcomeText` (EVERY consecutive outcome message the
+  game queued, read and cleared for you — multi-popup chains arrive concatenated with blank lines),
+  `followUp` (a non-message popup chained from the outcome and is now the pending decision — then
+  `get_pending_decision` must return that popup UN-dismissed), or the explicit no-message `outcome` field
+  ("applied without an outcome message …"), which may appear ONLY when neither of the other two does. A
+  result with only `chose`, or an `outcome` claiming no message when a text popup was in fact queued, is
+  a FAIL.
+- G6f (events name their actor and location): any `kind:"event"` decision whose options carry a bracketed
+  requirement (e.g. "[Requires: 20 Gold]" on Merchant of Antiquities) must expose `actor` with
+  `person {id,name}`, the person's current `gold`, and a note that bracketed gates are checked against
+  THIS person — assert each such option's `enabled` is consistent with `actor.gold` vs the bracketed
+  amount. Assert `location {id,name}` is present whenever `actor` is (it is the acting person's location),
+  including on RECURRING events compacted to "(recurring event; full text shown earlier)" — the location
+  must survive the compaction. Both fields may be absent only on god-level events with no acting person.
+  SKIP if no qualifying event appears.
 - G6d (challenge-complete popup is stable): after any challenge completes, `get_pending_decision` shows
   `kind:"challengeComplete"` with ALWAYS exactly 3 options at fixed indices — 0 Dismiss, 1 dismiss+pan,
   2 "Repeat this challenge immediately" with an `enabled` flag (and a `why` when disabled) — plus the

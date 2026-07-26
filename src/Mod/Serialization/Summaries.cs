@@ -1245,6 +1245,18 @@ namespace ShadowsMcp
                 o.Set("locationNote", "Wilderness Lay Low runs at a base rate, doubled only if the "
                     + "settlement here is 100% infiltrated; progressPerTurn is the actual rate at this "
                     + "location.");
+            // Laughing Tome challenges: the summon's vanilla restriction ("a hero is currently binding
+            // the tome") is TRUE exactly when some unit is running Ch_BindTome, but nothing lets the
+            // player verify that — game 13 concluded the restriction was wrong and the deployed tome
+            // unrecoverable (Collect Tome, on the INERT property only, was found by accident). Attach
+            // the tome's observable state to every tome-related challenge entry.
+            JsonValue tomeStatus = JsonValue.Null;
+            if (c is Ch_SummonLaughingTome || c is Ch_ForciblySummonLaughingTome ||
+                c is Ch_CollectTome || c is Ch_BindTome)
+            {
+                tomeStatus = LaughingTomeStatus(ctx, c.map);
+                if (!tomeStatus.IsNull) o.Set("tomeStatus", tomeStatus);
+            }
             // Why the challenge is locked / what it needs — the game's own hint text (getRestriction).
             // `valid` is the challenge's WORLD precondition (most types hard-code `return true`, e.g.
             // Ch_LayLow); the location/settlement preconditions (infiltration %, shadow %, ward,
@@ -1276,6 +1288,18 @@ namespace ShadowsMcp
                 }
             }
             catch { }
+            // Make the summon's binding restriction provable: name the binder in the restriction
+            // itself, so "Cannot be used if a hero is currently binding the tome" reads as a checked
+            // fact instead of a wrong guess (tomeStatus carries the structured version).
+            if (c is Ch_SummonLaughingTome && tomeStatus["state"].AsString() == "beingBound")
+            {
+                string binder = tomeStatus["unit"]["name"].AsString() ?? "a hero";
+                string binderLoc = tomeStatus["location"]["name"].AsString();
+                string now = "right now: being bound by " + binder +
+                    (binderLoc != null ? " at " + binderLoc : "") + " - interrupt the binder or wait";
+                string existing = o["restriction"].AsString();
+                o.Set("restriction", string.IsNullOrEmpty(existing) ? now : existing + ". " + now);
+            }
             // Market stalls: always show the wares (even terse) — the three stalls share one display
             // name, so without this an agent cannot tell the offers apart or choose between them.
             if (c is Ch_BuyItem stall && stall.onSale != null)
@@ -1331,6 +1355,103 @@ namespace ShadowsMcp
                     o.Set("etaTurns", (int)Math.Ceiling(cx / ppt));
             }
             return o;
+        }
+
+        // ---------- laughing tome ----------
+
+        /// <summary>
+        /// Where the Laughing Tome currently is. The states mirror I_LaughingTome.purgeExisting +
+        /// Ch_SummonLaughingTome.validFor/complete: only "beingBound" blocks the summon's validFor,
+        /// and only "heldBound" makes a completed summon silently do nothing. Game 13's player read
+        /// the (true) "a hero is binding the tome" restriction as wrong because nothing let them
+        /// verify it; this makes the blocking hero, holder or holding location observable.
+        /// Returns JsonValue.Null when no game or on any game-read failure.
+        /// </summary>
+        public static JsonValue LaughingTomeStatus(GameContext ctx, Map map)
+        {
+            try
+            {
+                if (map == null) return JsonValue.Null;
+                foreach (Unit u in map.units)
+                {
+                    if (u != null && u.task is Task_PerformChallenge tpc && tpc.challenge is Ch_BindTome)
+                        return JsonValue.NewObject()
+                            .Set("state", "beingBound")
+                            .Set("unit", UnitRef(ctx, u))
+                            .Set("location", LocationRef(u.location))
+                            .Set("note", "a hero is binding the tome - Summon Tome is blocked until the "
+                                + "binding completes or is interrupted (kill, rob or disrupt the binder)");
+                }
+                foreach (Person p in map.persons)
+                {
+                    if (p == null || p.items == null) continue;
+                    foreach (Item it in p.items)
+                    {
+                        if (!(it is I_LaughingTome tome)) continue;
+                        if (tome.bound)
+                            return JsonValue.NewObject()
+                                .Set("state", "heldBound")
+                                .Set("holder", PersonRef(p))
+                                .Set("location", LocationRef(p.getLocation()))
+                                .Set("note", "bound to its holder - Summon Tome will complete but do "
+                                    + "NOTHING; rob or kill the holder to retrieve it");
+                        return JsonValue.NewObject()
+                            .Set("state", "held")
+                            .Set("holder", PersonRef(p))
+                            .Set("location", LocationRef(p.getLocation()))
+                            .Set("note", "held unbound - Summon Tome will retrieve it");
+                    }
+                }
+                foreach (Location l in map.locations)
+                {
+                    if (l == null || l.properties == null) continue;
+                    foreach (Property pr in l.properties)
+                    {
+                        if (pr is Pr_LaughingTomeInert)
+                            return JsonValue.NewObject()
+                                .Set("state", "inertAtLocation")
+                                .Set("location", LocationRef(l))
+                                .Set("note", "asleep - the 'Collect Tome' challenge is available AT this "
+                                    + "location (list_challenges there), or Summon Tome retrieves it from "
+                                    + "anywhere");
+                        if (pr is Pr_LaughingTome)
+                            return JsonValue.NewObject()
+                                .Set("state", "activeAtLocation")
+                                .Set("location", LocationRef(l))
+                                .Set("note", "active in the wild - NOT collectable while active (heroes "
+                                    + "may come bind it here); Summon Tome retrieves it from anywhere");
+                    }
+                }
+                return JsonValue.NewObject()
+                    .Set("state", "inEther")
+                    .Set("note", "not in the world - Summon Tome will conjure it directly");
+            }
+            catch { return JsonValue.Null; }
+        }
+
+        /// <summary>One-sentence rendering of <see cref="LaughingTomeStatus"/> for error messages
+        /// ("Tome status: being bound by X at Y."); null when the status is unreadable.</summary>
+        public static string LaughingTomeStatusText(GameContext ctx, Map map)
+        {
+            JsonValue ts = LaughingTomeStatus(ctx, map);
+            if (ts == null || ts.IsNull) return null;
+            string state = ts["state"].AsString();
+            if (state == null) return null;
+            string who = ts["unit"]["name"].AsString() ?? ts["holder"]["name"].AsString();
+            string where = ts["location"]["name"].AsString();
+            string s;
+            switch (state)
+            {
+                case "beingBound": s = "being bound by " + (who ?? "a hero"); break;
+                case "heldBound": s = "held BOUND by " + (who ?? "someone") + " (summon completes but does nothing)"; break;
+                case "held": s = "held unbound by " + (who ?? "someone"); break;
+                case "inertAtLocation": s = "lying inert"; break;
+                case "activeAtLocation": s = "deployed and active"; break;
+                default: s = "in the ether (not in the world)"; break;
+            }
+            if (where != null) s += " at " + where;
+            if (state == "inertAtLocation") s += " - the 'Collect Tome' challenge there retrieves it";
+            return "Tome status: " + s + ".";
         }
 
         // ---------- victory attribution ----------

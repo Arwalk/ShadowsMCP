@@ -257,6 +257,19 @@ namespace ShadowsMcp.Tools
             string restr;
             try { restr = c.getRestriction(); } catch { restr = null; }
             string why = string.IsNullOrEmpty(restr) ? "" : ": " + restr;
+            // The summon's restriction ("a hero is currently binding the tome") is true but
+            // unverifiable from the outside — attach the tome's actual observable state.
+            if (c is Ch_SummonLaughingTome || c is Ch_ForciblySummonLaughingTome || c is Ch_CollectTome)
+            {
+                string tome = Summaries.LaughingTomeStatusText(ctx, map);
+                if (tome != null) why += (why.Length == 0 ? ": " : ". ") + tome;
+            }
+            // Location challenges auto-travel (below); rituals never do — the same call shape fails
+            // where a C*-id would have started a journey, and nothing used to say so (game 13 #9).
+            if (c is Ritual)
+                why += (why.Length == 0 ? ": " : ". ") + "Note: rituals are performed IN PLACE and are " +
+                    "never auto-travelled (unlike location challenges); if the requirement is " +
+                    "location-bound, move_unit to a qualifying location first, then retry this same Cr- id.";
             if (!c.valid())
                 return ToolResult.Error("the requirements to enable challenge '" + c.getName() + "' are not met" + why);
             if (ua != null && !c.validFor(ua))

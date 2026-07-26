@@ -527,21 +527,10 @@ namespace ShadowsMcp.Tools
                         hiddenItems.Add(h);
                     };
 
-                    JsonValue arr = JsonValue.NewArray();
-                    foreach (Challenge c in loc.GetChallenges())
-                    {
-                        // The game shows an agent only non-"good" challenges (UIScroll_Unit filters
-                        // isGoodTernary()==1 from BOTH its valid and invalid sections): a hero-side
-                        // challenge like Combat Banditry would undo the player's own work. Mirror that.
-                        if (uaF != null && Summaries.IsHeroOnly(c)) continue;
-                        // For an army the game UI offers no location challenges at all — only the
-                        // subclasses that explicitly implement validFor(UM) are genuinely army-usable.
-                        if (umF != null && !Summaries.OverridesValidForUM(c)) continue;
-                        if (performableOnly && !performable(c)) { recordHidden(c, false); continue; }
-                        JsonValue entry = Summaries.ChallengeSummary(ctx, c, u, !terse);
-                        if (dedupe(visibleById, entry)) continue;
-                        arr.Add(entry);
-                    }
+                    // The unit's own rituals are recorded (and thus fill the capped hidden list)
+                    // BEFORE the location's challenges: game 13's hidden list dropped a unique
+                    // agent's signature rituals past the cap, making its kit look empty, while
+                    // generic location entries took the first 20 slots.
                     JsonValue rituals = JsonValue.NewArray();
                     if (u.rituals != null)
                     {
@@ -574,17 +563,40 @@ namespace ShadowsMcp.Tools
                             }
                         }
                     }
+                    JsonValue arr = JsonValue.NewArray();
+                    foreach (Challenge c in loc.GetChallenges())
+                    {
+                        // The game shows an agent only non-"good" challenges (UIScroll_Unit filters
+                        // isGoodTernary()==1 from BOTH its valid and invalid sections): a hero-side
+                        // challenge like Combat Banditry would undo the player's own work. Mirror that.
+                        if (uaF != null && Summaries.IsHeroOnly(c)) continue;
+                        // For an army the game UI offers no location challenges at all — only the
+                        // subclasses that explicitly implement validFor(UM) are genuinely army-usable.
+                        if (umF != null && !Summaries.OverridesValidForUM(c)) continue;
+                        if (performableOnly && !performable(c)) { recordHidden(c, false); continue; }
+                        JsonValue entry = Summaries.ChallengeSummary(ctx, c, u, !terse);
+                        if (dedupe(visibleById, entry)) continue;
+                        arr.Add(entry);
+                    }
                     JsonValue result = JsonValue.NewObject()
                         .Set("location", Summaries.LocationRef(loc))
                         .Set("challenges", arr)
                         .Set("unitRituals", rituals);
                     if (hiddenCount > 0)
-                        result.Set("hiddenNotPerformable", JsonValue.NewObject()
+                    {
+                        JsonValue hidden = JsonValue.NewObject()
                             .Set("count", hiddenCount)
-                            .Set("items", hiddenItems)
-                            .Set("hint", "these challenges/rituals exist here but this unit cannot act on "
+                            .Set("items", hiddenItems);
+                        if (hiddenCount > hiddenItems.Count)
+                            hidden.Set("truncated", true)
+                                .Set("truncatedNote", "items lists the first " + hiddenItems.Count +
+                                    " of " + hiddenCount + " (the unit's own rituals are listed first); " +
+                                    "re-run without performableOnly for the full set");
+                        hidden.Set("hint", "these challenges/rituals exist here but this unit cannot act on "
                                 + "them right now (valid/validFor failed — see each 'restriction'). Re-run "
-                                + "without performableOnly for full details."));
+                                + "without performableOnly for full details.");
+                        result.Set("hiddenNotPerformable", hidden);
+                    }
                     return ToolResult.Ok(result);
                 })));
 

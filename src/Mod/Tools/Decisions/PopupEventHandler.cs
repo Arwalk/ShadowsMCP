@@ -42,6 +42,29 @@ namespace ShadowsMcp.Tools.Decisions
                 .Set("description", Description(popup))
                 .Set("resolveWith", Boilerplate.RwEvent);
 
+            // person1 is the event's acting person (EventContext.person, captured in
+            // PopupEvent.populate); vanilla evaluates option conditions — the bracketed
+            // "[Requires: N Gold]" gates — against THIS person's resources, which repeated
+            // playtests could not tell (games 12/13 #6). Absent for god-level events with no
+            // acting person. The location also fixes recurring-event summaries that reference
+            // "this location" with no way to identify it (game 13 #12): both fields survive
+            // Boilerplate.CompactRecurringEvent, which only rewrites the description.
+            try
+            {
+                Person actor = popup.person1;
+                if (actor != null)
+                {
+                    o.Set("actor", JsonValue.NewObject()
+                        .Set("person", Summaries.PersonRef(actor))
+                        .Set("gold", actor.gold)
+                        .Set("note", "bracketed option requirements (e.g. [Requires: N Gold]) are " +
+                            "checked against this person's resources"));
+                    Location loc = actor.getLocation();
+                    if (loc != null) o.Set("location", Summaries.LocationRef(loc));
+                }
+            }
+            catch { }
+
             JsonValue options = JsonValue.NewArray();
             Button[] buttons = popup.options;
             if (buttons != null)
@@ -124,23 +147,25 @@ namespace ShadowsMcp.Tools.Decisions
             if (forcedDefault) ok.Set("forcedDefault", true);
 
             // A choice rolls one of its weighted outcomes (EventManager.chooseOutcome) and applies its
-            // effects SILENTLY; the only disclosure channel is PopupEvent.dismiss popping the outcome's
-            // description as a PopupMsg - when the outcome has one. Read that message into the result here
-            // (and clear it) so the agent learns what fired in the same tool call; when there is none, say
-            // so explicitly rather than reporting only the option that was clicked.
-            string outcomeText = ReadAndDismissOutcomeMsg(ctx, ui);
+            // effects SILENTLY; disclosure arrives as a chain of queued PopupMsgs (the outcome's
+            // description and anything its effects popped). Read the whole chain into the result here;
+            // a non-PopupMsg follow-up is a real decision, left pending and pointed at instead.
+            bool followUp;
+            string outcomeText = ReadAndDismissOutcomeMsgs(ctx, ui, out followUp);
             if (outcomeText != null)
             {
                 ok.Set("outcomeText", outcomeText);
                 try { ctx.Events.RecordPopup(TurnOf(ctx), "eventOutcome", FirstLine(outcomeText), "auto-read into event result"); }
                 catch { }
             }
-            else
-            {
-                ok.Set("outcome", "applied without disclosure - this choice rolled one of its weighted " +
-                    "outcomes and the game showed no text for it; its effects (if any) are already applied. " +
-                    "Check the relevant unit/location if you need to confirm.");
-            }
+            if (followUp)
+                ok.Set("followUp", "a further popup chained from this outcome and is now the pending " +
+                    "decision - call get_pending_decision to see and resolve it" +
+                    (outcomeText == null ? "; the outcome details are likely in it" : ""));
+            else if (outcomeText == null)
+                ok.Set("outcome", "applied without an outcome message - this choice rolled one of its " +
+                    "weighted outcomes and the game queued no text for it; its effects (if any) are " +
+                    "already applied. Check the relevant unit/location if you need to confirm.");
             return ToolResult.Ok(ok);
         }
 
@@ -192,7 +217,7 @@ namespace ShadowsMcp.Tools.Decisions
                     .Set("turn", TurnOf(ctx))
                     .Set("title", title)
                     .Set("chose", want);
-                string outcomeText = ReadAndDismissOutcomeMsg(ctx, ui);
+                string outcomeText = ReadAndDismissOutcomeMsgs(ctx, ui, out _);
                 if (outcomeText != null) rec.Set("outcome", FirstLine(outcomeText));
                 try
                 {
@@ -205,23 +230,37 @@ namespace ShadowsMcp.Tools.Decisions
             catch { return JsonValue.Null; }
         }
 
-        /// <summary>If the new live blocker is exactly a <see cref="PopupMsg"/> (the outcome-description
-        /// popup), return its text and dismiss it. Any other popup type (a chained level-up, a follow-up
-        /// event, …) is left pending untouched and null is returned.</summary>
-        private static string ReadAndDismissOutcomeMsg(GameContext ctx, UIMaster ui)
+        /// <summary>Drain every consecutive <see cref="PopupMsg"/> blocker (the outcome description
+        /// plus any notices its effects queued behind it), concatenating their texts. An outcome's
+        /// effects can pop messages DURING chooseOutcome, so the disclosure is often a chain, not one
+        /// popup — reading only the first made resolve_decision claim "no disclosure" for text that
+        /// arrived one blocker later (game 13 #4). Stops at the first non-PopupMsg blocker: that is a
+        /// real decision (a chained event, a level-up…), is never dismissed here, and is reported via
+        /// <paramref name="followUpPending"/>. A textless PopupMsg is dismissed too (it carries no
+        /// information; leaving it pending stranded the queue). Capped defensively at 8 popups.</summary>
+        private static string ReadAndDismissOutcomeMsgs(GameContext ctx, UIMaster ui, out bool followUpPending)
         {
+            followUpPending = false;
+            string acc = null;
             try
             {
+                for (int i = 0; i < 8; i++)
+                {
+                    DecisionRegistry.PumpQueue(ctx);
+                    if (ui == null || ui.blocker == null) return acc;
+                    PopupMsg msg = ui.blocker.GetComponent<PopupMsg>();
+                    if (msg == null) { followUpPending = true; return acc; }
+                    string text = msg.text != null ? msg.text.text : null;
+                    msg.dismiss();
+                    if (!string.IsNullOrEmpty(text))
+                        acc = acc == null ? text : acc + "\n\n" + text;
+                }
+                // Cap hit with popups possibly still queued — whatever remains is still pending.
                 DecisionRegistry.PumpQueue(ctx);
-                if (ui == null || ui.blocker == null) return null;
-                PopupMsg msg = ui.blocker.GetComponent<PopupMsg>();
-                if (msg == null) return null;
-                string text = msg.text != null ? msg.text.text : null;
-                if (string.IsNullOrEmpty(text)) return null;
-                msg.dismiss();
-                return text;
+                if (ui != null && ui.blocker != null) followUpPending = true;
             }
-            catch { return null; }
+            catch { }
+            return acc;
         }
 
         private static string FirstLine(string s)
