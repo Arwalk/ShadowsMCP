@@ -5,6 +5,7 @@ using Assets.Code.Modding;
 using ShadowsMcp.Core.Json;
 using ShadowsMcp.Core.Mcp;
 using ShadowsMcp.Core.Util;
+using ShadowsMcp.Extensions;
 
 namespace ShadowsMcp.Tools
 {
@@ -30,12 +31,16 @@ namespace ShadowsMcp.Tools
                 "a game is in progress unless confirm:true (abandons it WITHOUT saving). Returns the god, " +
                 "the seed used and a game_overview-style summary; every other tool works immediately after.",
                 Schema.Object(
-                    Schema.Prop("god", Schema.StringEnum(
-                        "Which god to play (default random). snake=She Who Will Feast (army/combat), " +
-                        "laughing_king=Iastur (madness, courtly intrigue), vinerva=Vinerva (nature twisted " +
-                        "into threat), ophanim=Ophanim (judgement via its own holy order), mammon=Mammon " +
-                        "(greed, trade and industry).",
-                        "snake", "laughing_king", "vinerva", "ophanim", "mammon", "random")),
+                    // A free string, NOT an enum: content mods can add playable gods (via their MCP
+                    // manifest and/or onStartGamePresssed), and their keys are unknowable at
+                    // registration time. Base keys stay authoritative in the description.
+                    Schema.Prop("god", Schema.String(
+                        "Which god to play (default random). Base keys: snake=She Who Will Feast " +
+                        "(army/combat), laughing_king=Iastur (madness, courtly intrigue), vinerva=Vinerva " +
+                        "(nature twisted into threat), ophanim=Ophanim (judgement via its own holy order), " +
+                        "mammon=Mammon (greed, trade and industry); random=any playable god. A god added " +
+                        "by a content mod (see game_overview.mcpExtensions) is selectable by its " +
+                        "advertised key, class name, or display name.")),
                     Schema.Prop("seed", Schema.Integer(
                         "Map seed (default random; echoed in the result; same seed = same world).")),
                     Schema.Prop("mapSize", Schema.StringEnum(
@@ -84,7 +89,13 @@ namespace ShadowsMcp.Tools
             var rng = new System.Random();
             string godKey = a["god"].AsString("random");
             if (godKey == "random")
-                godKey = GodKeys[rng.Next(GodKeys.Length)];
+            {
+                // Manifest-advertised gods join the random pool. If the advertising mod then fails
+                // to add its god in onStartGamePresssed, FindGod reports it by name below.
+                var pool = new List<string>(GodKeys);
+                foreach (ExtensionGod eg in McpExtensions.Gods) pool.Add(eg.Key);
+                godKey = pool[rng.Next(pool.Count)];
+            }
             int seed = a["seed"].IsNull ? rng.Next() : a["seed"].AsInt();
             string sizeLabel = a["mapSize"].AsString("standard");
             int size = sizeLabel == "small" ? SizeSmall : sizeLabel == "large" ? SizeLarge : SizeStandard;
@@ -212,7 +223,47 @@ namespace ShadowsMcp.Tools
                 if (key == "ophanim" && g is God_Ophanim) return g;
                 if (key == "mammon" && g is God_Mammon) return g;
             }
-            throw new InvalidOperationException("god not found in the setup list: " + key);
+
+            // A content mod's god: the mod added the instance to `gods` in its onStartGamePresssed;
+            // match its manifest-advertised key first, then class name, then display name.
+            string manifestClass = null;
+            foreach (ExtensionGod eg in McpExtensions.Gods)
+                if (string.Equals(eg.Key, key, StringComparison.OrdinalIgnoreCase))
+                {
+                    manifestClass = eg.ClassName;
+                    break;
+                }
+            foreach (God g in gods)
+            {
+                string cls = g.GetType().Name;
+                if (manifestClass != null && string.Equals(cls, manifestClass, StringComparison.OrdinalIgnoreCase))
+                    return g;
+                if (string.Equals(cls, key, StringComparison.OrdinalIgnoreCase)) return g;
+                string name = null;
+                try { name = g.getName(); } catch { }
+                if (name != null && string.Equals(name, key, StringComparison.OrdinalIgnoreCase)) return g;
+            }
+
+            throw new InvalidOperationException("god not found in the setup list: " + key +
+                (manifestClass != null
+                    ? " (its mod's manifest advertises class " + manifestClass + ", but no god of that " +
+                      "class was added in onStartGamePresssed - is the content mod enabled?)"
+                    : "") +
+                ". Available: snake, laughing_king, vinerva, ophanim, mammon" + ModdedGodList(gods));
+        }
+
+        /// <summary>Class names of the non-vanilla playable gods currently in the setup list, for the
+        /// FindGod error message. Excludes the three internal gods startProper always appends.</summary>
+        private static string ModdedGodList(List<God> gods)
+        {
+            var extras = new List<string>();
+            foreach (God g in gods)
+            {
+                if (g is God_Snake || g is God_LaughingKing || g is God_Vinerva || g is God_Ophanim ||
+                    g is God_Mammon || g is God_Eternity || g is God_Cards || g is God_Underground) continue;
+                extras.Add(g.GetType().Name);
+            }
+            return extras.Count == 0 ? "" : "; modded: " + string.Join(", ", extras.ToArray());
         }
 
         /// <summary>Fallback when the main-menu component is unavailable: the enabled subset

@@ -64,6 +64,17 @@ See `docs/manual-test-checklist.md` for a full end-to-end test script.
 | `end_turn` | Advance the turn; if a decision popup blocks it, returns the options and accepts `resolveOptionIndex` to answer them (so decisions can be resolved without the two tools above). Always returns a **`digest`** of what happened across every turn advanced — popups force-dismissed (named, not just counted), the turn's notable news (razing, battles, deaths, wars), and **`lost`**: your own units that died, which also stops a batch with `stopReason:"unitLost"`. Once the game is over (`endOfGameAchieved`), returns `gameOver` with the outcome and does not advance |
 | `new_game` | **Start a fresh game headlessly** — from the main menu or over a running one (`confirm:true` required then; the old game is abandoned unsaved). Pick the god (or `random`), seed, map size, difficulty and turn limit; slow (~30–120 s of map gen + burn-in), returns the seed used and a full `game_overview`-style summary |
 
+### Content-mod extensions
+
+Other mods' content largely works out of the box: modded units, challenges, popups and gods flow
+through the game's own lists, the generic popup handler and `inspect`. A content mod can go
+further and **advertise its content** — agent-facing tips for its mechanics, which of its popups
+are safe to auto-dismiss, a `new_game` key for its god, ability previews for its archetypes — by
+declaring one duck-typed method (`string getShadowsMcpManifest()`) on its `ModKernel` returning a
+JSON manifest. No assembly reference in either direction. `game_overview.mcpExtensions` lists the
+mods that did. Schema, integration details and a copy-paste prompt for adding support to a mod
+with a coding agent: [`docs/mcp-extension-guide.md`](docs/mcp-extension-guide.md).
+
 ### Entity ids
 
 Locations use the game's own index (`L3`). Units/persons/social groups/challenges get
@@ -182,3 +193,4 @@ and into the Workshop description (`build.sh` stamps `Build X.Y.Z`). Per release
 - [`docs/game-data-model.md`](docs/game-data-model.md) — the game's internal data model, class by class
 - [`docs/modding-tutorial.md`](docs/modding-tutorial.md) — how to mod Shadows of Forbidden Gods, from zero to this mod
 - [`docs/manual-test-checklist.md`](docs/manual-test-checklist.md) — end-to-end test script for the mod
+- [`docs/mcp-extension-guide.md`](docs/mcp-extension-guide.md) — how a content mod advertises its gods/tips/popups to the MCP

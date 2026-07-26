@@ -1,6 +1,8 @@
 using System;
 using System.Text;
+using Assets.Code;
 using ShadowsMcp.Core.Json;
+using ShadowsMcp.Extensions;
 
 namespace ShadowsMcp.Tips
 {
@@ -9,6 +11,10 @@ namespace ShadowsMcp.Tips
     /// the initialize.instructions primer (<see cref="BuildInstructions"/>), the contextual one-shot tips
     /// on game_overview / end_turn (<see cref="CollectContextual"/>), and the get_tips query tool
     /// (<see cref="Index"/> / <see cref="ById"/> / <see cref="ByCategory"/>).
+    ///
+    /// Content-mod tips (<see cref="McpExtensions.Tips"/>) ride the same channels except the primer:
+    /// instructions are built once at boot, before other mods' manifests may exist, so extension tips
+    /// are never Core — the "when":"always" ones fire once through the contextual channel instead.
     /// </summary>
     public static class TipEngine
     {
@@ -63,7 +69,35 @@ namespace ShadowsMcp.Tips
                     .Set("body", SafeBody(t, ctx)));
                 added++;
             }
+            foreach (ExtensionTip t in McpExtensions.Tips)
+            {
+                if (added >= MaxTipsPerCall) break;
+                if (!t.Always || ctx.ShownTips.Contains(t.Id) || !ExtensionTipFires(ctx, t)) continue;
+                ctx.ShownTips.Add(t.Id);
+                if (arr == null) arr = JsonValue.NewArray();
+                arr.Add(JsonValue.NewObject()
+                    .Set("id", t.Id)
+                    .Set("title", t.Title)
+                    .Set("body", t.Body)
+                    .Set("source", t.SourceMod));
+                added++;
+            }
             return arr ?? JsonValue.Null;
+        }
+
+        /// <summary>An "always" extension tip fires once a game is running and, when the manifest gates
+        /// it to a god (godClass), the chosen god's class matches — the declarative stand-in for the
+        /// code triggers built-in tips get.</summary>
+        private static bool ExtensionTipFires(GameContext ctx, ExtensionTip t)
+        {
+            if (ctx.Map == null) return false;
+            if (string.IsNullOrEmpty(t.GodClass)) return true;
+            try
+            {
+                God god = ctx.Map.overmind != null ? ctx.Map.overmind.god : null;
+                return god != null && god.GetType().Name == t.GodClass;
+            }
+            catch { return false; }
         }
 
         /// <summary>get_tips with no args: the browsable index (id + title + category + one-line summary).</summary>
@@ -77,6 +111,14 @@ namespace ShadowsMcp.Tips
                     .Set("category", t.Category)
                     .Set("summary", t.Summary)
                     .Set("core", t.Core));
+            foreach (ExtensionTip t in McpExtensions.Tips)
+                arr.Add(JsonValue.NewObject()
+                    .Set("id", t.Id)
+                    .Set("title", t.Title)
+                    .Set("category", t.Category)
+                    .Set("summary", t.Summary)
+                    .Set("core", false)
+                    .Set("source", t.SourceMod));
             return JsonValue.NewObject()
                 .Set("tips", arr)
                 .Set("hint", "call get_tips with id=<id> for one tip's full text, or category=<category> for a whole topic");
@@ -86,12 +128,20 @@ namespace ShadowsMcp.Tips
         public static JsonValue ById(GameContext ctx, string id)
         {
             TipDef t = TipCatalog.Find(id);
-            if (t == null) return JsonValue.Null;
+            if (t != null)
+                return JsonValue.NewObject()
+                    .Set("id", t.Id)
+                    .Set("title", t.Title)
+                    .Set("category", t.Category)
+                    .Set("body", SafeBody(t, ctx));
+            ExtensionTip ext = McpExtensions.FindTip(id);
+            if (ext == null) return JsonValue.Null;
             return JsonValue.NewObject()
-                .Set("id", t.Id)
-                .Set("title", t.Title)
-                .Set("category", t.Category)
-                .Set("body", SafeBody(t, ctx));
+                .Set("id", ext.Id)
+                .Set("title", ext.Title)
+                .Set("category", ext.Category)
+                .Set("body", ext.Body)
+                .Set("source", ext.SourceMod);
         }
 
         /// <summary>get_tips category=&lt;category&gt;: every tip's full text in that topic.</summary>
@@ -104,6 +154,13 @@ namespace ShadowsMcp.Tips
                         .Set("id", t.Id)
                         .Set("title", t.Title)
                         .Set("body", SafeBody(t, ctx)));
+            foreach (ExtensionTip t in McpExtensions.Tips)
+                if (string.Equals(t.Category, category, StringComparison.OrdinalIgnoreCase))
+                    arr.Add(JsonValue.NewObject()
+                        .Set("id", t.Id)
+                        .Set("title", t.Title)
+                        .Set("body", t.Body)
+                        .Set("source", t.SourceMod));
             return JsonValue.NewObject().Set("category", category).Set("tips", arr);
         }
 

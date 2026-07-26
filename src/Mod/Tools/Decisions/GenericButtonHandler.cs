@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using Assets.Code;
 using ShadowsMcp.Core.Json;
 using ShadowsMcp.Core.Mcp;
+using ShadowsMcp.Extensions;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -51,7 +52,11 @@ namespace ShadowsMcp.Tools.Decisions
 
         public bool IsInformational(GameObject blocker)
         {
-            return blocker != null && InformationalTypes.Contains(PopupType(blocker));
+            if (blocker == null) return false;
+            string type = PopupType(blocker);
+            // A content mod's manifest can declare ITS OWN popup types lossless-to-dismiss; unknown
+            // types stay conservative (surfaced as a real choice, never auto-dismissed).
+            return InformationalTypes.Contains(type) || McpExtensions.IsInformationalPopup(type);
         }
 
         public string Headline(GameContext ctx, GameObject blocker)
@@ -76,7 +81,7 @@ namespace ShadowsMcp.Tools.Decisions
 
             string type = PopupType(blocker);
             string note = "Pick an option with resolve_decision optionIndex, or force=true to dismiss.";
-            if (HardTypes.Contains(type))
+            if (HardTypes.Contains(type) || McpExtensions.IsHardPopup(type))
                 note = "This popup needs in-game interaction for its main action (text entry, " +
                     "drag, sliders, or a carousel); the buttons below (e.g. cancel/next/dismiss) still " +
                     "work. Use resolve_decision optionIndex, or force=true to dismiss.";

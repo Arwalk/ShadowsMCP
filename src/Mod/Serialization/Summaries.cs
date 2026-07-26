@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Assets.Code;
 using ShadowsMcp.Core.Json;
+using ShadowsMcp.Extensions;
 
 namespace ShadowsMcp
 {
@@ -225,7 +226,10 @@ namespace ShadowsMcp
                 .Set("desc", SafeName(() => abstr.getDesc()));
             if (!ctx.Config.DiscoveryMode)
             {
-                ArchetypeAbilities cat = AbilityCatalog.Get(abstr.code);
+                // Vanilla archetypes come from the hand-curated catalog (by CODE_*); a modded one can
+                // supply its preview via its mod's MCP manifest, keyed by the UAE_* class name.
+                ArchetypeAbilities cat = AbilityCatalog.Get(abstr.code)
+                    ?? McpExtensions.AbilityPreview(abstr.GetType().Name);
                 if (cat != null)
                 {
                     JsonValue abilities = JsonValue.NewArray();

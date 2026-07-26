@@ -6,6 +6,7 @@ using Assets.Code.Modding;
 using ShadowsMcp.Core.Http;
 using ShadowsMcp.Core.Mcp;
 using ShadowsMcp.Core.Util;
+using ShadowsMcp.Extensions;
 using ShadowsMcp.Tips;
 using ShadowsMcp.Tools;
 using UnityEngine;
@@ -51,6 +52,9 @@ namespace ShadowsMcp
         public override void onModsInitiallyLoaded()
         {
             Boot(); // fires more than once (per-DLL and again when all mods finish) — Boot is idempotent
+            // Re-fires alongside Boot so manifests of content mods loading AFTER us are picked up
+            // (see McpExtensions.Refresh — no-op while the kernel list is unchanged).
+            McpExtensions.Refresh();
         }
 
         public override void onStartGamePresssed(Map map, List<God> gods) { OnMapSeen(map); }
@@ -172,6 +176,7 @@ namespace ShadowsMcp
         private static void OnMapSeen(Map map)
         {
             if (_ctx == null || map == null) return;
+            McpExtensions.Refresh(); // covers kernels (re)created on save load; no-op when unchanged
             if (!ReferenceEquals(_ctx.Map, map))
             {
                 _ctx.Map = map;

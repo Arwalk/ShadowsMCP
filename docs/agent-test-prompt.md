@@ -79,6 +79,11 @@ resolve_decision, end_turn, new_game.
 ### Test checklist
 
 **A. Sanity & cross-consistency**
+- A0-note: `game_overview` may also carry a `mcpExtensions` array (names of content mods that
+  advertised an MCP manifest). It is expected to be ABSENT in a vanilla install — do not flag either
+  its absence or its presence as a defect. When present, `get_tips` entries may carry a `source` field
+  naming the contributing mod, and `new_game` accepts that mod's god key — none of which these vanilla
+  checks cover.
 - A1: `game_overview` returns `turn`, `god.name`, `counts`, and an integer `idEpoch` >= 1. (PASS if all
   present.)
 - A2: `inspect {"path":"map.turn"}` equals `game_overview.turn`.

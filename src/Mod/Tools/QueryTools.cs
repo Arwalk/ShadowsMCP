@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Assets.Code;
 using ShadowsMcp.Core.Json;
 using ShadowsMcp.Core.Mcp;
+using ShadowsMcp.Extensions;
 using ShadowsMcp.Tips;
 using ShadowsMcp.Tools.Decisions;
 
@@ -822,6 +823,14 @@ namespace ShadowsMcp.Tools
                     .Set("commandableUnits", commandable)
                     .Set("persons", map.persons.Count)
                     .Set("socialGroups", map.socialGroups.Count));
+            // Content mods that advertised an MCP manifest (their tips/gods/popups are woven into the
+            // regular tools); absent in the common vanilla case to keep the overview lean.
+            if (McpExtensions.ModNames.Count > 0)
+            {
+                JsonValue exts = JsonValue.NewArray();
+                foreach (string n in McpExtensions.ModNames) exts.Add(n);
+                o.Set("mcpExtensions", exts);
+            }
             // Perishable opportunity: a religion with its Elder influence bar full can have one tenet
             // rewritten right now, and further influence it earns is discarded until you spend it. The
             // game only says so once, in a message; without this an agent banks influence forever.
