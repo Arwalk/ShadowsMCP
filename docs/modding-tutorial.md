@@ -288,21 +288,29 @@ Debug loop:
 
 ## 8. Publishing to the Steam Workshop
 
-The game has a built-in uploader. Assemble your mod in the game install's
-`modUploadFolder`:
+The game has a built-in uploader. It uploads a mod from the game install's
+**`modUploadFolder/`** (next to the game exe) — *not* from `data/optionalData/`.
+Assemble this layout there:
 
 ```
 <game>\modUploadFolder\MyMod\
-├── preview.png            ← square preview image (required by the uploader)
-├── mod.json               ← workshop metadata: {"title", "description", "tags":[...]}
-└── content\
+├── mod.json               ← Workshop listing: {"title", "description", "tags":[...]}
+├── preview.png            ← square thumbnail (optional — item has no thumbnail without it)
+└── content\               ← the payload that gets uploaded
     ├── MyMod.dll
     ├── mod_desc.json
     └── mod_config.json
 ```
 
-Then use the mod-upload option in the game to push it to the Workshop. Subscribers get it
+`mod.json` (the Workshop page) is a different file from `content\mod_desc.json` (the
+in-game mod descriptor) — both are required. Then, in-game: **Workshop menu → User Mods →
+publish**. The first publish creates the item; the game records its `PublishedFileId`
+locally, so every later publish **updates the same item**. Subscribers get the mod
 auto-loaded; local folders in `data/optionalData/` always work for development.
+
+For this repo, `./build.sh` assembles the exact layout the uploader expects at
+`dist/upload/ShadowsMCP/` (from `mod/mod.json` and `mod/preview.png`) — copy that folder
+into the game's `modUploadFolder/` and publish.
 
 ## 9. Troubleshooting
 

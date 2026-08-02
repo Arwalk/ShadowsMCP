@@ -155,27 +155,6 @@ can later be compiled into the mod to expose `list_saves` / `save_overview` / `i
 tools (register via `RegisterServerThread`, no live-map guard) if in-game save analysis turns out
 to be useful.
 
-## Publishing to the Steam Workshop
-
-The game uploads a mod from its **`modUploadFolder/`** (next to the game exe) — *not* from
-`data/optionalData/`. `build.sh` assembles the exact layout it expects at
-`dist/upload/ShadowsMCP/`:
-
-```
-ShadowsMCP/
-├── mod.json       Workshop listing (title, description, tags) — from mod/mod.json
-├── preview.png    thumbnail — from mod/preview.png (optional)
-└── content/       the payload that gets uploaded (mod_desc.json + mod_config.json + DLL)
-```
-
-`mod.json` (the Workshop page) is a different file from `content/mod_desc.json` (the in-game mod
-descriptor) — both are required. To publish:
-
-1. `./build.sh`
-2. Copy `dist/upload/ShadowsMCP/` into the game's `modUploadFolder/`.
-3. In-game: **Workshop menu → User Mods → publish**. The first publish creates the item; the game
-   records its `PublishedFileId` locally, so every later publish **updates the same item**.
-
 ## Releasing
 
 The release version lives in **one place**: `<Version>` in `src/Mod/ShadowsMCP.csproj`. It flows
@@ -186,7 +165,9 @@ and into the Workshop description (`build.sh` stamps `Build X.Y.Z`). Per release
 1. Bump `<Version>` in `src/Mod/ShadowsMCP.csproj` (semver: `0.MINOR.PATCH`).
 2. `./build.sh` and sanity-check.
 3. Commit, then tag: `git tag vX.Y.Z && git push --tags`.
-4. Publish to the Workshop (above).
+4. Publish to the Workshop — see [`docs/modding-tutorial.md`](docs/modding-tutorial.md) §8:
+   `build.sh` assembles the upload layout at `dist/upload/ShadowsMCP/`; copy it into the game's
+   `modUploadFolder/` and publish in-game.
 
 ## Documentation
 
