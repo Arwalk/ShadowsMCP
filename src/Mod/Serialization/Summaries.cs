@@ -355,8 +355,9 @@ namespace ShadowsMcp
             if (!orders.IsNull) o.Set("orders", orders);
             // Your own agents' progression at list granularity (get_player_state.agents / list_units):
             // level everywhere, plus a skillPoints flag whenever a point is banked - the pick is
-            // strategic (first level-up gates magic mastery) and end_turn(force) spends it silently
-            // otherwise (G14-#5/#6). Full XP numbers live in get_unit.agent.
+            // strategic (first level-up gates magic mastery: that one now BLOCKS end_turn(force),
+            // G16-#1; regular picks force still auto-spends, G14-#5/#6). Full XP numbers live in
+            // get_unit.agent.
             UA uaSummary = u as UA;
             if (!dead && uaSummary != null && u.isCommandable() && uaSummary.person != null)
             {
@@ -482,12 +483,20 @@ namespace ShadowsMcp
                             .Set("target", UnitRef(ctx, target))
                             .Set("theirDangerEstimate", Safe(() => target.getDangerEstimate(), 0))
                             .Set("yourDangerEstimate", Safe(() => ua.getDangerEstimate(), 0));
+                        // dangerEstimate hides minion screening (G16-#5) - surface both screens so a
+                        // "favourable" duel against a high-defence front minion is visible as a wall.
+                        JsonValue theirScreen = MinionScreen(target as UA);
+                        JsonValue yourScreen = MinionScreen(ua);
+                        if (!theirScreen.IsNull) e.Set("theirMinionScreen", theirScreen);
+                        if (!yourScreen.IsNull) e.Set("yourMinionScreen", yourScreen);
                         if (breaksTask != null) e.Set("cancelsTheirTask", breaksTask);
                         if (includeHints)
                             e.Set("hint", "command_agent {unitId:" + me + ", order:\"attack\", targetUnitId:" + tid +
                                 "} starts a duel with this hero" +
                                 (breaksTask != null ? " and cancels their '" + breaksTask + "' for good (even if you flee)" : "") +
-                                " - compare the two dangerEstimates first");
+                                " - compare the two dangerEstimates AND the minionScreen blocks first: a " +
+                                "screening front minion can blank a low-attack agent entirely (see get_tips " +
+                                "id=disrupting_skirmish)");
                         arr.Add(e);
                         any = true;
                     }
@@ -582,16 +591,19 @@ namespace ShadowsMcp
                     if (ua.person.skillPoints > 0)
                         agent.Set("skillPointNote", "unspent skill point(s): pick the trait yourself " +
                             "via the level-up popup (end_turn without force surfaces it) - " +
-                            "end_turn(force) auto-spends ONE per turn on an AI-picked trait, which can " +
-                            "permanently forfeit a magic-mastery choice");
+                            "end_turn(force) auto-spends ONE regular pick per turn on an AI-picked " +
+                            "trait; the one-shot starting-trait/magic-mastery pick always BLOCKS " +
+                            "force instead (answer the popup to choose)");
                 }
                 o.Set("agent", agent);
 
                 // Combat readiness for risk management. dangerEstimate is the strength number the engine
-                // compares unit-vs-unit (UA.getDangerEstimate: hp + defence + attack + minions) — read a
-                // hostile hero's dangerEstimate too and compare to gauge who would win. isHuntable is the
-                // human-ruler assassination trigger (profile >= 50 AND menace > 25).
-                o.Set("combat", JsonValue.NewObject()
+                // compares unit-vs-unit (UA.getDangerEstimate: hp + defence + attack + minions) — but it
+                // SUMS minions into one fungible scalar and hides screening: a favourable-looking number
+                // can still lose to a high-defence front minion (G16-#5). Read minionScreen on both sides
+                // alongside it. isHuntable is the human-ruler assassination trigger (profile >= 50 AND
+                // menace > 25).
+                JsonValue combat = JsonValue.NewObject()
                     .Set("dangerEstimate", Safe(() => ua.getDangerEstimate(), 0))
                     .Set("hp", u.hp)
                     .Set("defence", Safe(() => ua.getMaxDefence(), 0))
@@ -607,7 +619,10 @@ namespace ShadowsMcp
                     // actual vision is the tighter profile/10 (UA.getVisibleUnits), ruler hunts are uncapped
                     .Set("huntRadius", (int)(u.profile / 5.0))
                     .Set("isHuntable", u.profile >= 50.0 && u.menace > 25.0)
-                    .Set("inHiding", ua.task is Task_InHiding));
+                    .Set("inHiding", ua.task is Task_InHiding);
+                JsonValue screen = MinionScreen(ua);
+                if (!screen.IsNull) combat.Set("minionScreen", screen);
+                o.Set("combat", combat);
 
                 // What this agent is carrying (items live on the person; same shape as get_person.items).
                 JsonValue items = JsonValue.NewArray();
@@ -1235,7 +1250,9 @@ namespace ShadowsMcp
                 o.Set("performsAt", "the unit's current location (rituals are performed in place, wherever the carrier stands)");
             else
                 o.Set("location", LocationRef(c.location));
-            o.Set("valid", Safe(() => c.valid(), false))
+            // SafeValid, not c.valid(): Ch_PlagueShips.valid() spreads plague as a side effect,
+            // so a plain valid() probe here made list_challenges mutate the world.
+            o.Set("valid", SafeValid(c))
                 // The heat the unit actually receives on completion (what Task_PerformChallenge applies
                 // and the in-game UI shows) — NOT Challenge.getMenace()/getProfile(), which are the
                 // engine AI's utility-scoring inputs and can be negative or wildly off from applied heat.
@@ -1312,6 +1329,12 @@ namespace ShadowsMcp
                 if (!string.IsNullOrEmpty(restriction)) o.Set("restriction", restriction);
             }
             catch { }
+            // Per-clause decomposition of `valid` where an evaluator exists (Ch_PlagueShips):
+            // states which clause is unmet and its actual value, since the prose restriction
+            // re-states all clauses indistinguishably. Emitted even in terse mode - like
+            // locationNote, it is the actionable line.
+            JsonValue clauseReqs = ChallengeRequirements(c);
+            if (!clauseReqs.IsNull) o.Set("requirements", clauseReqs);
             // The vanilla restriction ("shadow > 10% and Well of Shadows modifier < 100%") omits that
             // the challenge is constructed against a HUMAN SETTLEMENT and simply never exists elsewhere -
             // a playtest marched an agent to a 100%-shadow ruin on the strength of that text (G14-#19).
@@ -1503,6 +1526,114 @@ namespace ShadowsMcp
             if (where != null) s += " at " + where;
             if (state == "inertAtLocation") s += " - the 'Collect Tome' challenge there retrieves it";
             return "Tome status: " + s + ".";
+        }
+
+        // ---------- challenge requirement clauses ----------
+
+        /// <summary>
+        /// Per-challenge-type decomposition of valid() into observable clauses, computed from
+        /// public game state WITHOUT calling valid(). A multi-clause refusal that re-states all
+        /// clauses is unactionable (game 16 abandoned a viable Plague Ships line because only one
+        /// of three restated clauses had actually failed); this names which clause is unmet and
+        /// what the actual value is. Returns Null for types without an evaluator — extend by
+        /// adding cases here; SafeValid picks the table up automatically.
+        /// Ch_PlagueShips MUST stay off the valid() path entirely: its trade-route loop calls
+        /// Property.addToPropertySingleShot, i.e. CHECKING validity spreads plague to connected
+        /// docks (Ch_PlagueShips.cs:136-159).
+        /// </summary>
+        public static JsonValue ChallengeRequirements(Challenge c)
+        {
+            try
+            {
+                if (c is Ch_PlagueShips ps)
+                {
+                    Map map = ps.map;
+                    Location loc = ps.location;
+                    if (map == null || loc == null) return JsonValue.Null;
+                    JsonValue reqs = JsonValue.NewArray();
+
+                    bool infiltrated = Safe(() => ps.sub != null && ps.sub.infiltrated, false);
+                    reqs.Add(JsonValue.NewObject()
+                        .Set("clause", "the docks here are infiltrated")
+                        .Set("met", infiltrated)
+                        .Set("actual", infiltrated ? "infiltrated" : "not infiltrated"));
+
+                    int need = Safe(() => map.param.ch_plagueShipsPlagueReq, 10);
+                    // Location.getStandardPropertyLevel is internal - replicate it (first PLAGUE
+                    // property's charge, 0 when absent; Location.cs:161-171).
+                    double plague = Safe(() =>
+                    {
+                        if (loc.properties != null)
+                            foreach (Property pr in loc.properties)
+                                if (pr != null && pr.getPropType() == Property.standardProperties.PLAGUE)
+                                    return (double)pr.charge;
+                        return 0.0;
+                    }, 0.0);
+                    reqs.Add(JsonValue.NewObject()
+                        .Set("clause", "plague at this dock is at least " + need + "%")
+                        .Set("met", plague >= need)
+                        .Set("actual", Round2(plague) + "%"));
+
+                    int routes = Safe(() =>
+                    {
+                        var density = map.tradeManager != null ? map.tradeManager.tradeDensity : null;
+                        if (density == null || loc.index < 0 || loc.index >= density.Length) return 0;
+                        return density[loc.index] != null ? density[loc.index].Count : 0;
+                    }, 0);
+                    reqs.Add(JsonValue.NewObject()
+                        .Set("clause", "this dock lies on at least one trade route")
+                        .Set("met", routes > 0)
+                        .Set("actual", routes + " trade route(s)")
+                        // valid() only requires ANY route through this dock; the "connects to
+                        // another dock" wording in getRestriction has no matching check.
+                        .Set("note", "the vanilla restriction says 'a trade route which connects "
+                            + "to another dock', but the actual check is only that ANY trade route "
+                            + "passes through this dock"));
+                    return reqs;
+                }
+            }
+            catch { }
+            return JsonValue.Null;
+        }
+
+        /// <summary>
+        /// Challenge.valid() without side effects. For types with a ChallengeRequirements
+        /// evaluator, validity is the conjunction of the clauses (verified equivalent to valid()
+        /// minus its side effects — for Ch_PlagueShips the plague-spread loop after the three
+        /// gates never returns false); every other type falls back to valid() itself.
+        /// </summary>
+        public static bool SafeValid(Challenge c)
+        {
+            JsonValue reqs = ChallengeRequirements(c);
+            if (!reqs.IsNull)
+            {
+                foreach (JsonValue r in reqs.Items)
+                    if (!r["met"].AsBool()) return false;
+                return true;
+            }
+            return Safe(() => c.valid(), false);
+        }
+
+        /// <summary>
+        /// One-line rendering of <see cref="ChallengeRequirements"/> for refusal messages, failed
+        /// clauses first: "[X] plague at this dock is at least 10% (now 4%); [OK] ...". Null when
+        /// the type has no evaluator.
+        /// </summary>
+        public static string ChallengeRequirementsText(Challenge c)
+        {
+            JsonValue reqs = ChallengeRequirements(c);
+            if (reqs.IsNull || reqs.Count == 0) return null;
+            List<string> failed = new List<string>();
+            List<string> met = new List<string>();
+            foreach (JsonValue r in reqs.Items)
+            {
+                bool ok = r["met"].AsBool();
+                string line = (ok ? "[OK] " : "[X] ") + r["clause"].AsString() +
+                    " (" + (ok ? "" : "now ") + r["actual"].AsString() + ")";
+                (ok ? met : failed).Add(line);
+            }
+            failed.AddRange(met);
+            return string.Join("; ", failed);
         }
 
         // ---------- victory attribution ----------
@@ -1950,6 +2081,70 @@ namespace ShadowsMcp
                 .Set("isDead", m.isDead);
         }
 
+        /// <summary>
+        /// First-contact damage math for one attacker swinging repeatedly at one defender
+        /// (BattleAgents.attackDownRow): damage per swing = max(0, attack − defence), and defence
+        /// is ABLATIVE — every swing subtracts the attacker's FULL attack from it (floored at 0);
+        /// it is set once at battle start and never regenerates. swingsBlanked = leading swings
+        /// that deal 0 HP; swingsToKill = total swings to bring hp to 0 ("never" when attack is
+        /// 0); line = the preformatted sentence combat surfaces embed.
+        /// </summary>
+        public static JsonValue ScreeningMath(int attack, int defence, int hp)
+        {
+            if (attack <= 0)
+                return JsonValue.NewObject()
+                    .Set("swingsBlanked", "all")
+                    .Set("swingsToKill", "never")
+                    .Set("line", "attack 0 can never damage this defender");
+            int blanked = defence > 0 ? defence / attack : 0;
+            int rem = Math.Max(0, defence - blanked * attack);
+            int kill = blanked + (int)Math.Ceiling((hp + rem) / (double)attack);
+            return JsonValue.NewObject()
+                .Set("swingsBlanked", blanked)
+                .Set("swingsToKill", kill)
+                .Set("line", "attack " + attack + " vs defence " + defence + ": " +
+                    (blanked > 0 ? "the first " + blanked + " swing(s) deal 0 damage, " : "") +
+                    kill + " swing(s) to kill (hp " + hp + ")");
+        }
+
+        /// <summary>
+        /// The unit's living-minion screen as it matters BEFORE a battle: in agent combat both
+        /// leaders always strike the enemy's SLOT 0 (BattleAgents.step hard-codes row 0), so one
+        /// living front minion makes this unit's leader untouchable by the enemy leader until it
+        /// dies. Uses getMaxDefence/getAttack — live Minion.defence is battle-eroded scratch that
+        /// reads 0 outside a battle (G14-#2). Null when the unit has no living minions.
+        /// </summary>
+        public static JsonValue MinionScreen(UA ua)
+        {
+            try
+            {
+                if (ua == null || ua.minions == null) return JsonValue.Null;
+                Minion front = null;
+                int count = 0;
+                foreach (Minion m in ua.minions)
+                {
+                    if (m == null || m.isDead) continue;
+                    count++;
+                    if (front == null) front = m;
+                }
+                if (front == null) return JsonValue.Null;
+                return JsonValue.NewObject()
+                    .Set("count", count)
+                    .Set("front", JsonValue.NewObject()
+                        .Set("name", SafeName(() => front.getName()))
+                        .Set("hp", front.hp)
+                        .Set("defence", Safe(() => front.getMaxDefence(), 0))
+                        .Set("attack", Safe(() => front.getAttack(), 0)))
+                    .Set("note", "a living front minion SCREENS its leader: the enemy leader always "
+                        + "strikes slot 0 and cannot touch this unit's leader until the front minion "
+                        + "dies. Damage per swing is max(0, attack - defence) and defence is ablative "
+                        + "(each hit removes the attacker's full attack from it, floored at 0, never "
+                        + "regenerating) - a low-attack agent can deal 0 damage for several rounds "
+                        + "while being hit back every round.");
+            }
+            catch { return JsonValue.Null; }
+        }
+
         // ---------- helpers ----------
 
         /// <summary>Resolve a native person index to a Person (mirrors FindLocation). -1 → null.</summary>
@@ -2177,6 +2372,8 @@ namespace ShadowsMcp
         /// The default danger triggers below the threshold are then suppressed entirely - a game-14 run had
         /// every batch halted at 38-180% motivation against an explicit stopOnThreatMotivation:300, because
         /// the triggers used to be independent stop conditions with no opt-out (G14-#7/#20).
+        /// The threshold governs only THIS motivation/danger stop — the heroAttacking stop
+        /// (<see cref="EvaluateHeroAttackStop"/>) is a separate condition it never suppresses.
         /// <paramref name="alert"/> gets the per-agent detail (each entry tagged
         /// with a <c>trigger</c>), or null if nothing; <paramref name="reason"/> is the stopReason
         /// ("threatEscalation" for danger, "threatMotivation" for the threshold, else null).</summary>
@@ -2398,6 +2595,107 @@ namespace ShadowsMcp
                 arr.Add(o);
             }
             return arr.Count > 0 ? arr : JsonValue.Null;
+        }
+
+        /// <summary>
+        /// Commandable live agents whose banked skill point's NEXT pick is the one-shot
+        /// starting-trait (magic mastery) menu — the exact Trait.getAvailableTraits gate
+        /// (hasStartingTraits() && !hasAssignedStartingTraits, Trait.cs:81-88).
+        /// bEndTurn(force)'s auto-spend (UA.spendSkillPoint) would consume that menu with an
+        /// AI pick and set hasAssignedStartingTraits forever, so end_turn treats these as a
+        /// real choice that blocks force (G16-#1). person.level == 0 is only a correlate of
+        /// "first level-up" and is deliberately not used. Per-agent failures fail OPEN (agent
+        /// skipped) so a modded god whose hasStartingTraits() throws degrades to the old
+        /// auto-spend instead of wedging end_turn. Empty list when none (never null).
+        /// </summary>
+        public static List<UA> PendingStartingTraitPicks(GameContext ctx, Map map)
+        {
+            var result = new List<UA>();
+            if (map == null || map.units == null) return result;
+            foreach (Unit u in map.units)
+            {
+                try
+                {
+                    UA ua = u as UA;
+                    if (ua == null || ua.isDead || !ua.isCommandable() || ua.person == null) continue;
+                    if (ua.person.skillPoints <= 0 || ua.person.cachedOutOfTraits) continue;
+                    if (ua.hasStartingTraits() && !ua.hasAssignedStartingTraits) result.Add(ua);
+                }
+                catch { }
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// (hunter → target) keys for every hostile hero currently running a Task_AttackUnit
+        /// against a unit you benefit from (your commandables, or any UAE — the exact
+        /// Overmind.getThreats target test, same as QueryTools.IsHostileToMe). The batch-start
+        /// snapshot for <see cref="EvaluateHeroAttackStop"/>.
+        /// </summary>
+        public static HashSet<string> ComputeAttackPairs(GameContext ctx, Map map)
+        {
+            var result = new HashSet<string>();
+            if (map == null || map.units == null) return result;
+            foreach (Unit u in map.units)
+            {
+                try
+                {
+                    if (u == null || u.isDead || u.isCommandable()) continue;
+                    Task_AttackUnit attack = u.task as Task_AttackUnit;
+                    if (attack == null || attack.target == null) continue;
+                    if (!(attack.target.isCommandable() || attack.target is UAE)) continue;
+                    result.Add(UnitId(ctx, u) + "->" + UnitId(ctx, attack.target));
+                }
+                catch { }
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Stop signal for a hero STARTING an attack-pursuit mid-batch: rescans the map and fires
+        /// on any (hunter → target) pair absent from the batch-start snapshot. Edge-triggered on
+        /// purpose — a hunt already running when the batch began never re-stops every turn; a
+        /// fresh batch call sees it in its own snapshot and also stays quiet. This is the one
+        /// reaction window before the hunter arrives (reposition, Lay Low, bodyguard, or a
+        /// targeting-window power such as Iastur's PW4), and it is deliberately INDEPENDENT of
+        /// stopOnThreatMotivation's "threshold replaces the default triggers" rule: game 15/16
+        /// batches ran silently through HERO_ATTACKING and lost the window (G16-#4).
+        /// <paramref name="reason"/> is "heroAttacking" or null.
+        /// </summary>
+        public static void EvaluateHeroAttackStop(GameContext ctx, Map map, HashSet<string> before,
+            out JsonValue alert, out string reason)
+        {
+            alert = JsonValue.Null;
+            reason = null;
+            if (map == null || map.units == null || before == null) return;
+            JsonValue arr = JsonValue.NewArray();
+            foreach (Unit u in map.units)
+            {
+                try
+                {
+                    if (u == null || u.isDead || u.isCommandable()) continue;
+                    Task_AttackUnit attack = u.task as Task_AttackUnit;
+                    if (attack == null || attack.target == null) continue;
+                    if (!(attack.target.isCommandable() || attack.target is UAE)) continue;
+                    if (before.Contains(UnitId(ctx, u) + "->" + UnitId(ctx, attack.target))) continue;
+                    JsonValue e = JsonValue.NewObject()
+                        .Set("hunter", UnitRef(ctx, u))
+                        .Set("target", UnitRef(ctx, attack.target))
+                        .Set("turnsRemaining", attack.turnsRemaining)
+                        .Set("message", SafeName(() => u.getName()) + " has begun hunting " +
+                            SafeName(() => attack.target.getName()) + " (" + attack.turnsRemaining +
+                            " turns of pursuit left) - this is the reaction window: reposition, " +
+                            "Lay Low, bodyguard, or a power that targets attacking heroes.");
+                    if (u.location != null) e.Set("location", LocationRef(u.location));
+                    arr.Add(e);
+                }
+                catch { }
+            }
+            if (arr.Count > 0)
+            {
+                alert = arr;
+                reason = "heroAttacking";
+            }
         }
 
         /// <summary>

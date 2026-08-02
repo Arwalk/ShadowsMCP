@@ -170,7 +170,8 @@ namespace ShadowsMcp.Tips
                 "One of your agents has been reached by a hostile hero and a battle is now pending (game_overview." +
                 "threats.agentsUnderAttack, and get_unit shows engagedThisTurn). This is a real decision, not " +
                 "automatic: call get_pending_decision to open the combat menu, then resolve_decision to 'fight to " +
-                "the end' (best when your dangerEstimate beats theirs), or 'flee'/'retreat'. Fleeing only unlocks " +
+                "the end' (best when the matchup favours you - check the decision's screeningNote and both " +
+                "minionScreen blocks, not just dangerEstimate), or 'flee'/'retreat'. Fleeing only unlocks " +
                 "from round 2 - at round 2 you escape but lose ALL your minions; from round 3 the retreat is safe. " +
                 "Winning lets you loot the loser. end_turn is blocked (even with force=true) until every pending " +
                 "battle is resolved, so an agent can never sleepwalk into a fight it should have fled."),
@@ -185,7 +186,9 @@ namespace ShadowsMcp.Tips
                 "any other way - most notably the Chosen One's. Two costs: your own agent's in-progress challenge " +
                 "is cancelled too (pass force=true to accept losing its progress), and a hero being guarded " +
                 "(Task_Bodyguard) cannot be touched until the guard is beaten. Compare get_unit combat." +
-                "dangerEstimate on both sides before committing, and remember flee only unlocks from round 2. " +
+                "dangerEstimate AND combat.minionScreen on both sides before committing (a screening front " +
+                "minion can blank a low-attack agent - see get_tips id=disrupting_skirmish), and remember " +
+                "flee only unlocks from round 2. " +
                 "The same tool covers the other on-tile agent actions: rob a weaker merchant or adventurer, and " +
                 "trade items between two of your own agents."),
 
@@ -383,9 +386,14 @@ namespace ShadowsMcp.Tips
                 "heal before starting anything new. Exploit this - attack and retreat to pull a hero off one of " +
                 "your agents or to stall a quest that threatens your plans. Agents who reduce the damage a hero " +
                 "deals in combat (such as the Cursed) can do this repeatedly, surviving long enough to slip away. " +
-                "Combat resolves in a fixed order - attacker, then defender, then the attacker's minions, then the " +
-                "defender's minions - and each deals its stated attack as unrandomised damage, so you can predict " +
-                "a skirmish before committing (compare the two sides' dangerEstimate on get_unit)."),
+                "Combat resolves in a fixed order - the attacker's leader, then the defender's leader, then the " +
+                "minions pair off row by row (attacker's minion first in each row) - and damage is unrandomised: " +
+                "each swing deals max(0, attack - defence), with defence ABLATIVE (every hit removes the " +
+                "attacker's full attack from it, floored at 0, never regenerating in the battle). Crucially, " +
+                "leaders always strike the enemy's FRONT (slot-0) minion first: a living front minion screens " +
+                "its leader completely, so your attack must exceed - or slowly wear down - the front defender's " +
+                "defence before any damage lands. Predict a skirmish with combat.minionScreen on both sides " +
+                "(get_unit); the summed dangerEstimate alone hides this wall."),
 
             Ref("low_magic", "Death magic scales with Death", "magic",
                 "'Release from Death' is weak at low-Death locations; create death first, then exploit it.",

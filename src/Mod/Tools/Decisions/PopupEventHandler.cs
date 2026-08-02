@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using Assets.Code;
 using ShadowsMcp.Core.Json;
 using ShadowsMcp.Core.Mcp;
@@ -167,6 +168,14 @@ namespace ShadowsMcp.Tools.Decisions
             }
             catch { }
 
+            // Snapshot the identity of every popup already open or queued BEFORE the click.
+            // PopupEvent.dismiss promotes the next queued blocker FIRST and only then appends its
+            // own outcome msg to the END of the queue, so a message stranded from an earlier
+            // resolution can surface as this event's "outcome" - game 16 read another agent's
+            // "stops their task" notice as the Baroness's outcome (G16-#2). Only popups NOT in
+            // this set may be attributed to this choice.
+            HashSet<int> preexisting = SnapshotBlockerIdentities(ui);
+
             // Clicking a valid option runs dismiss(choice, ctx) → removeBlocker: the blocker changes.
             target.onClick.Invoke();
 
@@ -187,18 +196,27 @@ namespace ShadowsMcp.Tools.Decisions
             // effects SILENTLY; disclosure arrives as a chain of queued PopupMsgs (the outcome's
             // description and anything its effects popped). Read the whole chain into the result here;
             // a non-PopupMsg follow-up is a real decision, left pending and pointed at instead.
-            bool followUp;
-            string outcomeText = ReadAndDismissOutcomeMsgs(ctx, ui, out followUp);
+            bool followUp, followUpIsPreexisting;
+            string queuedNotices;
+            string outcomeText = ReadAndDismissOutcomeMsgs(ctx, ui, preexisting,
+                out followUp, out followUpIsPreexisting, out queuedNotices);
             if (outcomeText != null)
             {
                 ok.Set("outcomeText", outcomeText);
                 try { ctx.Events.RecordPopup(TurnOf(ctx), "eventOutcome", FirstLine(outcomeText), "auto-read into event result"); }
                 catch { }
             }
+            if (queuedNotices != null)
+                ok.Set("queuedNotices", queuedNotices)
+                  .Set("queuedNoticesNote", "these popups were already queued BEFORE this event was " +
+                    "resolved - unrelated notices from earlier actions, NOT this choice's outcome.");
             if (followUp)
-                ok.Set("followUp", "a further popup chained from this outcome and is now the pending " +
-                    "decision - call get_pending_decision to see and resolve it" +
-                    (outcomeText == null ? "; the outcome details are likely in it" : ""));
+                ok.Set("followUp", followUpIsPreexisting
+                    ? "a previously queued, unrelated popup is now the pending decision - it is NOT " +
+                      "a result of this choice; call get_pending_decision to see and resolve it"
+                    : "a further popup chained from this outcome and is now the pending " +
+                      "decision - call get_pending_decision to see and resolve it" +
+                      (outcomeText == null ? "; the outcome details are likely in it" : ""));
             else if (outcomeText == null)
                 ok.Set("outcome", "applied without an outcome message - this choice rolled one of its " +
                     "weighted outcomes and the game queued no text for it; its effects (if any) are " +
@@ -251,6 +269,10 @@ namespace ShadowsMcp.Tools.Decisions
                 }
                 if (target == null || !IsEnabled(target)) return JsonValue.Null;
 
+                // Same pre-click identity snapshot as Resolve: a notice stranded in the queue by an
+                // earlier action must not be recorded as this routine event's outcome (G16-#2).
+                HashSet<int> preexisting = SnapshotBlockerIdentities(ui);
+
                 target.onClick.Invoke();
                 if (!(blocker == null || ui.blocker != blocker)) return JsonValue.Null; // click didn't take
 
@@ -262,7 +284,7 @@ namespace ShadowsMcp.Tools.Decisions
                     .Set("turn", TurnOf(ctx))
                     .Set("title", title)
                     .Set("chose", want);
-                string outcomeText = ReadAndDismissOutcomeMsgs(ctx, ui, out _);
+                string outcomeText = ReadAndDismissOutcomeMsgs(ctx, ui, preexisting, out _, out _, out _);
                 if (outcomeText != null) rec.Set("outcome", FirstLine(outcomeText));
                 try
                 {
@@ -275,17 +297,49 @@ namespace ShadowsMcp.Tools.Decisions
             catch { return JsonValue.Null; }
         }
 
+        /// <summary>Identity (RuntimeHelpers.GetHashCode, the ModalDecisionId precedent) of the
+        /// current blocker plus everything in both blocker queues — the set of popups that already
+        /// existed before a resolution clicked its option. Empty set on any failure, which degrades
+        /// to the old attribute-everything behaviour rather than dropping outcome text.</summary>
+        private static HashSet<int> SnapshotBlockerIdentities(UIMaster ui)
+        {
+            var ids = new HashSet<int>();
+            try
+            {
+                if (ui == null) return ids;
+                if (ui.blocker != null) ids.Add(RuntimeHelpers.GetHashCode(ui.blocker));
+                if (ui.blockerQueue != null)
+                    foreach (GameObject g in ui.blockerQueue)
+                        if (g != null) ids.Add(RuntimeHelpers.GetHashCode(g));
+                if (ui.blockerQueueDelayed != null)
+                    foreach (GameObject g in ui.blockerQueueDelayed)
+                        if (g != null) ids.Add(RuntimeHelpers.GetHashCode(g));
+            }
+            catch { }
+            return ids;
+        }
+
         /// <summary>Drain every consecutive <see cref="PopupMsg"/> blocker (the outcome description
         /// plus any notices its effects queued behind it), concatenating their texts. An outcome's
         /// effects can pop messages DURING chooseOutcome, so the disclosure is often a chain, not one
         /// popup — reading only the first made resolve_decision claim "no disclosure" for text that
-        /// arrived one blocker later (game 13 #4). Stops at the first non-PopupMsg blocker: that is a
+        /// arrived one blocker later (game 13 #4). Only messages created by THIS resolution (absent
+        /// from <paramref name="preexisting"/>) land in the return value; a PopupMsg that was already
+        /// queued before the click is a stranded notice from an earlier action — it is still dismissed
+        /// (PopupEvent.dismiss appends the real outcome to the END of the queue, so leaving it would
+        /// wall this event's own text off) but routed to <paramref name="queuedNotices"/> instead of
+        /// being attributed to the choice (G16-#2). Stops at the first non-PopupMsg blocker: that is a
         /// real decision (a chained event, a level-up…), is never dismissed here, and is reported via
-        /// <paramref name="followUpPending"/>. A textless PopupMsg is dismissed too (it carries no
-        /// information; leaving it pending stranded the queue). Capped defensively at 8 popups.</summary>
-        private static string ReadAndDismissOutcomeMsgs(GameContext ctx, UIMaster ui, out bool followUpPending)
+        /// <paramref name="followUpPending"/> (+ whether it predates the click). A textless PopupMsg
+        /// is dismissed too (it carries no information; leaving it pending stranded the queue).
+        /// Capped defensively at 8 popups.</summary>
+        private static string ReadAndDismissOutcomeMsgs(GameContext ctx, UIMaster ui,
+            HashSet<int> preexisting, out bool followUpPending, out bool followUpIsPreexisting,
+            out string queuedNotices)
         {
             followUpPending = false;
+            followUpIsPreexisting = false;
+            queuedNotices = null;
             string acc = null;
             try
             {
@@ -293,16 +347,36 @@ namespace ShadowsMcp.Tools.Decisions
                 {
                     DecisionRegistry.PumpQueue(ctx);
                     if (ui == null || ui.blocker == null) return acc;
+                    bool wasQueuedBefore = preexisting != null &&
+                        preexisting.Contains(RuntimeHelpers.GetHashCode(ui.blocker));
                     PopupMsg msg = ui.blocker.GetComponent<PopupMsg>();
-                    if (msg == null) { followUpPending = true; return acc; }
+                    if (msg == null)
+                    {
+                        followUpPending = true;
+                        followUpIsPreexisting = wasQueuedBefore;
+                        return acc;
+                    }
                     string text = msg.text != null ? msg.text.text : null;
                     msg.dismiss();
-                    if (!string.IsNullOrEmpty(text))
+                    if (string.IsNullOrEmpty(text)) continue;
+                    if (wasQueuedBefore)
+                    {
+                        queuedNotices = queuedNotices == null ? text : queuedNotices + "\n\n" + text;
+                        try { ctx.Events.RecordPopup(TurnOf(ctx), "queuedNotice", FirstLine(text),
+                            "stranded pre-existing notice drained during an event resolution"); }
+                        catch { }
+                    }
+                    else
                         acc = acc == null ? text : acc + "\n\n" + text;
                 }
                 // Cap hit with popups possibly still queued — whatever remains is still pending.
                 DecisionRegistry.PumpQueue(ctx);
-                if (ui != null && ui.blocker != null) followUpPending = true;
+                if (ui != null && ui.blocker != null)
+                {
+                    followUpPending = true;
+                    followUpIsPreexisting = preexisting != null &&
+                        preexisting.Contains(RuntimeHelpers.GetHashCode(ui.blocker));
+                }
             }
             catch { }
             return acc;

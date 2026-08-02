@@ -471,7 +471,9 @@ namespace ShadowsMcp.Tools
                     {
                         try
                         {
-                            if (!c.valid()) return false;
+                            // SafeValid: c.valid() is not read-only for every type
+                            // (Ch_PlagueShips.valid() spreads plague when it passes).
+                            if (!Summaries.SafeValid(c)) return false;
                             if (uaF != null) return c.validFor(uaF);
                             if (umF != null) return c.validFor(umF);
                             return true;
@@ -787,6 +789,21 @@ namespace ShadowsMcp.Tools
             if (armiesInBattle > 0)
                 threatsBlock.Set("armiesInBattle", armiesInBattle);
 
+            // Pending one-shot starting-trait (magic mastery) picks, on the always-read tool so
+            // the agent sees them BEFORE end_turn(force) blocks on one (G16-#1).
+            JsonValue masteryPicks = JsonValue.Null;
+            var masteryUnits = Summaries.PendingStartingTraitPicks(ctx, map);
+            if (masteryUnits.Count > 0)
+            {
+                JsonValue units = JsonValue.NewArray();
+                foreach (UA ua in masteryUnits) units.Add(Summaries.UnitRef(ctx, ua));
+                masteryPicks = JsonValue.NewObject()
+                    .Set("units", units)
+                    .Set("note", "these agents' next level-up is their one-shot starting-trait " +
+                        "(magic mastery) menu. end_turn without force (or answer the level-up popup) " +
+                        "to choose it yourself - force blocks until it is answered.");
+            }
+
             JsonValue o = JsonValue.NewObject()
                 .Set("modVersion", ModCore.ModVersion)
                 .Set("turn", map.turn)
@@ -844,6 +861,8 @@ namespace ShadowsMcp.Tools
                     .Set("commandableUnits", commandable)
                     .Set("persons", map.persons.Count)
                     .Set("socialGroups", map.socialGroups.Count));
+            // Absent in the common no-pending-pick case to keep the overview lean.
+            if (!masteryPicks.IsNull) o.Set("masteryPicksPending", masteryPicks);
             // Content mods that advertised an MCP manifest (their tips/gods/popups are woven into the
             // regular tools); absent in the common vanilla case to keep the overview lean.
             if (McpExtensions.ModNames.Count > 0)

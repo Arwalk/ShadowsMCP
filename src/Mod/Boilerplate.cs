@@ -50,7 +50,9 @@ namespace ShadowsMcp
 
         public const string NoteCombat =
             "A multi-round duel. 'Fight to the end' resolves the whole battle in one call " +
-            "(pick it when your dangerEstimate beats theirs); 'Step one exchange' advances a single round " +
+            "(pick it when the matchup favours you - dangerEstimate alone lies when minions screen: " +
+            "check both sides' minions and the screeningNote, and prefer 'Step one exchange' when the " +
+            "enemy front minion's defence rivals your attack); 'Step one exchange' advances a single round " +
             "so you can watch the odds and then flee. Flee/Retreat unlock from round 2 — round 2 is Flee " +
             "(you lose ALL your minions), round 3+ is a safe Retreat. 'Flee as soon as possible' " +
             "auto-steps until fleeing is legal, then flees (at round 2 that costs ALL your minions) — " +

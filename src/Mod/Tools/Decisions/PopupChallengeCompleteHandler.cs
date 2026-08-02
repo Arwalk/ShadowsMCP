@@ -146,7 +146,7 @@ namespace ShadowsMcp.Tools.Decisions
                 UA ua = p != null ? p.unit as UA : null;
                 Challenge ch = p != null ? p.ch : null;
                 if (ua == null || ch == null || ua.isDead || ua.task != null) return false;
-                return ch.valid() && ch.claimedBy == null && ch.validFor(ua) &&
+                return Summaries.SafeValid(ch) && ch.claimedBy == null && ch.validFor(ua) &&
                        ch.location != null && ch.location.GetChallenges().Contains(ch);
             }
             catch { return false; }

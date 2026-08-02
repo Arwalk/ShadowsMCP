@@ -101,7 +101,8 @@ namespace ShadowsMcp.Tools
                 "Act on ANOTHER agent on the same tile as one of your agents (move_unit there first). " +
                 "order=attack duels an enemy hero and CANCELS both sides' in-progress challenges permanently - " +
                 "even if you flee or lose (the standard way to break a ritual you cannot otherwise stop; " +
-                "compare both units' combat.dangerEstimate first - see get_tips id=agent_can_attack). " +
+                "compare both units' combat.dangerEstimate AND combat.minionScreen first - see get_tips " +
+                "id=agent_can_attack). " +
                 "order=rob steals items from a weaker enemy (you must be HIGHER level; once per 5 turns; " +
                 "raises your profile and menace). order=trade moves items/gold between two of YOUR OWN " +
                 "agents. order=follow makes a Harvester shadow a merchant. attack/rob/trade open a menu " +
@@ -123,16 +124,17 @@ namespace ShadowsMcp.Tools
                 "A blocking decision popup is returned with its options instead of advancing (also in " +
                 "game_overview.pendingDecision); answer it by passing resolveOptionIndex (a failed or " +
                 "unneeded resolve is reported in resolveWarning, never silently ignored). " +
-                "force=true auto-resolves ONLY what carries no choice: one unspent skill point per agent " +
-                "per turn is auto-spent (AI-picked trait; each named in digest.autoResolvedLevelUps - " +
-                "note the FIRST level-up is the only shot at a magic mastery, so consider spending it " +
-                "yourself), and purely-informational popups are dismissed " +
+                "force=true auto-resolves ONLY what carries no choice: one unspent REGULAR skill point " +
+                "per agent per turn is auto-spent (AI-picked trait; each named in " +
+                "digest.autoResolvedLevelUps), and purely-informational popups are dismissed " +
                 "(message boxes, death notices; the periodic autosave is written to disk first). " +
                 "Everything with a real choice blocks even under force: a pending agent battle " +
                 "(blockedBy:\"combat\" - fight, flee, or retreat), the idle-agent alert (kind:\"idleAgents\" " +
                 "- give idle agents orders, or resolveOptionIndex 0 passes them all), narrative events " +
-                "(kind:\"event\", including the Defeat event of a lost battle), and any other choice popup " +
-                "(level-up trait pick, trading, list selections). " +
+                "(kind:\"event\", including the Defeat event of a lost battle), an agent's FIRST level-up " +
+                "(the one-shot starting-trait/magic-mastery menu: force blocks with " +
+                "forceDenied:\"startingTraitPick\" - answer the popup to choose the mastery yourself), " +
+                "and any other choice popup (an open level-up trait pick, trading, list selections). " +
                 "Idle recurs every turn, so a count>1 batch stops on the first idle turn unless every agent " +
                 "holds a standing order or you pass passIdleAgents:true. " +
                 "passRoutineEvents:true additionally auto-answers a curated whitelist of recurring " +
@@ -142,21 +144,27 @@ namespace ShadowsMcp.Tools
                 "stopReason on any decision, game over, the loss of one of your units " +
                 "(stopReason:\"unitLost\"), or a meaningful threat escalation (threatAlert names the agents " +
                 "affected and why); set stopOnThreatMotivation to make a hunter-motivation percentage the " +
-                "ONLY threat stop instead. EVERY call returns a 'digest' covering every turn of the batch - " +
+                "ONLY motivation/danger threat stop instead. Separately from that threshold, a hero " +
+                "STARTING an attack-pursuit of one of your units always stops the batch " +
+                "(stopReason:\"heroAttacking\", payload names hunter/target/turnsRemaining) - the one " +
+                "window to react before it arrives; stopOnHeroAttacking:false opts out. " +
+                "EVERY call returns a 'digest' covering every turn of the batch - " +
                 "digest.dismissed (each popup force cleared), digest.events (notable news; your units " +
                 "tagged mine:true), digest.lost (your units that died). Read it: it is the only place a " +
                 "batch's news appears in full (get_recent_events keeps the unabridged log). A 'tips' array " +
                 "may explain a mechanic that just became relevant.",
                 Schema.Object(
                     Schema.Prop("count", Schema.Integer("Advance up to this many turns (default 1, max 10); stops early per the rules above, and the digest covers every turn advanced.")),
-                    Schema.Prop("force", Schema.Boolean("Auto-spend skill points and dismiss informational popups; never skips a real choice (see tool description). Every dismissal is named in the digest - nothing is lost.")),
+                    Schema.Prop("force", Schema.Boolean("Auto-spend REGULAR skill points and dismiss informational popups; never skips a real choice (see tool description) - in particular an agent's one-shot starting-trait (magic mastery) pick blocks instead of being auto-spent. Every dismissal is named in the digest - nothing is lost.")),
+                    Schema.Prop("forceSpendsStartingTraits", Schema.Boolean("Default false: an agent's FIRST level-up - the one-shot starting-trait (magic mastery) menu - blocks force so you can choose it yourself. Pass true to restore the old behaviour and let force auto-spend even that pick on an AI-chosen trait (permanently forfeiting the mastery choice).")),
                     Schema.Prop("passIdleAgents", Schema.Boolean("Bulk-pass every idle agent each turn (a visible 'Passing Turn') so a batch doesn't stop on the recurring idle alert - including agents that go idle MID-batch (e.g. a challenge completes). A conscious choice to waste those turns - prefer standing orders. Combat and events still block.")),
                     Schema.Prop("passRoutineEvents", Schema.Boolean("Auto-answer a curated whitelist of recurring low-stakes mid-challenge events ('Watched' -> Silence them, 'Life Continues' -> Subtly disrupt the party, 'Merchant of Antiquities' -> refuse) with a fixed sensible option so they don't stop the batch. Every auto-answer is reported in digest.autoResolvedEvents (title, chose, outcome). All other events still block normally.")),
                     Schema.Prop("resolveOptionIndex", Schema.Integer("Answer the blocking decision with this option index (from pendingDecision.options), then continue ending the turn.")),
                     Schema.Prop("resolveOptionLabel", Schema.String("Answer the blocking decision by option LABEL instead of index (exact match preferred, else unique substring; case-insensitive) - safer on lists whose indices shift between reads.")),
                     Schema.Prop("expectedDecisionId", Schema.String("Optional, with resolveOptionIndex: only resolve if the pending decision still matches this decisionId (from pendingDecision); a mismatch clicks nothing and is reported in resolveWarning.")),
                     Schema.Prop("confirmDiscard", Schema.Boolean("With resolveOptionIndex/-Label on an item-trading decision: confirm closing a trade window whose 'Discard Items' side still holds items, deliberately releasing them to the world.")),
-                    Schema.Prop("stopOnThreatMotivation", Schema.Integer("Your threat-stop threshold: when set (>0) the batch stops for threats ONLY once a hunter's motivation toward one of your agents is AT OR ABOVE this percent (level-triggered; can exceed 100 for a strongly-inclined hunter) - it REPLACES the default new-hunter/worse-odds stops, so batches no longer halt on every minor escalation. Omit or 0 for the default: stop on any meaningful danger change."))),
+                    Schema.Prop("stopOnThreatMotivation", Schema.Integer("Your threat-stop threshold: when set (>0) the batch stops for threats ONLY once a hunter's motivation toward one of your agents is AT OR ABOVE this percent (level-triggered; can exceed 100 for a strongly-inclined hunter) - it REPLACES the default new-hunter/worse-odds stops, so batches no longer halt on every minor escalation. Omit or 0 for the default: stop on any meaningful danger change. The heroAttacking stop is separate and unaffected by this threshold.")),
+                    Schema.Prop("stopOnHeroAttacking", Schema.Boolean("Default true: the batch stops (stopReason:\"heroAttacking\") the turn a hero STARTS an attack-pursuit of one of your agents or servants - the only window to react (reposition, Lay Low, bodyguard, or a power that targets attacking heroes) before it closes. Edge-triggered: a hunt already running when the batch starts does not re-stop it. Independent of stopOnThreatMotivation. Pass false to opt out."))),
                 a =>
                 {
                     bool force = a["force"].AsBool();
@@ -260,6 +268,12 @@ namespace ShadowsMcp.Tools
             // "requirements not met" - e.g. "Requires 100% Infiltration. Cannot perform if Ward > 50%".
             string restr;
             try { restr = c.getRestriction(); } catch { restr = null; }
+            // Where a per-clause evaluator exists, itemize which clause failed ([X]/[OK], failed
+            // first) instead of re-stating the whole restriction: game 16 abandoned a viable
+            // Plague Ships line because the refusal restated all three clauses when only one
+            // (unknowable which) had failed.
+            string clauses = Summaries.ChallengeRequirementsText(c);
+            if (clauses != null) restr = clauses;
             string why = string.IsNullOrEmpty(restr) ? "" : ": " + restr;
             // The summon's restriction ("a hero is currently binding the tome") is true but
             // unverifiable from the outside — attach the tome's actual observable state.
@@ -274,7 +288,8 @@ namespace ShadowsMcp.Tools
                 why += (why.Length == 0 ? ": " : ". ") + "Note: rituals are performed IN PLACE and are " +
                     "never auto-travelled (unlike location challenges); if the requirement is " +
                     "location-bound, move_unit to a qualifying location first, then retry this same Cr- id.";
-            if (!c.valid())
+            // SafeValid: never probe Ch_PlagueShips.valid() directly - checking it spreads plague.
+            if (!Summaries.SafeValid(c))
                 return ToolResult.Error("the requirements to enable challenge '" + c.getName() + "' are not met" + why);
             if (ua != null && !c.validFor(ua))
                 return ToolResult.Error(u.getName() + " does not meet the requirements for '" + c.getName() + "'" + why);
@@ -1123,8 +1138,9 @@ namespace ShadowsMcp.Tools
             }
 
             /// <summary>Skill points force auto-spent by the game's bEndTurn(force) path — each entry is
-            /// {turn, unit, chose, ...}. Level-ups used to be the one force side effect no result named:
-            /// an AI-picked trait can permanently cost a magic-mastery line (G14-#5).</summary>
+            /// {turn, unit, chose, ...}. Level-ups used to be the one force side effect no result named
+            /// (G14-#5); since G16-#1 only REGULAR picks can reach this (a pending starting-trait/mastery
+            /// pick denies force before bEndTurn).</summary>
             public void AbsorbAutoLevelUps(JsonValue records)
             {
                 Append(_levelUps, records, MaxLevelUps);
@@ -1171,6 +1187,10 @@ namespace ShadowsMcp.Tools
             if (count < 1) count = 1;
             if (count > MaxTurnBatch) count = MaxTurnBatch;
             int motivationStopPct = args["stopOnThreatMotivation"].AsInt(0);
+            // Default ON, opt-out - and deliberately NOT governed by stopOnThreatMotivation's
+            // "threshold replaces the default stops" rule: HERO_ATTACKING is the one reaction
+            // window and batches ran straight through it for two games (G15-#1 / G16-#4).
+            bool stopOnHeroAttacking = args["stopOnHeroAttacking"].AsBool(true);
 
             // Single turn: preserve the original result shapes exactly, plus a threatAlert if a hero began
             // hunting one of your agents this turn.
@@ -1178,6 +1198,7 @@ namespace ShadowsMcp.Tools
             {
                 var before1 = Summaries.ComputeAgentSafety(ctx, map);
                 var roster1 = Summaries.ComputeOwnedRoster(ctx, map);
+                var attackPairs1 = stopOnHeroAttacking ? Summaries.ComputeAttackPairs(ctx, map) : null;
                 var digest1 = new TurnDigest();
                 StepStatus st1;
                 JsonValue payload1 = AdvanceOneTurn(ctx, map, world, force, applyResolve: true, args, digest1, out st1);
@@ -1199,6 +1220,14 @@ namespace ShadowsMcp.Tools
                     JsonValue alert1; string reason1;
                     Summaries.EvaluateThreatStop(ctx, map, before1, args["stopOnThreatMotivation"].AsInt(0), out alert1, out reason1);
                     if (!alert1.IsNull) payload1.Set("threatAlert", alert1);
+                    // A single turn always returns anyway - no stopReason - but the new-hunt alert
+                    // must still land in the payload (single-turn is the common cadence).
+                    if (attackPairs1 != null)
+                    {
+                        JsonValue ha1; string haReason1;
+                        Summaries.EvaluateHeroAttackStop(ctx, map, attackPairs1, out ha1, out haReason1);
+                        if (haReason1 != null) payload1.Set("heroAttacking", ha1);
+                    }
                 }
                 JsonValue d1 = digest1.ToJson();
                 if (!d1.IsNull) payload1.Set("digest", d1);
@@ -1211,6 +1240,7 @@ namespace ShadowsMcp.Tools
             // threat escalation so a batched advance never blows past an agent walking into danger.
             var before = Summaries.ComputeAgentSafety(ctx, map);
             var roster = Summaries.ComputeOwnedRoster(ctx, map);
+            var attackPairs = stopOnHeroAttacking ? Summaries.ComputeAttackPairs(ctx, map) : null;
             // Per-iteration snapshot for silent travel-task loss; `roster` itself must stay the batch-start
             // snapshot so EvaluateUnitLoss catches a death on any turn of the batch.
             var taskSnap = roster;
@@ -1227,6 +1257,7 @@ namespace ShadowsMcp.Tools
             bool dismissCappedOut = false;
             JsonValue pending = JsonValue.Null;
             JsonValue threatAlert = JsonValue.Null;
+            JsonValue heroAttacking = JsonValue.Null;
             JsonValue gameOverPayload = JsonValue.Null;
 
             // One idle-alert retry per turn of the batch: the pre-advance Task_PassTurn sweep can miss an
@@ -1307,8 +1338,20 @@ namespace ShadowsMcp.Tools
                 JsonValue lost = Summaries.EvaluateUnitLoss(ctx, map, roster);
                 if (!lost.IsNull) { digest.SetLost(lost); stopReason = "unitLost"; break; }
 
+                // A hero STARTING an attack-pursuit stops the batch - checked after losses (a death
+                // outranks the warning) but evaluated before the decision check, so the alert is
+                // attached to the result even when a popped decision supplies the stopReason.
+                string haReason = null;
+                if (attackPairs != null)
+                {
+                    JsonValue haAlert;
+                    Summaries.EvaluateHeroAttackStop(ctx, map, attackPairs, out haAlert, out haReason);
+                    if (haReason != null) heroAttacking = haAlert;
+                }
+
                 // A decision may have popped mid-processing even though the turn advanced; stop and surface it.
                 if (!payload["pendingDecision"].IsNull) { pending = payload["pendingDecision"]; stopReason = "decision"; break; }
+                if (haReason != null) { stopReason = "heroAttacking"; break; }
 
                 // Threat early-stop: meaningful danger (agent becomes huntable / an in-range hunter it is
                 // not favoured against / worse odds), plus the opt-in rising-motivation tripwire.
@@ -1341,6 +1384,7 @@ namespace ShadowsMcp.Tools
             }
             if (!pending.IsNull) result.Set("pendingDecision", pending); // already decorated by AdvanceOneTurn
             if (!threatAlert.IsNull) result.Set("threatAlert", threatAlert);
+            if (!heroAttacking.IsNull) result.Set("heroAttacking", heroAttacking);
             if (!gameOverPayload.IsNull)
             {
                 result.Set("gameOver", true)
@@ -1476,10 +1520,21 @@ namespace ShadowsMcp.Tools
             int before = map.turn;
             int after;
             JsonValue autoDismiss;
-            // Deny force while combat, the idle-agent alert, or a real-choice popup is pending, so
-            // bEndTurn stops (pops the battle / selects the idle unit / leaves the popup blocking)
-            // instead of auto-resolving, silently wasting, or ticking past them.
-            bool allowForce = force && !combatEngaged && !idleBlocks && !hardChoiceOpen;
+            // The one-shot starting-trait (magic mastery) pick is a real choice: a forced bEndTurn
+            // would AI-spend it via UA.spendSkillPoint, permanently closing the menu
+            // (hasAssignedStartingTraits) - which force did silently for three games (G16-#1).
+            // Denying force makes bEndTurn(false) raise the level-up popup instead; the caller
+            // answers it and force works again. Regular level-ups keep auto-spending. Collateral
+            // (bEndTurn force is all-or-nothing): while a starting pick is pending, other agents'
+            // regular points also pause auto-spending for this call.
+            List<UA> masteryPicks = force && !args["forceSpendsStartingTraits"].AsBool()
+                ? Summaries.PendingStartingTraitPicks(ctx, map) : null;
+            bool masteryBlocks = masteryPicks != null && masteryPicks.Count > 0;
+            // Deny force while combat, the idle-agent alert, a real-choice popup, or a pending
+            // starting-trait pick is pending, so bEndTurn stops (pops the battle / selects the idle
+            // unit / leaves the popup blocking / pops the level-up) instead of auto-resolving,
+            // silently wasting, or ticking past them.
+            bool allowForce = force && !combatEngaged && !idleBlocks && !hardChoiceOpen && !masteryBlocks;
             // A forced bEndTurn auto-spends one banked skill point per agent (World.cs:689-697,
             // AI-picked trait) and used to do so with no trace in any result (G14-#5): snapshot the
             // agents it will touch so the digest can name the level-up and the trait it chose.
@@ -1566,6 +1621,20 @@ namespace ShadowsMcp.Tools
                     // Call combat out by name so the agent (and the batch stopReason) sees why force didn't skip it.
                     .Set("blockedBy", pending["kind"].AsString() == "combat" ? "combat" : "decision")
                     .Set("pendingDecision", DecorateResolveHint(ctx, pending));
+                // Say WHY force didn't take this level-up: it is the agent's one-shot starting-trait
+                // (magic mastery) menu, which force never auto-spends (G16-#1).
+                if (masteryBlocks && pending["kind"].AsString() == "levelUp")
+                {
+                    string who = null;
+                    try { who = masteryPicks[0].getName(); } catch { }
+                    result.Set("forceDenied", "startingTraitPick")
+                          .Set("forceDeniedNote", (who ?? "an agent") + " has an unspent skill point " +
+                              "whose next pick is its one-shot STARTING-TRAIT (magic mastery) menu - " +
+                              "force never auto-spends this (an AI pick would forfeit the mastery " +
+                              "permanently). Answer the level-up popup via resolveOptionIndex, then " +
+                              "force works again; pass forceSpendsStartingTraits:true only if you " +
+                              "deliberately want the old auto-spend.");
+                }
                 if (!resolved.IsNull) result.Set("resolved", resolved);
                 if (resolveWarning != null) result.Set("resolveWarning", resolveWarning);
                 return result;
@@ -1753,8 +1822,10 @@ namespace ShadowsMcp.Tools
                             : "(trait could not be identified)")
                         .Set("level", s.Agent.person.level)
                         .Set("skillPointsRemaining", s.Agent.person.skillPoints)
-                        .Set("note", "skill point auto-spent by force (AI-picked trait); to choose " +
-                            "yourself next time, end_turn without force and answer the level-up popup"));
+                        // Only regular picks can reach this path now: a pending starting-trait
+                        // (mastery) pick denies force before bEndTurn (G16-#1).
+                        .Set("note", "regular skill point auto-spent by force (AI-picked trait); to " +
+                            "choose yourself next time, end_turn without force and answer the level-up popup"));
                 }
                 catch { }
             }
@@ -1780,7 +1851,8 @@ namespace ShadowsMcp.Tools
                     return u.getName() + " is under attack by " + u.engagedBy.getName() +
                         " - resolve the battle (get_pending_decision, then resolve_decision to fight, flee, or retreat)";
                 if (u is UA && u.person != null && u.person.skillPoints > 0 && !u.person.cachedOutOfTraits)
-                    return u.getName() + " has unspent skill points (force=true auto-spends them)";
+                    return u.getName() + " has unspent skill points (force=true auto-spends regular " +
+                        "ones; a first-level-up starting-trait pick blocks force - answer the level-up popup)";
                 if (world.option_idleAlert && u.task == null && u.movesTaken == 0)
                     return u.getName() + " is idle and the idle-agent alert is on (give it an order, " +
                         "pass it via resolve_decision optionIndex 0, or fast-forward with end_turn passIdleAgents:true)";

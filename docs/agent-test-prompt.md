@@ -135,6 +135,13 @@ resolve_decision, end_turn, new_game, wait_for_events.
 - D4 (restriction reason): in `list_challenges`, assert that any challenge with `valid:false` (or
   `validForUnit:false`) carries a `restriction` string explaining what it needs. If every listed challenge
   is valid, SKIP with a note (restriction is only present when the game supplies hint text).
+- D4b (per-clause requirements, evaluator types — currently Plague Ships, Iastur): any listed
+  `Ch_PlagueShips` entry must carry a `requirements` array of `{clause, met, actual}` objects (3 clauses:
+  docks infiltrated / plague ≥ 10% / on a trade route; the trade-route entry also carries a `note`
+  correcting the vanilla "connects to another dock" text), with `valid` equal to the conjunction of the
+  `met` flags. Repeat `list_challenges` at the same plague dock twice and assert connected docks' plague
+  charges did NOT rise between the calls (the mod no longer probes the side-effecting `valid()` —
+  pre-0.14.0 a mere listing spread plague). SKIP if no Plague Ships challenge is listed.
 - D5 (opt-in params): `list_challenges {"unitId":"U...","terse":true}` omits `description` from every entry
   (assert absent) while name/type/`valid` remain; `list_challenges {"unitId":"U...","performableOnly":true}`
   returns only entries with `valid` AND `validForUnit` true (assert none has either false). Compare counts
@@ -160,8 +167,11 @@ resolve_decision, end_turn, new_game, wait_for_events.
   alongside 20+ location entries, it must appear WITHIN `items` — the unit's kit is recorded before
   location challenges and can no longer be pushed out of the window.
 - D6 (error names the reason): find a listed challenge with `valid:false` and `perform_challenge` it; assert
-  the error message includes the `restriction` text, not just "requirements … are not met". If none is
-  invalid, SKIP.
+  the error message includes the `restriction` text, not just "requirements … are not met". For a challenge
+  type with a clause evaluator (Plague Ships), the refusal must instead ITEMIZE the clauses — failed first,
+  `[X]`/`[OK]` markers with each clause's actual value (e.g. "[X] plague at this dock is at least 10%
+  (now 4%); [OK] the docks here are infiltrated (infiltrated); …") — so which clause failed is never a
+  guess. If none is invalid, SKIP.
 - D6b (ritual errors explain no-auto-travel): `perform_challenge` a `Cr-` ritual whose requirements are
   NOT met (e.g. a location-gated unit ritual while standing elsewhere; SKIP if none): assert the error
   contains the rituals-are-performed-IN-PLACE / "never auto-travelled" note telling you to `move_unit`
@@ -366,6 +376,14 @@ resolve_decision, end_turn, new_game, wait_for_events.
   ("applied without an outcome message …"), which may appear ONLY when neither of the other two does. A
   result with only `chose`, or an `outcome` claiming no message when a text popup was in fact queued, is
   a FAIL.
+- G6g (outcome attribution — the G16 wrong-unit bug): `outcomeText` may contain ONLY messages created by
+  THIS resolution. A popup that was already queued before the click (e.g. an "X stops their task…" notice
+  stranded by an earlier resolution) must surface under a separate `queuedNotices` key with its
+  `queuedNoticesNote` (or, for a non-message popup, as the pending decision with the "previously queued,
+  unrelated popup … NOT a result of this choice" `followUp` wording — never the "chained from this
+  outcome" wording). A resolution whose only visible message was pre-existing must still report
+  `observedChanges`/the no-message `outcome` as if no text arrived. An `outcomeText` naming a unit the
+  resolved event had nothing to do with is a FAIL. Opportunistic — SKIP if no stacked popups occur.
 - G6f (events name their actor and location): any `kind:"event"` decision whose options carry a bracketed
   requirement (e.g. "[Requires: 20 Gold]" on Merchant of Antiquities) must expose `actor` with
   `person {id,name}`, the person's current `gold`, and a note that bracketed gates are checked against
@@ -403,9 +421,10 @@ resolve_decision, end_turn, new_game, wait_for_events.
   selection (`kind:"scrollSet"`) — assert `end_turn {"force":true}` does NOT advance: `advanced:false`,
   `blockedBy:"decision"`, and `pendingDecision` still shows the same popup (force may only pass
   purely-informational "Dismiss" notices). Then answer it (`resolveOptionIndex` / `resolve_decision`) and
-  assert the next `end_turn` advances. Skill points are unaffected when no popup is open: with an unspent
-  point and no open level-up popup, `end_turn {"force":true}` still auto-spends and advances. SKIP kinds
-  that never appear.
+  assert the next `end_turn` advances. REGULAR skill points are unaffected when no popup is open: with an
+  unspent regular point and no open level-up popup, `end_turn {"force":true}` still auto-spends and
+  advances — but a pending STARTING-TRAIT (magic mastery) pick blocks force even with no popup open (see
+  H13b). SKIP kinds that never appear.
 
 - G8 (opportunistic, selection carousel): if a list picker ever blocks (`game_overview.pendingDecision` /
   `get_pending_decision` shows `kind:"carousel"`, `popupType:"PopupScrollSet"` — e.g. Cause Scandal's victim,
@@ -501,23 +520,43 @@ resolve_decision, end_turn, new_game, wait_for_events.
   used to be missed) or rises to it mid-batch. Also confirm `motivationPct` can now read >100 when the game's
   own threat text does (the flat-100 cap was removed), so a threshold >100 is accepted. SKIP only if no
   hunter with motivation >0 exists.
-- H7b (the threshold GOVERNS the threat stop — the game-14 batch-killer): with hunters active whose
-  motivations are all clearly below some high value (say every `motivationPct` < 200), run
+- H7b (the threshold GOVERNS the motivation/danger threat stop — the game-14 batch-killer): with hunters
+  active whose motivations are all clearly below some high value (say every `motivationPct` < 200), run
   `end_turn {"count":5,"force":true,"passIdleAgents":true,"passRoutineEvents":true,
   "stopOnThreatMotivation":300}`. Assert the batch NEVER stops with `stopReason:"threatEscalation"` —
   setting the threshold replaces the default new-hunter/worse-odds stops, so below-threshold hunter
-  churn (gained/worsened) must not halt it (decisions, combat, unitLost, gameOver still may). If it
-  stops, the `stopReason` must be one of those others or `threatMotivation` with an entry actually ≥
-  300. SKIP if no hunters exist at all (then nothing can escalate anyway).
+  churn (gained/worsened) must not halt it (decisions, combat, unitLost, gameOver, and — NEW in 0.14.0 —
+  `heroAttacking` still may: the hero-starts-hunting stop is deliberately independent of the threshold,
+  see H13). If it stops, the `stopReason` must be one of those others or `threatMotivation` with an entry
+  actually ≥ 300. SKIP if no hunters exist at all (then nothing can escalate anyway).
 - H10 (count clamp is explicit): `end_turn {"count":20,"force":true,"passIdleAgents":true}` — assert the
   result's `requestedCount` is **20** (the value you passed, no longer silently rewritten to 10), that
   `advancedBy` ≤ 10, and that a `countNote` states the clamp to the max batch of 10.
-- H11 (opportunistic, force level-ups are named): whenever an agent has an unspent skill point and you
-  `end_turn {"force":true}`, assert the result's `digest.autoResolvedLevelUps` names it: entries
-  `{turn, unit, chose, level, skillPointsRemaining, note}` with `chose` a trait name. Cross-check
-  `get_unit`: the agent's `agent.skillPoints` dropped by 1 and its person gained that trait. A force
-  call that spends a point with NO such digest entry is a FAIL (the 0.10.0 silent-spend bug). SKIP if
-  no level-up occurs under force.
+- H11 (opportunistic, force level-ups are named): whenever an agent has an unspent REGULAR skill point
+  (its starting-trait pick already made) and you `end_turn {"force":true}`, assert the result's
+  `digest.autoResolvedLevelUps` names it: entries `{turn, unit, chose, level, skillPointsRemaining, note}`
+  with `chose` a trait name. Cross-check `get_unit`: the agent's `agent.skillPoints` dropped by 1 and its
+  person gained that trait. A force call that spends a point with NO such digest entry is a FAIL (the
+  0.10.0 silent-spend bug). SKIP if no regular level-up occurs under force.
+- H13 (hero-starts-hunting stops the batch — the game-15/16 PW4-window killer): whenever a hero begins an
+  attack-pursuit of one of your agents/servants during an `end_turn` batch (any `stopOn*` settings),
+  assert the batch stops that turn with `stopReason:"heroAttacking"` and a `heroAttacking` array whose
+  entries carry `{hunter, target, turnsRemaining, message}` (+ `location`) — even when
+  `stopOnThreatMotivation` is set and the hunter is below the threshold. Edge-trigger: a batch STARTED
+  while that same hunt is already running must NOT stop for it again. A `count:1` call in the same
+  situation must attach the `heroAttacking` payload (no stopReason). With `stopOnHeroAttacking:false`
+  the batch must run through it (the digest's HERO_ATTACKING entry is then the only trace). SKIP if no
+  hero ever starts a hunt.
+- H13b (force blocks the one-shot starting-trait pick — the G16-#1 guard): with an agent whose NEXT
+  level-up is its starting-trait (magic mastery) menu (a fresh agent holding its initial skill point;
+  `game_overview.masteryPicksPending` must name it), call `end_turn {"force":true}`. Assert the turn does
+  NOT advance: the level-up popup is returned as `pendingDecision` with `forceDenied:"startingTraitPick"`
+  and a note naming the agent; `digest.autoResolvedLevelUps` must NOT contain that agent. Answer the popup
+  (`resolveOptionIndex`) and assert the next forced call advances and `masteryPicksPending` is gone.
+  Opt-out path (only if a second fresh agent is available to sacrifice): `end_turn
+  {"force":true,"forceSpendsStartingTraits":true}` must restore the old auto-spend WITH a
+  `digest.autoResolvedLevelUps` entry. Regular level-ups (starting pick already made) must keep
+  auto-spending under plain force (H11).
 - H12 (passIdleAgents covers mid-batch idles): during any `count>1` batch with `passIdleAgents:true`,
   assert the batch never stops with a `pendingDecision` of `kind:"idleAgents"` — including when an
   agent's challenge COMPLETES mid-batch and it goes idle (the pre-0.12.0 hole). A stop on the idle
@@ -655,7 +694,10 @@ resolve_decision, end_turn, new_game, wait_for_events.
   one of your agents now includes a `combat` block ({dangerEstimate, hp, defence, attack, menace, profile,
   menaceFloor, profileFloor, huntRadius, isHuntable, inHiding}) and an `items` array (possibly empty) — assert
   both keys present, that `combat.huntRadius == floor(combat.profile / 5)`, and that `menaceFloor`/`profileFloor`
-  are numeric.
+  are numeric. When the unit (yours OR a hostile hero's) has living minions, `combat` must also carry
+  `minionScreen` `{count, front:{name,hp,defence,attack}, note}` whose `front` matches the first living
+  entry of `agent.minions` (defence from getMaxDefence, the pre-battle number) — absent when no living
+  minions.
 - K14 (infiltration detail): `get_location` on a settled human location includes `settlement.infiltration`
   (0..1) and a `subsettlements` array whose entries are `{name, infiltrated}` objects (not bare strings).
   Assert the object shape. If no settled location is handy, SKIP.
@@ -763,6 +805,13 @@ control (M0, M6–M9): move an agent onto a tile that holds a hostile hero — h
 - M2 (opportunistic, force is blocked — the core guarantee): while an agent is under attack, call `end_turn
   {"force":true}` and assert it does NOT advance `turn` and returns `blockedBy:"combat"` with a
   `pendingDecision` of `kind:"combat"`. Battles are never auto-resolved. Else SKIP.
+- M2b (opportunistic, screening is visible pre-battle): in a pending `kind:"combat"` decision, any battle
+  whose ATTACKER has living minions must carry `attackerScreen` (`{count, front, note}`) and a
+  `screeningNote` embedding the concrete first-contact math ("your attack A vs defence M: … swing(s) deal
+  0 damage, … swing(s) to kill (hp H)") — verify the arithmetic: with A ≥ M, 0 blanked swings; with A < M,
+  floor(M/A) blanked swings (defence ablates by the FULL attack per swing). Your own side's minions
+  likewise appear as `yourScreen` when alive. A "favoured"/"even" `verdict` with a screening
+  `attackerScreen` and NO `screeningNote` is a FAIL. Else SKIP.
 - M3 (opportunistic, open the battle): with a `kind:"combat"` decision pending (the engaged-agent list; read
   `battles` + per-battle `verdict` via `get_pending_decision`), `resolve_decision {"optionIndex":0}`. Assert
   the result reports the battle opened, and a follow-up `get_pending_decision` now returns

@@ -52,13 +52,38 @@ namespace ShadowsMcp.Tools.Decisions
                 int myDanger = SafeInt(() => def.getDangerEstimate());
                 int foeDanger = att != null ? SafeInt(() => att.getDangerEstimate()) : 0;
                 string verdict = Verdict(myDanger, foeDanger);
-                battles.Add(JsonValue.NewObject()
+                JsonValue battle = JsonValue.NewObject()
                     .Set("index", i)
                     .Set("agent", Summaries.UnitRef(ctx, def))
                     .Set("attacker", Summaries.UnitRef(ctx, att))
                     .Set("yourStrength", myDanger)
                     .Set("attackerStrength", foeDanger)
-                    .Set("verdict", verdict));
+                    .Set("verdict", verdict);
+                // The strengths sum minions into one scalar and hide SCREENING: leaders always
+                // strike the enemy's slot-0 minion first, so a high-defence front minion can blank
+                // a low-attack agent entirely while the enemy leader lands hits every round - a
+                // "favoured"-looking fight killed an agent in game 16 (G16-#5). Surface both
+                // screens plus the concrete first-contact math.
+                JsonValue yourScreen = Summaries.MinionScreen(def);
+                JsonValue attackerScreen = Summaries.MinionScreen(att);
+                if (!yourScreen.IsNull) battle.Set("yourScreen", yourScreen);
+                if (!attackerScreen.IsNull) battle.Set("attackerScreen", attackerScreen);
+                if (!attackerScreen.IsNull)
+                {
+                    int myAtk = SafeInt(() => def.getStatAttack());
+                    int foeAtk = att != null ? SafeInt(() => att.getStatAttack()) : 0;
+                    string fName = attackerScreen["front"]["name"].AsString() ?? "front minion";
+                    int fDef = attackerScreen["front"]["defence"].AsInt();
+                    int fHp = attackerScreen["front"]["hp"].AsInt();
+                    JsonValue math = Summaries.ScreeningMath(myAtk, fDef, fHp);
+                    battle.Set("screeningNote", "verdict compares summed dangerEstimates, which " +
+                        "hides screening: the attacker's front minion (" + fName + ", defence " +
+                        fDef + ", hp " + fHp + ") must die before your leader can touch theirs - " +
+                        "your " + math["line"].AsString() + " - while their leader (attack " +
+                        foeAtk + ") strikes your side every round. Weigh fight/flee against " +
+                        "yourScreen/attackerScreen, not the verdict alone.");
+                }
+                battles.Add(battle);
                 options.Add(JsonValue.NewObject()
                     .Set("index", i)
                     .Set("label", "Open the battle: " + Name(def) + " vs " + Name(att) + " (" + verdict +
@@ -75,8 +100,10 @@ namespace ShadowsMcp.Tools.Decisions
                 .Set("note", "Each of these agents was attacked this turn and a battle is waiting. Resolve one " +
                     "with resolve_decision optionIndex to open its combat menu, then fight to the end / flee / " +
                     "retreat via a follow-up resolve_decision. Combat cannot be skipped: end_turn is blocked " +
-                    "(even force=true) until every battle is resolved. 'verdict' compares strengths — consider " +
-                    "fleeing an 'outmatched' fight from round 2 (you keep the agent but lose its minions).")
+                    "(even force=true) until every battle is resolved. 'verdict' compares summed strengths and " +
+                    "can be WRONG when minions screen — read each battle's screeningNote and yourScreen/" +
+                    "attackerScreen; consider fleeing an 'outmatched' or screened fight from round 2 (you keep " +
+                    "the agent but lose its minions).")
                 .Set("resolveWith", "resolve_decision with optionIndex (opens that battle); force=true opens the first");
         }
 
