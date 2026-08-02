@@ -707,8 +707,9 @@ namespace ShadowsMcp
             return arr;
         }
 
-        /// <summary>Strip Unity rich-text tags (e.g. &lt;color=#aaaaaaff&gt;…&lt;/color&gt;) from a battle log line.</summary>
-        private static string StripRichText(string s)
+        /// <summary>Strip Unity rich-text tags (e.g. &lt;color=#aaaaaaff&gt;…&lt;/color&gt;) from a battle log line.
+        /// Internal so ObserverCapture can reuse it on the same message stream.</summary>
+        internal static string StripRichText(string s)
         {
             if (string.IsNullOrEmpty(s)) return s;
             return System.Text.RegularExpressions.Regex.Replace(s, "<[^>]+>", "");

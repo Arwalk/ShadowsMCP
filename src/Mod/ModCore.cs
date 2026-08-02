@@ -60,12 +60,15 @@ namespace ShadowsMcp
         public override void onStartGamePresssed(Map map, List<God> gods) { OnMapSeen(map); }
         public override void afterMapGenAfterHistorical(Map map) { OnMapSeen(map); }
         public override void afterLoading(Map map) { OnMapSeen(map); }
-        public override void onTurnStart(Map map) { OnMapSeen(map); }
-        public override void onTurnEnd(Map map) { OnMapSeen(map); }
+        // onTurnStart fires at the END of turnTick (this turn's messages fully generated);
+        // onTurnEnd fires at the TOP of the next turnTick, before the game wipes
+        // turnUnifiedMessages — the observer capture points (see ObserverCapture).
+        public override void onTurnStart(Map map) { OnMapSeen(map); ObserverCapture.OnTurnStart(_ctx, map); }
+        public override void onTurnEnd(Map map) { OnMapSeen(map); ObserverCapture.OnTurnEnd(_ctx, map); }
 
         // The game calls this whenever the modal blocker changes (a decision popup opened or
-        // closed). We keep no state — the decision tools read ui.blocker live — but logging the
-        // transition helps trace agent runs. Never throw out of a game hook.
+        // closed). The decision tools read ui.blocker live so no state is kept here; observer
+        // mode additionally records the transition as an event. Never throw out of a game hook.
         public override void onUIFullscreenBlockerUpdate(GameObject blocker)
         {
             try
@@ -75,6 +78,7 @@ namespace ShadowsMcp
                     : "decision popup closed");
             }
             catch { }
+            ObserverCapture.OnBlockerUpdate(_ctx, blocker);
         }
 
         // Option names must match mod_config.json exactly; values arrive when the player
@@ -104,6 +108,12 @@ namespace ShadowsMcp
                 _ctx.Config.DiscoveryMode = value;
                 Log.Info("config: discovery mode -> " + value);
             }
+            if (optName == "Observer mode" && value != _ctx.Config.ObserverMode)
+            {
+                _ctx.Config.ObserverMode = value;
+                Log.Info("config: observer mode -> " + value);
+                ObserverCapture.OnModeChanged(_ctx, value);
+            }
         }
 
         // ---------- boot / shutdown (statics only) ----------
@@ -126,6 +136,8 @@ namespace ShadowsMcp
 
                 McpBridgeBehaviour.Dispatcher = _ctx.Dispatcher;
                 McpBridgeBehaviour.OnQuit = Shutdown;
+                // Per-frame observer capture: a no-op int compare unless observer mode is on.
+                McpBridgeBehaviour.OnFrame = () => ObserverCapture.OnFrame(_ctx);
                 var go = new GameObject("ShadowsMCP");
                 UnityEngine.Object.DontDestroyOnLoad(go);
                 go.AddComponent<McpBridgeBehaviour>();
@@ -138,6 +150,7 @@ namespace ShadowsMcp
                 DecisionTools.RegisterAll(_host, _ctx);
                 TipsTools.RegisterAll(_host, _ctx);
                 LifecycleTools.RegisterAll(_host, _ctx);
+                ObserverTools.RegisterAll(_host, _ctx);
 
                 // The core mechanics primer becomes the MCP initialize.instructions (always-on onboarding);
                 // situational tips ride game_overview / end_turn, and get_tips is the on-demand catalog.
@@ -182,6 +195,7 @@ namespace ShadowsMcp
                 _ctx.Map = map;
                 _ctx.Registry.Reset(); // new game or loaded save: session ids start over
                 _ctx.Events.Clear();   // ...and the recent-events feed, so events never leak between games
+                ObserverCapture.OnGameChanged(_ctx); // observer buffer too (stale cursors read gap:true)
 
                 // One-shot teaching state (tips, boilerplate, event prose) is keyed to the WORLD, not the
                 // Map instance: Map.seed is generated once and serialized with the world, so a reload or a

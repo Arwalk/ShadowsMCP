@@ -17,7 +17,7 @@ namespace ShadowsMcp.Tools
     {
         public static void RegisterAll(GameToolHost host, GameContext ctx)
         {
-            host.Register(new ToolDefinition(
+            host.RegisterMutating(new ToolDefinition(
                 "influence_holy_order_tenet",
                 "Spend a holy order's banked Elder influence to shift one of its tenets by one step - your "
                 + "highest-leverage lever over a religion. direction=toward_elder darkens it; toward_human "
@@ -40,7 +40,7 @@ namespace ShadowsMcp.Tools
                         "toward_elder", "toward_human"), required: true)),
                 a => QueryTools.WithMap(ctx, map => InfluenceTenet(ctx, map, a))));
 
-            host.Register(new ToolDefinition(
+            host.RegisterMutating(new ToolDefinition(
                 "oppose_divinity",
                 "Act against the divine entity behind a holy order. action=undermine spends 1 power to cut "
                 + "10 off the entity's strength - the first use anywhere starts the War in Heaven (angers "

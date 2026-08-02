@@ -23,7 +23,7 @@ namespace ShadowsMcp.Tools
             // Server-thread registration (the end_turn pattern): World.startup runs map
             // generation plus a 150-turn burn-in synchronously, far beyond the ordinary
             // per-tool budget, so the handler dispatches its own job with its own timeout.
-            host.RegisterServerThread(new ToolDefinition(
+            host.RegisterServerThreadMutating(new ToolDefinition(
                 "new_game",
                 "Start a NEW game from the main menu, headlessly. Generates a fresh world and begins play " +
                 "as the chosen god. SLOW (~30-120s): make ONE call and wait - never retry while it runs " +

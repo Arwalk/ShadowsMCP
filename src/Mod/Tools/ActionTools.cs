@@ -17,7 +17,7 @@ namespace ShadowsMcp.Tools
     {
         public static void RegisterAll(GameToolHost host, GameContext ctx)
         {
-            host.Register(new ToolDefinition(
+            host.RegisterMutating(new ToolDefinition(
                 "move_unit",
                 "Order one of your agents to travel to a location (pathfinds automatically; moves immediately " +
                 "with any moves left this turn, then continues each turn). Ordering a unit to its current " +
@@ -28,7 +28,7 @@ namespace ShadowsMcp.Tools
                     Schema.Prop("force", Schema.Boolean("Abandon an in-progress challenge without confirmation"))),
                 a => QueryTools.WithMap(ctx, map => MoveUnit(ctx, map, a))));
 
-            host.Register(new ToolDefinition(
+            host.RegisterMutating(new ToolDefinition(
                 "cancel_task",
                 "Clear a unit's current order (movement or challenge).",
                 Schema.Object(
@@ -48,7 +48,7 @@ namespace ShadowsMcp.Tools
                     return ToolResult.Ok("cancelled task '" + had + "' for " + u.getName());
                 })));
 
-            host.Register(new ToolDefinition(
+            host.RegisterMutating(new ToolDefinition(
                 "perform_challenge",
                 "Order one of your units to perform a challenge or ritual (from list_challenges). If the unit " +
                 "is elsewhere, it travels there first and then begins.",
@@ -58,7 +58,7 @@ namespace ShadowsMcp.Tools
                     Schema.Prop("force", Schema.Boolean("Abandon an in-progress challenge without confirmation"))),
                 a => QueryTools.WithMap(ctx, map => PerformChallenge(ctx, map, a))));
 
-            host.Register(new ToolDefinition(
+            host.RegisterMutating(new ToolDefinition(
                 "use_power",
                 "Cast one of your god's powers (see list_powers) on a target unit or location. The cost is " +
                 "deducted from your power resource.",
@@ -68,7 +68,7 @@ namespace ShadowsMcp.Tools
                     Schema.Prop("targetLocationId", Schema.String("Target location id, e.g. L3"))),
                 a => QueryTools.WithMap(ctx, map => UsePower(ctx, map, a))));
 
-            host.Register(new ToolDefinition(
+            host.RegisterMutating(new ToolDefinition(
                 "recruit_agent",
                 "Recruit a new agent by spending one recruitment point (enthrallment). Either enthrall an " +
                 "archetype (pass agentCode from list_recruitable_agents plus a target locationId) or corrupt " +
@@ -81,7 +81,7 @@ namespace ShadowsMcp.Tools
                     Schema.Prop("locationId", Schema.String("Target location for the archetype, e.g. L3 (ignored when heroUnitId is given)"))),
                 a => QueryTools.WithMap(ctx, map => RecruitAgent(ctx, map, a))));
 
-            host.Register(new ToolDefinition(
+            host.RegisterMutating(new ToolDefinition(
                 "command_army",
                 "Issue a military unit's special order (armies like an awakened god-army or orc raiders; " +
                 "available orders appear under 'orders' in the unit views). order=raze devours the human " +
@@ -96,7 +96,7 @@ namespace ShadowsMcp.Tools
                     Schema.Prop("targetUnitId", Schema.String("For drive_back/attack: the enemy unit sharing your unit's tile, e.g. U9 (ignored for raze)"))),
                 a => QueryTools.WithMap(ctx, map => CommandArmy(ctx, map, a))));
 
-            host.Register(new ToolDefinition(
+            host.RegisterMutating(new ToolDefinition(
                 "command_agent",
                 "Act on ANOTHER agent on the same tile as one of your agents (move_unit there first). " +
                 "order=attack duels an enemy hero and CANCELS both sides' in-progress challenges permanently - " +
@@ -117,7 +117,7 @@ namespace ShadowsMcp.Tools
 
             // Registered as a server-thread tool: end-turn processing can exceed the normal
             // per-tool timeout, so it dispatches its own job with the longer budget.
-            host.RegisterServerThread(new ToolDefinition(
+            host.RegisterServerThreadMutating(new ToolDefinition(
                 "end_turn",
                 "End your turn (runs the full turn processing; may take a few seconds). " +
                 "A blocking decision popup is returned with its options instead of advancing (also in " +

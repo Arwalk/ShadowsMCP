@@ -14,6 +14,11 @@ namespace ShadowsMcp
         /// discover the game blind. false (default) → previews shown.</summary>
         public bool DiscoveryMode = false;
 
+        /// <summary>A human plays the game while a connected agent only watches (wait_for_events)
+        /// and advises; every game-mutating tool refuses while this is on. Human-only setting like
+        /// <see cref="DiscoveryMode"/> — set from the in-game mod config popup, never via a tool.</summary>
+        public bool ObserverMode = false;
+
         public int Port = 8017;
 
         /// <summary>How long an HTTP worker waits for the main thread to run one tool.</summary>

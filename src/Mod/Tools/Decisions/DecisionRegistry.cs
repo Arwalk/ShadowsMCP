@@ -381,8 +381,9 @@ namespace ShadowsMcp.Tools.Decisions
 
         /// <summary>The popup's title (falling back to the banner headline), its <c>Popup*</c> type
         /// name and its body text, all from ONE <c>Describe</c> call. Must be read before Resolve, which
-        /// destroys the blocker. All outputs are null on error — never throws.</summary>
-        private static void DescribeForLog(GameContext ctx, IDecisionHandler h, GameObject blocker,
+        /// destroys the blocker. All outputs are null on error — never throws. Internal so
+        /// ObserverCapture can identify popups it merely observes (it never resolves them).</summary>
+        internal static void DescribeForLog(GameContext ctx, IDecisionHandler h, GameObject blocker,
             out string title, out string popupType, out string body)
         {
             title = null; popupType = null; body = null;
@@ -542,7 +543,10 @@ namespace ShadowsMcp.Tools.Decisions
         /// <summary>Promote any popup sitting in the delayed blocker queue into <c>ui.blocker</c>.
         /// A decision that opens a follow-up popup (e.g. a level-up chaining into the next) leaves it
         /// queued, not yet the live blocker; end_turn calls this before deciding the turn is stuck so a
-        /// freshly-queued decision is surfaced instead of being mis-reported as an unknown guard.</summary>
+        /// freshly-queued decision is surfaced instead of being mis-reported as an unknown guard.
+        /// Observer-mode invariant: every call site (end_turn's paths, PopupEventHandler's resolve
+        /// paths) sits behind a tool that refuses while observer mode is on, so the mod never
+        /// promotes popups out from under a human player — no gating needed here.</summary>
         internal static void PumpQueue(GameContext ctx)
         {
             try

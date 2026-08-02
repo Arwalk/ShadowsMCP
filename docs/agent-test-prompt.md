@@ -26,13 +26,13 @@ return. Do not use any tools other than the `shadows` server's.
 The game: you play a dark god corrupting the world through agents (your commandable units). You are
 authorized to freely mutate THIS game (it is expendable). Actions are irreversible — there is no save/undo.
 
-### Tools available (35)
+### Tools available (36)
 game_overview, get_threats, world_summary, list_locations, get_location, list_units, get_unit,
 list_persons, get_person, list_social_groups, get_social_group, list_wars, list_investigations,
 list_holy_orders, get_recent_events, get_player_state, get_victory_breakdown, list_recruitable_agents,
 list_powers, list_challenges, get_tips, inspect, move_unit, cancel_task, perform_challenge, use_power,
 recruit_agent, command_army, command_agent, influence_holy_order_tenet, oppose_divinity, get_pending_decision,
-resolve_decision, end_turn, new_game.
+resolve_decision, end_turn, new_game, wait_for_events.
 
 ### Preflight (if this fails, stop and report BLOCKED)
 1. Call `game_overview`. If it errors with "no game in progress", start a throwaway game yourself:
@@ -871,6 +871,40 @@ current game, so run them **LAST**, after every other section is done and its ev
   "confirm":true}` reproduces the same world — compare a few location names from `list_locations`
   against O2's. SKIP if the time budget is spent.
 
+**P. Observer mode (`wait_for_events`)** — P1 needs no setup; every other P check requires a HUMAN at
+the game window to toggle the mod-config "Observer mode" option (it is human-only, settable by no
+tool). In an unattended run, do P1 and mark P2–P8 SKIP ("needs a human to enable observer mode") —
+that is expected coverage, not a failure.
+- P1 (off-mode fast path): with observer mode OFF (the default), call `wait_for_events {"cursor":0}`.
+  Assert it returns essentially immediately (no ~25s block), `observer_mode:false`, and a message
+  telling the human how to enable the option. Assert `game_overview` carries NO `observerMode` key.
+- P2 (refusals name observer mode): human enables Observer mode. Call `end_turn {}` and
+  `move_unit` (any ids). Assert both return a clean `isError` naming observer mode, saying nothing
+  was changed, and pointing at wait_for_events — and that `game_overview.turn` is unchanged (the
+  refusal really mutated nothing). Assert read-only tools (`game_overview`, `list_units`,
+  `get_pending_decision`) still answer normally, and `game_overview` now carries
+  `observerMode:true` + `observerNote`.
+- P3 (timeout returns empty, not error): with no game activity, call
+  `wait_for_events {"cursor":<current next_cursor>,"timeout_seconds":3}`. Assert it blocks roughly
+  3s (`waited_ms` ≈ 3000), then returns `events: []`, the SAME cursor back as `next_cursor`, and
+  `isError` false.
+- P4 (event wakes a blocked call): start `wait_for_events {"cursor":<current>,"timeout_seconds":30}`
+  and have the human end a turn while it blocks. Assert the call returns well before the timeout
+  with a `turn_start` event (plus any turn news) and `waited_ms` far below 30000.
+- P5 (cursor replay is idempotent): call `wait_for_events {"cursor":C}` twice with the same C
+  (pick a C with known events past it). Assert both responses return the same events with the same
+  ids and the same `next_cursor`.
+- P6 (gap semantics): after the human loads a save or starts a new game (or after >500 events),
+  call `wait_for_events` with your old pre-load cursor. Assert `gap:true`, a `game_changed` event
+  when the cause was a load/new game, and that continuing from the returned `next_cursor` works
+  cleanly (no gap on the next call).
+- P7 (observer resolveHint): with observer mode on and a decision popup open on screen, assert
+  `game_overview.pendingDecision.resolveHint` and `wait_for_events.pendingDecision.hint` say the
+  PLAYER resolves it (not "call resolve_decision").
+- P8 (clean handback): human disables Observer mode. Assert an in-flight `wait_for_events` returns
+  promptly with `observer_mode:false`, mutating tools work again (e.g. `end_turn {}` advances or
+  reports a decision normally), and `game_overview` no longer carries `observerMode`.
+
 ### Reporting (required output)
 1. Print a table with columns: `id | area | result (PASS/FAIL/SKIP/BLOCKED) | expected | observed (tool +
    before→after) | notes`. One row per check above.
@@ -880,8 +914,9 @@ current game, so run them **LAST**, after every other section is done and its ev
    directory (use the starting turn number from preflight so the name is stable). Confirm the file path in
    your final message.
 
-Work through A→N in order, then O last (it abandons the game). Be concise in intermediate narration; the value is in the evidence and the final
-report.
+Work through A→N in order, then P if a human is assisting (P2–P8 need the observer-mode config
+toggle; P1 alone otherwise), then O last (it abandons the game). Be concise in intermediate
+narration; the value is in the evidence and the final report.
 ````
 
 ---

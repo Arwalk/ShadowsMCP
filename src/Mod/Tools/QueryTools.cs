@@ -861,6 +861,13 @@ namespace ShadowsMcp.Tools
             // tool the agent reads every turn (mirrors the game's own hint popups). See TipEngine.
             JsonValue tips = TipEngine.CollectContextual(ctx);
             if (!tips.IsNull) o.Set("tips", tips);
+            // Observer mode: a human drives the game and every mutating tool refuses. Stated here —
+            // the tool an agent always reads — so a companion (or a confused playing agent) cannot
+            // miss why. Omitted entirely in the normal case.
+            if (ctx.Config.ObserverMode)
+                o.Set("observerMode", true)
+                 .Set("observerNote", "a human is playing this game; you are a watching companion. " +
+                     "Game-mutating tools refuse while this is on. Follow events with wait_for_events.");
             return o;
         }
 
@@ -875,7 +882,13 @@ namespace ShadowsMcp.Tools
             if (!pd.IsNull)
             {
                 Boilerplate.CompactDecision(ctx, pd);
-                pd.Set("resolveHint", Boilerplate.ResolveHint(ctx));
+                // In observer mode the human answers popups on screen; the usual "resolve via
+                // end_turn/resolve_decision" hint would send a companion at a refusing tool (and
+                // skipping Boilerplate.ResolveHint keeps its shown-once counter unburned).
+                pd.Set("resolveHint", ctx.Config.ObserverMode
+                    ? "the player resolves this on screen - do not call resolve_decision; you may " +
+                      "discuss the options"
+                    : Boilerplate.ResolveHint(ctx));
             }
             return pd;
         }

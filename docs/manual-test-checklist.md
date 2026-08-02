@@ -258,6 +258,30 @@ claude "Using the shadows MCP server: what turn is it, where are my agents, and 
 ```
 - [ ] Tools are discovered, queries answer correctly, the move shows up in-game
 
+## 9. Observer mode (human plays, agent watches)
+
+Needs a loaded game and a second terminal for the agent side (the `mcp` curl helper from §3 works).
+
+- [ ] With Observer mode OFF (default): `mcp wait_for_events '{"cursor":0}'` returns immediately
+      with `observer_mode:false` and enable instructions (no ~25s hang)
+- [ ] Enable **Observer mode** in Mods → Mod Options → Shadows MCP Server; `ShadowsMCP.log` shows
+      `config: observer mode -> True`
+- [ ] `mcp end_turn '{}'` now refuses, naming observer mode; the game window is unaffected
+- [ ] `mcp game_overview` still answers and carries `observerMode:true` + `observerNote`
+- [ ] Start `mcp wait_for_events '{"cursor":0,"timeout_seconds":30}'` and end a turn in-game while
+      it blocks → the call returns in under a second with a `turn_start` event plus the turn's news;
+      the game stayed fully responsive the whole time (no frame hitch while the poll was blocked)
+- [ ] Trigger a popup by playing (event, level-up, seal break…) → it appears on the feed as a
+      `popup` event when it opens, and dismissing it in-game yields a "resolved by the player"
+      event; the popup itself behaved completely normally for you
+- [ ] Run the companion: paste `docs/agent-companion-prompt.md` into a connected agent, play ~3
+      turns, and check the narration arrives within about a second of each turn end and reads the
+      events correctly
+- [ ] Load a save (or start a new game) mid-session → the agent's next `wait_for_events` on its old
+      cursor returns `gap:true` plus a `game_changed` event, and its loop recovers on its own
+- [ ] Disable Observer mode → a blocked `wait_for_events` returns promptly with
+      `observer_mode:false`; `end_turn` works again; `game_overview` drops the `observerMode` key
+
 ## If something fails, collect:
 
 1. `Player.log` (path in step 2)

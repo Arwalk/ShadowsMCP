@@ -30,6 +30,27 @@ namespace ShadowsMcp
         /// alongside <see cref="Registry"/> (see ModCore.OnMapSeen).</summary>
         public readonly RecentEventLog Events = new RecentEventLog();
 
+        /// <summary>Cursor-addressable feed for observer mode's wait_for_events long-poll, fed by
+        /// <see cref="ObserverCapture"/> during human play. Cleared on new game / load alongside
+        /// <see cref="Events"/>; its id counter deliberately survives the clear (see its cursor
+        /// contract). The only mod state both the main thread and blocked HTTP workers touch.</summary>
+        public readonly ObserverEventBuffer ObserverEvents = new ObserverEventBuffer();
+
+        /// <summary>How many of the current <c>Map.turnUnifiedMessages</c> ObserverCapture already
+        /// copied into <see cref="ObserverEvents"/> (the list is append-only between turnTick wipes,
+        /// so one counter both captures incrementally and dedupes). -1 = needs a baseline: capture
+        /// nothing, just record the current count — set on game change and observer-mode enable so a
+        /// loaded save's backlog or pre-toggle history is not replayed. Main-thread only.</summary>
+        public int ObserverCapturedCount = -1;
+
+        /// <summary>The popup blocker ObserverCapture last recorded as open, kept ONLY for reference
+        /// identity: by the time the close notification fires the GameObject is already destroyed, so
+        /// its kind/title are cached alongside and the object itself must never be dereferenced.
+        /// Main-thread only.</summary>
+        public UnityEngine.GameObject ObserverLastBlocker;
+        public string ObserverLastBlockerKind;
+        public string ObserverLastBlockerTitle;
+
         /// <summary>Ids of contextual tips already surfaced this game (the mod-side analogue of the base
         /// game's HintSystem.hasShown[]). A tip fires at most once per game. Cleared only when a
         /// genuinely different game is loaded (Map.seed changed - see ModCore.OnMapSeen), NOT on every

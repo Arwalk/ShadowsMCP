@@ -13,6 +13,8 @@ namespace ShadowsMcp
     {
         public static MainThreadDispatcher Dispatcher;
         public static System.Action OnQuit;
+        /// <summary>Per-frame callback (observer-mode capture). Same static wiring as Dispatcher.</summary>
+        public static System.Action OnFrame;
 
         // Fires on the Unity main thread during AddComponent (inside ModCore.Boot). This is the
         // canonical place we assert runInBackground: without it Unity pauses the game loop on
@@ -42,6 +44,9 @@ namespace ShadowsMcp
 
             MainThreadDispatcher d = Dispatcher;
             if (d != null) d.Pump();
+
+            System.Action frame = OnFrame;
+            if (frame != null) frame();
         }
 
         // Exclusive fullscreen minimizes on focus loss, and a minimized Unity app pauses even

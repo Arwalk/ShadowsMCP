@@ -18,6 +18,11 @@
       "name": "Discovery mode",
       "description": "Hide archetype ability previews from the AI so it discovers the game blind. Off = previews shown (default).",
       "defaultBoolValue": "false"
+    },
+    {
+      "name": "Observer mode",
+      "description": "You play; the connected AI only watches and narrates (via wait_for_events). All game-mutating MCP tools refuse while this is on.",
+      "defaultBoolValue": "false"
     }
   ]
 }

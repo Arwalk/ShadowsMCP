@@ -25,7 +25,7 @@ namespace ShadowsMcp.Tools
                 a => QueryTools.WithMap(ctx, map =>
                     ToolResult.Ok(Boilerplate.CompactDecision(ctx, DecisionRegistry.Current(ctx))))));
 
-            host.Register(new ToolDefinition(
+            host.RegisterMutating(new ToolDefinition(
                 "resolve_decision",
                 "Answer the current pending decision (from get_pending_decision): optionIndex clicks that " +
                 "option. force=true dismisses a popup like pressing OK (for a level-up it skips while " +
