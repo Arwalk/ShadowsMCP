@@ -206,6 +206,14 @@ resolve_decision, end_turn, new_game, wait_for_events.
   none available): assert it has `indefinite:true`, `menaceGain:0`/`profileGain:0` (no lump-sum heat), and
   a `heatNote` explaining the per-turn effect lives in `description`. A Lay Low entry must additionally
   carry a `locationNote` (its speed is location-dependent) and NO `etaTurns` (indefinite = no completion).
+- D10d (the Lay Low note tells the truth about wilderness — the G18-#1 agent-killer): a `Ch_LayLow`
+  entry's `locationNote` must (a) NOT claim the wilderness variant works from "any wilderness hex" or
+  that a city can "stop offering" Lay Low; (b) name the real 'Lay Low (Wilderness)' sites (orc camps,
+  ancient ruins/minor sites, covens, deep-one settlements), warn that EMPTY hexes offer no challenges,
+  and state the at-rest-army mechanic (1 HP/turn at menace/profile thresholds, waived at 100%
+  infiltration or >50% home-city shadow). Cross-check the claim itself once: `list_challenges` at a
+  truly empty wilderness hex returns `challenges:[]` (so sending an agent there to lay low is wrong),
+  while an orc camp or ancient-ruins site lists `Ch_LayLowWilderness`.
 - D12 (per-unit ETA + rate breakdown): in a non-terse `list_challenges`, pick an entry with
   `progressPerTurn > 0` that is not `indefinite`: assert `etaTurns == ceil(complexity / progressPerTurn)`
   and that `progressBreakdown` is a `[{reason, value}]` array whose values sum to ~`progressPerTurn`
@@ -278,6 +286,17 @@ resolve_decision, end_turn, new_game, wait_for_events.
 - E7 (Manifestation kill report, Vinerva only + opportunistic — else SKIP): a successful Manifestation cast
   returns `notableDeaths` naming the `population` and the `ruler` (with `shadow`, `insane`,
   `countedInVictoryColumn`) plus a `warning` that the settlement was destroyed.
+- E8 (Start Faith is honest, Ophanim only — else SKIP; the G18-#2/#3 silent-seed fixes): (a) `list_powers`
+  carries a `restrictionNote` on Start Faith stating that dwarven/elven cities qualify as "human
+  settlement", that an existing Faith blocks recasting, and that ruler awareness drains the 1% seed at
+  5%/turn per point of awareness. (b) `use_power` on an INVALID target (e.g. an uninfiltrated settlement,
+  or one that already has Faith) returns the clause-itemized `[X]`/`[OK]` error — the FAILED clause first
+  with its actual value (infiltration shows the `n/m districts` fraction; an existing-Faith refusal names
+  the current charge), never the bare "Must be cast on a human settlement" one-liner. (c) a SUCCESSFUL
+  cast returns a `faithOutlook` field projecting the seed's per-turn balance from named terms (Ruler
+  Awareness / Fear of Our Shadow / etc.), including an explicit deletion WARNING whenever the balance
+  is <= 0. Verify one outlook against `get_location`'s `Pr_Opha_Faith.influences` on the next turn
+  (or against the property's absence if the warning predicted deletion).
 
 **F. Recruitment**
 - F1: `list_recruitable_agents` returns `capacity` (availableEnthrallments, nEnthralled, agentCap,
@@ -447,10 +466,9 @@ resolve_decision, end_turn, new_game, wait_for_events.
   selection (`kind:"scrollSet"`) — assert `end_turn {"force":true}` does NOT advance: `advanced:false`,
   `blockedBy:"decision"`, and `pendingDecision` still shows the same popup (force may only pass
   purely-informational "Dismiss" notices). Then answer it (`resolveOptionIndex` / `resolve_decision`) and
-  assert the next `end_turn` advances. REGULAR skill points are unaffected when no popup is open: with an
-  unspent regular point and no open level-up popup, `end_turn {"force":true}` still auto-spends and
-  advances — but a pending STARTING-TRAIT (magic mastery) pick blocks force even with no popup open (see
-  H13b). SKIP kinds that never appear.
+  assert the next `end_turn` advances. Pending skill points block force even with no popup open — a
+  STARTING-TRAIT (magic mastery) pick always (see H13b), a REGULAR point unless
+  `forceSpendsRegularTraits:true` is passed (see H11). SKIP kinds that never appear.
 
 - G8 (opportunistic, selection carousel): if a list picker ever blocks (`game_overview.pendingDecision` /
   `get_pending_decision` shows `kind:"carousel"`, `popupType:"PopupScrollSet"` — e.g. Cause Scandal's victim,
@@ -560,12 +578,19 @@ resolve_decision, end_turn, new_game, wait_for_events.
 - H10 (count clamp is explicit): `end_turn {"count":20,"force":true,"passIdleAgents":true}` — assert the
   result's `requestedCount` is **20** (the value you passed, no longer silently rewritten to 10), that
   `advancedBy` ≤ 10, and that a `countNote` states the clamp to the max batch of 10.
-- H11 (opportunistic, force level-ups are named): whenever an agent has an unspent REGULAR skill point
-  (its starting-trait pick already made) and you `end_turn {"force":true}`, assert the result's
-  `digest.autoResolvedLevelUps` names it: entries `{turn, unit, chose, level, skillPointsRemaining, note}`
-  with `chose` a trait name. Cross-check `get_unit`: the agent's `agent.skillPoints` dropped by 1 and its
-  person gained that trait. A force call that spends a point with NO such digest entry is a FAIL (the
-  0.10.0 silent-spend bug). SKIP if no regular level-up occurs under force.
+- H11 (force blocks REGULAR level-ups by default — the G18-#4 guard, NEW default in 0.16.0): whenever
+  an agent has an unspent REGULAR skill point (its starting-trait pick already made;
+  `game_overview.levelUpsPending` must name it), call `end_turn {"force":true}` WITHOUT
+  `forceSpendsRegularTraits`. Assert the turn does NOT advance: the level-up popup is returned as
+  `pendingDecision` with `forceDenied:"traitPick"` and a note naming the agent;
+  `digest.autoResolvedLevelUps` must NOT contain that agent. Answer the popup (`resolveOptionIndex`)
+  and assert the next forced call advances and `levelUpsPending` no longer names the agent. A plain
+  force call that silently spends a regular point is a FAIL (the pre-0.16.0 auto-spend).
+  Opt-in path: `end_turn {"force":true,"forceSpendsRegularTraits":true}` must auto-spend WITH a
+  `digest.autoResolvedLevelUps` entry `{turn, unit, chose, level, skillPointsRemaining, note}` where
+  `chose` is a trait name — cross-check `get_unit`: `agent.skillPoints` dropped by 1 and the person
+  gained that trait; a spend with NO digest entry is a FAIL (the 0.10.0 silent-spend bug). SKIP if no
+  agent banks a regular point during the run.
 - H13 (hero-starts-hunting stops the batch — the game-15/16 PW4-window killer): whenever a hero begins an
   attack-pursuit of one of your agents/servants during an `end_turn` batch (any `stopOn*` settings),
   assert the batch stops that turn with `stopReason:"heroAttacking"` and a `heroAttacking` array whose
@@ -582,9 +607,10 @@ resolve_decision, end_turn, new_game, wait_for_events.
   and a note naming the agent; `digest.autoResolvedLevelUps` must NOT contain that agent. Answer the popup
   (`resolveOptionIndex`) and assert the next forced call advances and `masteryPicksPending` is gone.
   Opt-out path (only if a second fresh agent is available to sacrifice): `end_turn
-  {"force":true,"forceSpendsStartingTraits":true}` must restore the old auto-spend WITH a
-  `digest.autoResolvedLevelUps` entry. Regular level-ups (starting pick already made) must keep
-  auto-spending under plain force (H11).
+  {"force":true,"forceSpendsStartingTraits":true,"forceSpendsRegularTraits":true}` must restore the
+  old auto-spend WITH a `digest.autoResolvedLevelUps` entry (both flags are needed: the regular-trait
+  guard blocks first otherwise, see H11). Regular level-ups now block under plain force too (H11);
+  `forceDenied` distinguishes the two: `"startingTraitPick"` vs `"traitPick"`.
 - H12 (passIdleAgents covers mid-batch idles): during any `count>1` batch with `passIdleAgents:true`,
   assert the batch never stops with a `pendingDecision` of `kind:"idleAgents"` — including when an
   agent's challenge COMPLETES mid-batch and it goes idle (the pre-0.12.0 hole). A stop on the idle
@@ -680,7 +706,8 @@ resolve_decision, end_turn, new_game, wait_for_events.
   object with a `minions` array and numeric `attack`, and an `investigation` array (possibly empty). Assert
   `agent` is present, and that it now also carries numeric `level`, `xp`, `xpForNextLevel` and
   `skillPoints` (progression used to be reachable only via `inspect`); when `skillPoints > 0` a
-  `skillPointNote` explains the force auto-spend risk. Cross-check `level`/`xp` against
+  `skillPointNote` explains that the level-up blocks end_turn (and the forceSpendsRegularTraits
+  opt-out). Cross-check `level`/`xp` against
   `inspect {"path":"U<n>.person"}`. The same agent's `list_units` row carries `level` (and `skillPoints`
   only when > 0).
 - K5b (minion stats are the popup's numbers): if any of your agents has minions (recruit one if cheap —
@@ -777,6 +804,19 @@ resolve_decision, end_turn, new_game, wait_for_events.
   Soul charge; (c) a listed `Ch_WavesOfMadness` entry carries an `outcomeNote` saying waves score
   victory points and do NOT move the Soul meter. Do not report the vanilla awakening message's 300%
   claim as a mod defect — the mod deliberately annotates rather than rewrites it. SKIP on other gods.
+- K21b (opportunistic, god-gated — Ophanim awareness corrections, G18-#6): if playing Ophanim, assert
+  (a) `get_player_state.progression` carries a `mechanicsNote` stating that a local ruler's awareness
+  DRAINS Faith (5%/turn per point of awareness) and that Faith at 0% is silently deleted — the vanilla
+  mechanics text mentions awareness only under Doubt; (b) `get_tips {"id":"ophanim_faith"}`'s body names
+  the ruler-awareness drain, says the fear tiers do NOT stack (only the strongest applies), and mentions
+  the 100%+-charge self-spread. Do not report the vanilla text's silence as a mod defect — the mod
+  annotates rather than rewrites. SKIP on other gods.
+- K22 (stacked modifiers are annotated, opportunistic — G18-#5): if `get_location` ever returns two or
+  more properties of the SAME `type` (e.g. `Pr_LingeringResentment` after repeated Brutal Crackdowns),
+  assert each duplicated entry carries `stackCount` (= the number of instances) and exactly ONE of them
+  carries a `stackNote` explaining that instances are independent and their per-turn effects add up.
+  The per-instance entries must NOT be merged — their separate `charge`s are real game state (the
+  vanilla UI shows the same duplicates). SKIP if no stack is ever observed.
 - K17 (one-shot tips survive a same-game reload, opportunistic/host-assisted): contextual tips are one-shot
   per GAME (keyed to the map seed), not per Map object — if the host loads a save of the SAME game mid-run
   (not agent-forcible; the host's Player.log logs "same game: one-shot tips kept"), assert tips that

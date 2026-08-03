@@ -355,9 +355,9 @@ namespace ShadowsMcp
             if (!orders.IsNull) o.Set("orders", orders);
             // Your own agents' progression at list granularity (get_player_state.agents / list_units):
             // level everywhere, plus a skillPoints flag whenever a point is banked - the pick is
-            // strategic (first level-up gates magic mastery: that one now BLOCKS end_turn(force),
-            // G16-#1; regular picks force still auto-spends, G14-#5/#6). Full XP numbers live in
-            // get_unit.agent.
+            // strategic (first level-up gates magic mastery, G16-#1; ANY pending pick now blocks
+            // end_turn(force) unless the matching forceSpends* flag opts back in, G18-#4). Full XP
+            // numbers live in get_unit.agent.
             UA uaSummary = u as UA;
             if (!dead && uaSummary != null && u.isCommandable() && uaSummary.person != null)
             {
@@ -581,7 +581,8 @@ namespace ShadowsMcp
                     .Set("disruptionExhaustion", ua.disruptionExhaustion)
                     .Set("minions", minions);
                 // Level/XP/skill points were only reachable via inspect (G14-#6), yet they gate the
-                // magic-mastery pick (first level-up) and end_turn(force) auto-spends banked points.
+                // magic-mastery pick (first level-up) and, with forceSpendsRegularTraits:true,
+                // end_turn(force) auto-spends banked points.
                 if (ua.person != null)
                 {
                     agent.Set("level", ua.person.level)
@@ -589,11 +590,11 @@ namespace ShadowsMcp
                         .Set("xpForNextLevel", ua.person.XPForNextLevel)
                         .Set("skillPoints", ua.person.skillPoints);
                     if (ua.person.skillPoints > 0)
-                        agent.Set("skillPointNote", "unspent skill point(s): pick the trait yourself " +
-                            "via the level-up popup (end_turn without force surfaces it) - " +
-                            "end_turn(force) auto-spends ONE regular pick per turn on an AI-picked " +
-                            "trait; the one-shot starting-trait/magic-mastery pick always BLOCKS " +
-                            "force instead (answer the popup to choose)");
+                        agent.Set("skillPointNote", "unspent skill point(s): the next end_turn blocks " +
+                            "with the level-up popup - answer it to pick the trait yourself (this " +
+                            "holds even under force, forceDenied:\"traitPick\"/\"startingTraitPick\"; " +
+                            "only forceSpendsRegularTraits:true lets force auto-spend a regular pick " +
+                            "on an AI-picked trait)");
                 }
                 o.Set("agent", agent);
 
@@ -885,13 +886,37 @@ namespace ShadowsMcp
                 o.Set("settlement", s);
             }
 
-            JsonValue props = JsonValue.NewArray();
+            // Duplicate instances of one property type are REAL game state, not a serialization
+            // bug: the engine appends without a same-type check (e.g. every Brutal Crackdown adds
+            // its own Pr_LingeringResentment) and each instance ticks, decays, and contributes its
+            // influences independently - the vanilla UI shows the same duplicates (G18-#5). Mirror
+            // the list 1:1 and annotate stacks instead of merging, which would misreport totals.
+            Dictionary<string, int> typeCounts = new Dictionary<string, int>();
             foreach (Property p in l.properties)
             {
+                string t = p.GetType().Name;
+                int n;
+                typeCounts.TryGetValue(t, out n);
+                typeCounts[t] = n + 1;
+            }
+            JsonValue props = JsonValue.NewArray();
+            HashSet<string> stackNoted = new HashSet<string>();
+            foreach (Property p in l.properties)
+            {
+                string t = p.GetType().Name;
                 JsonValue pv = JsonValue.NewObject()
-                    .Set("type", p.GetType().Name)
+                    .Set("type", t)
                     .Set("name", SafeName(() => p.getName()))
                     .Set("charge", Round2(p.charge));
+                if (typeCounts[t] > 1)
+                {
+                    pv.Set("stackCount", typeCounts[t]);
+                    if (stackNoted.Add(t))
+                        pv.Set("stackNote", typeCounts[t] + " independent instances of this modifier " +
+                            "are here - each keeps its own charge and applies its own influences every " +
+                            "turn (their per-turn effects ADD UP). An instance at charge 0 was just " +
+                            "zeroed (e.g. by an Unrest crisis) and is culled next turn.");
+                }
                 if (p.influences != null && p.influences.Count > 0)
                     pv.Set("influences", InfluenceList(p.influences));
                 props.Add(pv);
@@ -1297,13 +1322,19 @@ namespace ShadowsMcp
                     + "and (Ophanim god only) 100% Ophanim faith here. progressPerTurn is the actual "
                     + "per-turn menace AND profile reduction at this location (progressBreakdown names the "
                     + "active boosts); an infiltrated or enshadowed settlement can be 2-4x faster than an "
-                    + "untouched one. If a city stops offering Lay Low (e.g. an army at rest patrols "
-                    + "there), the wilderness variant 'Lay Low (Wilderness)' works from any wilderness "
-                    + "hex - list_challenges there to find it.");
+                    + "untouched one. A city never stops offering Lay Low, but an army AT REST here deals "
+                    + "1 HP per turn to an agent with menace >= " + c.map.param.ua_armyBlockMenace
+                    + " and profile >= " + c.map.param.ua_armyBlockProfile + " performing ANY challenge "
+                    + "(waived at 100% infiltration, or if the army's home city is >50% shadow). To lay "
+                    + "low out of an army's reach, use the variant 'Lay Low (Wilderness)' - offered ONLY "
+                    + "at non-city sites that still have a settlement: orc camps, ancient ruins/minor "
+                    + "sites, witch covens and temples, and deep-one cities/sanctums. Empty wilderness "
+                    + "hexes with no settlement offer NO challenges at all - don't go there.");
             else if (c is Ch_LayLowWilderness)
                 o.Set("locationNote", "Wilderness Lay Low runs at a base rate, doubled only if the "
                     + "settlement here is 100% infiltrated; progressPerTurn is the actual rate at this "
-                    + "location.");
+                    + "location. It exists only at non-city sites (orc camps, ancient ruins, covens, "
+                    + "deep-one settlements) - never on empty hexes.");
             // The description's "leading to your victory" is via VICTORY POINTS (insane rulers/heroes
             // score), NOT via the Iastur's Soul modifier - which no game code ever raises. Without this
             // note the vanilla text sends players grinding a meter that cannot move (G14-#12/#17).
@@ -1677,6 +1708,7 @@ namespace ShadowsMcp
                 if (p is P_Vinerva_Tempt_Health) return TemptRequirements(map, loc, typeof(Pr_Vinverva_Health), "healing grove");
                 if (p is P_Vinerva_Tempt_Might) return TemptRequirements(map, loc, null, null, landNotSettlement: true);
                 if (p is P_Vinerva_Tempt_Salvation) return TemptRequirements(map, loc, null, null, landNotSettlement: true);
+                if (p is P_Opha_StartFaith) return StartFaithRequirements(map, loc);
             }
             catch { }
             return JsonValue.Null;
@@ -1840,6 +1872,55 @@ namespace ShadowsMcp
             reqs.Add(HeartClause(map, loc, zeroHeartsPass: false,
                 zeroHeartsActual: "no Hearts exist yet - the Tempt line is unusable until you grow " +
                     "a first Heart with Heart of the Forest"));
+            return reqs;
+        }
+
+        /// <summary>
+        /// P_Opha_StartFaith.validTarget has three clauses but its restriction text names only
+        /// two, and the unnamed one (no existing Faith here) produced a flatly wrong refusal in
+        /// G18-#3. "Human settlement" is the C# type SettlementHuman - dwarven and elven cities
+        /// subclass it, so species is never the reason a cast is refused.
+        /// </summary>
+        private static JsonValue StartFaithRequirements(Map map, Location loc)
+        {
+            JsonValue reqs = JsonValue.NewArray();
+            bool humanType = loc.settlement is SettlementHuman;
+            reqs.Add(JsonValue.NewObject()
+                .Set("clause", "target is a human-type settlement (human, dwarven and elven cities all qualify)")
+                .Set("met", humanType)
+                .Set("actual", humanType ? "qualifying settlement"
+                    : loc.settlement != null ? SafeName(() => loc.settlement.getName()) + " does not qualify"
+                    : "no settlement here"));
+            double infiltration = Safe(() => loc.settlement is SettlementHuman sh ? sh.infiltration : 0.0, 0.0);
+            string districts = Safe(() =>
+            {
+                if (!(loc.settlement is SettlementHuman sh) || sh.subs == null) return null;
+                int infiltrable = 0, done = 0;
+                foreach (Subsettlement sub in sh.subs)
+                {
+                    if (sub.infiltrated) { done++; infiltrable++; }
+                    else if (sub.canBeInfiltrated()) infiltrable++;
+                }
+                return done + "/" + infiltrable + " infiltrable districts infiltrated";
+            }, null);
+            reqs.Add(JsonValue.NewObject()
+                .Set("clause", "settlement infiltration > 0% (run Infiltrate on a district here first)")
+                .Set("met", humanType && infiltration > 0.0)
+                .Set("actual", !humanType ? "no qualifying settlement"
+                    : Round2Down(infiltration * 100) + "%" + (districts != null ? " (" + districts + ")" : "")));
+            double existingCharge = -1.0;
+            Safe(() =>
+            {
+                foreach (Property property in loc.properties)
+                    if (property is Pr_Opha_Faith faith) { existingCharge = faith.charge; return true; }
+                return false;
+            }, false);
+            reqs.Add(JsonValue.NewObject()
+                .Set("clause", "no Ophanim Faith already present here")
+                .Set("met", existingCharge < 0.0)
+                .Set("actual", existingCharge < 0.0 ? "none here"
+                    : "Faith already here at " + Round2(existingCharge) + "% charge (it may be about to " +
+                      "fade: see get_location properties[].influences - ruler awareness drains it)"));
             return reqs;
         }
 
@@ -2050,6 +2131,16 @@ namespace ShadowsMcp
                         "scoring in the insane/enshadowed-rulers victory column. The settlement is " +
                         "replaced by a Manifestation plus a new Heart. No confirmation is asked; " +
                         "the cast result lists the deaths under notableDeaths.";
+                if (p is P_Opha_StartFaith)
+                    return "the in-game restriction text is incomplete: (1) 'human settlement' means " +
+                        "the human-TYPE settlement class - dwarven and elven cities qualify too; " +
+                        "(2) casting also requires no Ophanim Faith already at the target; (3) the " +
+                        "seed starts at just 1% charge while the LOCAL RULER'S AWARENESS drains it " +
+                        "at 5%/turn per point of awareness, with no base growth - cast on a settlement " +
+                        "with an aware ruler and the Faith silently vanishes within a couple of turns. " +
+                        "Seed where the ruler is unaware (or dead), or where shadow-fear growth " +
+                        "(see get_tips id=ophanim_faith) outruns the drain. A refusal names the " +
+                        "exact failed clause.";
             }
             catch { }
             return null;
@@ -2095,6 +2186,19 @@ namespace ShadowsMcp
                     "= win' claim in the awakening message is dead text: nothing in the game ever " +
                     "raises the Soul charge. It only FALLS (heroes using the bound Tome), and 0% is a " +
                     "real defeat - defend it, but do not try to raise it. See get_tips id=iastur_soul.");
+            // The Ophanim mechanics blurb describes Faith growth purely positively and names ruler
+            // awareness only as a Doubt driver - but awareness is Faith's PRIMARY brake (-5/turn at
+            // full awareness vs +4 max realistic growth), which G18 had to reverse-engineer from raw
+            // influence lists after two silently-evaporated casts. Annotate, don't rewrite (mod policy).
+            if (god is God_Ophanim)
+                o.Set("mechanicsNote", "ADDITION to the mechanics text above (verified against game " +
+                    "code): a LOCAL RULER'S AWARENESS directly drains Faith at 5%/turn per point of " +
+                    "awareness (a fully-aware ruler outpaces every growth source combined; the drain " +
+                    "stops only if the ruler dies or the nation becomes Ophanim-controlled). Faith " +
+                    "that reaches 0% is silently deleted. For Ophanim, awareness is not a late-game " +
+                    "threat but the primary brake on your scoring engine - keep rulers unaware or " +
+                    "remove them before seeding. Read any Faith's exact growth terms in " +
+                    "get_location properties[].influences. See get_tips id=ophanim_faith.");
             return o;
         }
 

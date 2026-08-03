@@ -845,8 +845,8 @@ namespace ShadowsMcp.Tools
             if (armiesInBattle > 0)
                 threatsBlock.Set("armiesInBattle", armiesInBattle);
 
-            // Pending one-shot starting-trait (magic mastery) picks, on the always-read tool so
-            // the agent sees them BEFORE end_turn(force) blocks on one (G16-#1).
+            // Pending level-up picks, on the always-read tool so the agent sees them BEFORE
+            // end_turn(force) blocks on one (G16-#1 starting picks, G18-#4 regular picks).
             JsonValue masteryPicks = JsonValue.Null;
             var masteryUnits = Summaries.PendingStartingTraitPicks(ctx, map);
             if (masteryUnits.Count > 0)
@@ -858,6 +858,28 @@ namespace ShadowsMcp.Tools
                     .Set("note", "these agents' next level-up is their one-shot starting-trait " +
                         "(magic mastery) menu. end_turn without force (or answer the level-up popup) " +
                         "to choose it yourself - force blocks until it is answered.");
+            }
+            // Regular unspent skill points (the World.cs:689 predicate minus the starting-pick
+            // agents above): the next end_turn will block on the level-up popup unless
+            // forceSpendsRegularTraits:true is passed.
+            JsonValue levelUps = JsonValue.Null;
+            {
+                JsonValue units = JsonValue.NewArray();
+                foreach (Unit u in map.units)
+                {
+                    UA ua = u as UA;
+                    if (ua == null || ua.isDead || !ua.isCommandable() || ua.person == null) continue;
+                    if (ua.person.skillPoints <= 0 || ua.person.cachedOutOfTraits) continue;
+                    if (masteryUnits.Contains(ua)) continue;
+                    units.Add(Summaries.UnitRef(ctx, ua));
+                }
+                if (units.Count > 0)
+                    levelUps = JsonValue.NewObject()
+                        .Set("units", units)
+                        .Set("note", "these agents have an unspent REGULAR skill point: the next " +
+                            "end_turn blocks with their level-up popup so you choose the trait " +
+                            "(forceDenied:\"traitPick\"); pass forceSpendsRegularTraits:true to let " +
+                            "force auto-spend on an AI-chosen trait instead.");
             }
 
             JsonValue o = JsonValue.NewObject()
@@ -919,6 +941,7 @@ namespace ShadowsMcp.Tools
                     .Set("socialGroups", map.socialGroups.Count));
             // Absent in the common no-pending-pick case to keep the overview lean.
             if (!masteryPicks.IsNull) o.Set("masteryPicksPending", masteryPicks);
+            if (!levelUps.IsNull) o.Set("levelUpsPending", levelUps);
             // Content mods that advertised an MCP manifest (their tips/gods/popups are woven into the
             // regular tools); absent in the common vanilla case to keep the overview lean.
             if (McpExtensions.ModNames.Count > 0)

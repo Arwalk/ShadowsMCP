@@ -252,7 +252,8 @@ namespace ShadowsMcp.Tips
                 "entirely while the Tome is unread; the game code halves it. Trust this tip, not the popup."),
 
             CtxDyn("ophanim_faith", "Ophanim: faith growth", "god", GodIsOphanim, OphanimFaithBody,
-                "Ophanim's Faith grows from fear of shadow - fastest from shadow in a location itself."),
+                "Faith grows from fear of shadow but the LOCAL RULER'S AWARENESS drains it 5x harder - " +
+                "keep rulers unaware or remove them."),
 
             // faction / world existence
             Ctx("dark_empire", "The Dark Empire", "faction", HasDarkEmpire,
@@ -373,7 +374,11 @@ namespace ShadowsMcp.Tips
                 "combat.isHuntable) - though a free hero that SEES the agent (profile/10 hexes) needs no " +
                 "threshold: attacking is worthwhile for it from roughly menace > 30 + distance at any profile; " +
                 "menace >= 40 with profile >= 30 lets a human army block and attack it " +
-                "mid-challenge. You can only Redress Crimes (pay gold to cut menace) while menace is under 20. " +
+                "mid-challenge (1 HP per turn; waived at 100% infiltration or if the army's home city is " +
+                ">50% shadow). If an at-rest army makes laying low in a city lethal, move to an orc camp, " +
+                "ancient ruin, coven or deep-one site and use 'Lay Low (Wilderness)' there (empty hexes " +
+                "offer no challenges), or go In Hiding. " +
+                "You can only Redress Crimes (pay gold to cut menace) while menace is under 20. " +
                 "Enshadowed rulers are blind to menace - their urge to attack is scaled by (1 - their shadow) - so " +
                 "enshadowing the local ruler shields a menacing agent. Menace is sticky: a floor ratchets up with " +
                 "every gain and it can never drop below it (get_unit combat.menaceFloor); lower it by lying low " +
@@ -721,17 +726,29 @@ namespace ShadowsMcp.Tips
         private static string OphanimFaithBody(GameContext c)
         {
             Map m = (c != null ? c.Map : null) ?? World.staticMap;
+            const string awareness =
+                "BUT the biggest term is negative: the LOCAL RULER'S AWARENESS drains Faith by 5%/turn " +
+                "per point of awareness (a fully-aware ruler's -5 outpaces every growth source; the " +
+                "drain stops only when the ruler dies or the nation becomes Ophanim-controlled, which " +
+                "instead gives +3 'Faithful Nation'). Faith at 0% is silently DELETED - a 1% seed cast " +
+                "under an aware ruler evaporates within two turns with no message. Keep rulers unaware " +
+                "or remove them; read any Faith's exact per-turn terms in get_location " +
+                "properties[].influences. At over 100% charge, Faith can spread on its own to " +
+                "neighbouring settlements whose ruler's awareness is under 50%.";
             if (m == null || m.param == null)
                 return "You are playing Ophanim. Ophanim's Faith grows from fear of the shadow: people join it " +
                        "when they see shadow near them or in their own city - fastest from shadow in the location " +
-                       "itself, slowest from world-wide shadow.";
+                       "itself, slowest from world-wide shadow. " + awareness;
+            // The own-shadow tier in Pr_Opha_Faith.turnTick tests prop_opha_faithWorldShadowReq for
+            // BOTH the own-shadow and world-shadow branches (faithOwnShadowReq is never read); the
+            // two params coincide at 0.1 today but only WorldShadowReq is live.
             int world = (int)(100.0 * m.param.prop_opha_faithWorldShadowReq);
-            int own = (int)(100.0 * m.param.prop_opha_faithOwnShadowReq);
             return "You are playing Ophanim. Ophanim's Faith grows from fear of the shadow: people join it when " +
-                   "they see shadow near them or in their own city. Faith grows if the world is more than " + world +
-                   "% enshadowed, if a location neighbours somewhere with at least 25% shadow, or if a location " +
-                   "itself has at least " + own + "% shadow. It grows fastest from shadow in the location itself " +
-                   "and slowest from world-wide shadow.";
+                   "they see shadow near them or in their own city. The fear terms are a single tier (only the " +
+                   "strongest applies, they do NOT add up): location's own shadow above " + world + "% gives " +
+                   "+4/turn; else a neighbouring settlement at 25%+ shadow (with shadow flowing freely there) " +
+                   "gives +2; else world average shadow above " + world + "% gives +1. A neighbouring location " +
+                   "sharing the Faith adds +1 on top. " + awareness;
         }
     }
 }

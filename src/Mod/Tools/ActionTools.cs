@@ -124,16 +124,17 @@ namespace ShadowsMcp.Tools
                 "A blocking decision popup is returned with its options instead of advancing (also in " +
                 "game_overview.pendingDecision); answer it by passing resolveOptionIndex (a failed or " +
                 "unneeded resolve is reported in resolveWarning, never silently ignored). " +
-                "force=true auto-resolves ONLY what carries no choice: one unspent REGULAR skill point " +
-                "per agent per turn is auto-spent (AI-picked trait; each named in " +
-                "digest.autoResolvedLevelUps), and purely-informational popups are dismissed " +
-                "(message boxes, death notices; the periodic autosave is written to disk first). " +
-                "Everything with a real choice blocks even under force: a pending agent battle " +
+                "force=true auto-resolves ONLY what carries no choice: purely-informational popups are " +
+                "dismissed (message boxes, death notices; the periodic autosave is written to disk " +
+                "first). Everything with a real choice blocks even under force: a pending agent battle " +
                 "(blockedBy:\"combat\" - fight, flee, or retreat), the idle-agent alert (kind:\"idleAgents\" " +
                 "- give idle agents orders, or resolveOptionIndex 0 passes them all), narrative events " +
-                "(kind:\"event\", including the Defeat event of a lost battle), an agent's FIRST level-up " +
-                "(the one-shot starting-trait/magic-mastery menu: force blocks with " +
-                "forceDenied:\"startingTraitPick\" - answer the popup to choose the mastery yourself), " +
+                "(kind:\"event\", including the Defeat event of a lost battle), ANY level-up " +
+                "(force blocks with forceDenied:\"startingTraitPick\" on the one-shot starting-trait/" +
+                "magic-mastery menu and forceDenied:\"traitPick\" on a regular level-up - answer the popup " +
+                "to choose the trait yourself, or pass forceSpendsRegularTraits:true to let force " +
+                "auto-spend regular picks on an AI-chosen trait, each named in " +
+                "digest.autoResolvedLevelUps), " +
                 "and any other choice popup (an open level-up trait pick, trading, list selections). " +
                 "Idle recurs every turn, so a count>1 batch stops on the first idle turn unless every agent " +
                 "holds a standing order or you pass passIdleAgents:true. " +
@@ -155,8 +156,9 @@ namespace ShadowsMcp.Tools
                 "may explain a mechanic that just became relevant.",
                 Schema.Object(
                     Schema.Prop("count", Schema.Integer("Advance up to this many turns (default 1, max 10); stops early per the rules above, and the digest covers every turn advanced.")),
-                    Schema.Prop("force", Schema.Boolean("Auto-spend REGULAR skill points and dismiss informational popups; never skips a real choice (see tool description) - in particular an agent's one-shot starting-trait (magic mastery) pick blocks instead of being auto-spent. Every dismissal is named in the digest - nothing is lost.")),
+                    Schema.Prop("force", Schema.Boolean("Dismiss informational popups; never skips a real choice (see tool description) - in particular ANY pending level-up (starting-trait or regular) blocks instead of being auto-spent, unless the matching forceSpends* flag opts back in. Every dismissal is named in the digest - nothing is lost.")),
                     Schema.Prop("forceSpendsStartingTraits", Schema.Boolean("Default false: an agent's FIRST level-up - the one-shot starting-trait (magic mastery) menu - blocks force so you can choose it yourself. Pass true to restore the old behaviour and let force auto-spend even that pick on an AI-chosen trait (permanently forfeiting the mastery choice).")),
+                    Schema.Prop("forceSpendsRegularTraits", Schema.Boolean("Default false: a REGULAR level-up (any unspent skill point after the starting pick) blocks force so you choose the trait yourself (forceDenied:\"traitPick\"). Pass true to let force auto-spend one point per agent per turn on an AI-chosen trait (each named in digest.autoResolvedLevelUps) - useful for long unattended batches where a random trait beats stopping every level-up.")),
                     Schema.Prop("passIdleAgents", Schema.Boolean("Bulk-pass every idle agent each turn (a visible 'Passing Turn') so a batch doesn't stop on the recurring idle alert - including agents that go idle MID-batch (e.g. a challenge completes). A conscious choice to waste those turns - prefer standing orders. Combat and events still block.")),
                     Schema.Prop("passRoutineEvents", Schema.Boolean("Auto-answer a curated whitelist of recurring low-stakes mid-challenge events ('Watched' -> Silence them, 'Life Continues' -> Subtly disrupt the party, 'Merchant of Antiquities' -> refuse) with a fixed sensible option so they don't stop the batch. Every auto-answer is reported in digest.autoResolvedEvents (title, chose, outcome). All other events still block normally.")),
                     Schema.Prop("resolveOptionIndex", Schema.Integer("Answer the blocking decision with this option index (from pendingDecision.options), then continue ending the turn.")),
@@ -534,6 +536,7 @@ namespace ShadowsMcp.Tools
 
             // Mirrors Sel_CastPower.onClick: validTarget then cast; castCommon deducts the cost.
             JsonValue notableDeaths = JsonValue.Null;
+            string faithOutlook = null;
             if (hasUnit)
             {
                 Unit target = Summaries.ResolveId(ctx, a["targetUnitId"].AsString()) as Unit;
@@ -561,6 +564,11 @@ namespace ShadowsMcp.Tools
                 if (IsKnownDestructive(power))
                     notableDeaths = Summaries.NotableDeathsForManifestation(ctx, map, target);
                 power.cast(target);
+                // Start Faith's success payload is otherwise indistinguishable from a no-op (cost 0,
+                // pool unchanged) while the 1% seed can be silently deleted within two turns by the
+                // ruler-awareness drain (G18-#2) - always report the seed's projected balance.
+                if (power is P_Opha_StartFaith)
+                    faithOutlook = StartFaithOutlook(map, target);
             }
             CheckUiData(map);
 
@@ -572,6 +580,8 @@ namespace ShadowsMcp.Tools
                 ok.Set("notableDeaths", notableDeaths)
                   .Set("warning", "this cast destroyed the settlement: its population and ruler " +
                       "died (see notableDeaths)");
+            if (faithOutlook != null)
+                ok.Set("faithOutlook", faithOutlook);
             return ToolResult.Ok(ok);
         }
 
@@ -581,6 +591,59 @@ namespace ShadowsMcp.Tools
         private static bool IsKnownDestructive(Power p)
         {
             return p is P_Vinerva_Manifestation;
+        }
+
+        /// <summary>
+        /// Projected first-turn charge balance for a freshly cast Start Faith, mirroring
+        /// Pr_Opha_Faith.turnTick's influence terms. The seed starts at 1% and has no base
+        /// growth, so a net-negative balance means silent deletion within two turns with no
+        /// message from the game (G18-#2).
+        /// </summary>
+        private static string StartFaithOutlook(Map map, Location loc)
+        {
+            try
+            {
+                if (!(loc.settlement is SettlementHuman sh)) return null;
+                bool faithfulNation = loc.soc is Society soc && soc.isOphanimControlled;
+                double net = 0.0;
+                List<string> terms = new List<string>();
+                if (faithfulNation) { net += 3.0; terms.Add("+3 Faithful Nation"); }
+                else if (sh.ruler != null && sh.ruler.awareness > 0.0)
+                {
+                    double drain = 5.0 * sh.ruler.awareness;
+                    net -= drain;
+                    terms.Add("-" + Summaries.Round2(drain) + " Ruler Awareness (ruler is " +
+                        (int)(sh.ruler.awareness * 100.0) + "% aware)");
+                }
+                foreach (Property pr in loc.properties)
+                    if (pr is Pr_Opha_Doubt)
+                    {
+                        net -= pr.charge / 30.0;
+                        terms.Add("-" + Summaries.Round2(pr.charge / 30.0) + " Doubters");
+                    }
+                bool nearbyShadow = false, neighbourFaith = false;
+                foreach (Location n in loc.getNeighbours())
+                {
+                    foreach (Property pr in n.properties)
+                        if (pr is Pr_Opha_Faith) neighbourFaith = true;
+                    Settlement s = n.settlement;
+                    if (s != null && s.shadowPolicy == Settlement.shadowResponse.FULL_FLOW && s.shadow >= 0.25)
+                        nearbyShadow = true;
+                }
+                if (sh.shadow > map.param.prop_opha_faithWorldShadowReq) { net += 4.0; terms.Add("+4 Fear of Our Shadow"); }
+                else if (nearbyShadow) { net += 2.0; terms.Add("+2 Fear of Nearby Shadow"); }
+                else if (map.data_avrgEnshadowment > map.param.prop_opha_faithWorldShadowReq) { net += 1.0; terms.Add("+1 Fear of World Shadow"); }
+                if (neighbourFaith) { net += 1.0; terms.Add("+1 Neighbouring Faith"); }
+                string outlook = "seeded at 1% charge; projected " + (net >= 0.0 ? "+" : "") +
+                    Summaries.Round2(net) + "/turn from " +
+                    (terms.Count > 0 ? string.Join(", ", terms.ToArray()) : "no growth or drain terms yet");
+                if (net <= 0.0)
+                    outlook += ". WARNING: at this balance the Faith will be SILENTLY DELETED within a " +
+                        "couple of turns. Lower the ruler's awareness (or remove the ruler), or raise " +
+                        "shadow here, before reseeding.";
+                return outlook;
+            }
+            catch { return null; }
         }
 
         // ---------- recruit ----------
@@ -1571,21 +1634,27 @@ namespace ShadowsMcp.Tools
             int before = map.turn;
             int after;
             JsonValue autoDismiss;
-            // The one-shot starting-trait (magic mastery) pick is a real choice: a forced bEndTurn
-            // would AI-spend it via UA.spendSkillPoint, permanently closing the menu
-            // (hasAssignedStartingTraits) - which force did silently for three games (G16-#1).
-            // Denying force makes bEndTurn(false) raise the level-up popup instead; the caller
-            // answers it and force works again. Regular level-ups keep auto-spending. Collateral
-            // (bEndTurn force is all-or-nothing): while a starting pick is pending, other agents'
-            // regular points also pause auto-spending for this call.
+            // Every unspent skill point is a real choice: a forced bEndTurn would AI-spend it via
+            // UA.spendSkillPoint - which force did silently for four games (G16-#1 starting picks,
+            // G18-#4 regular picks). Denying force makes bEndTurn(false) raise the level-up popup
+            // instead; the caller answers it and force works again. The one-shot starting-trait
+            // (magic mastery) pick additionally closes its menu permanently when AI-spent
+            // (hasAssignedStartingTraits), so it keeps its own opt-in flag and forceDenied label.
+            // Collateral (bEndTurn force is all-or-nothing): while any pick blocks, other agents'
+            // points also pause auto-spending for this call; bEndTurn pops the FIRST pending agent's
+            // menu, so N simultaneous level-ups cost N end_turn round-trips - forceSpendsRegularTraits
+            // is the escape hatch for unattended batches.
             List<UA> masteryPicks = force && !args["forceSpendsStartingTraits"].AsBool()
                 ? Summaries.PendingStartingTraitPicks(ctx, map) : null;
             bool masteryBlocks = masteryPicks != null && masteryPicks.Count > 0;
+            List<SkillPointSnap> traitPicks = force && !args["forceSpendsRegularTraits"].AsBool()
+                ? SnapshotPendingSkillPoints(map) : null;
+            bool traitBlocks = traitPicks != null && traitPicks.Count > 0;
             // Deny force while combat, the idle-agent alert, a real-choice popup, or a pending
-            // starting-trait pick is pending, so bEndTurn stops (pops the battle / selects the idle
+            // level-up pick is pending, so bEndTurn stops (pops the battle / selects the idle
             // unit / leaves the popup blocking / pops the level-up) instead of auto-resolving,
             // silently wasting, or ticking past them.
-            bool allowForce = force && !combatEngaged && !idleBlocks && !hardChoiceOpen && !masteryBlocks;
+            bool allowForce = force && !combatEngaged && !idleBlocks && !hardChoiceOpen && !masteryBlocks && !traitBlocks;
             // A forced bEndTurn auto-spends one banked skill point per agent (World.cs:689-697,
             // AI-picked trait) and used to do so with no trace in any result (G14-#5): snapshot the
             // agents it will touch so the digest can name the level-up and the trait it chose.
@@ -1697,19 +1766,34 @@ namespace ShadowsMcp.Tools
                     // Call combat out by name so the agent (and the batch stopReason) sees why force didn't skip it.
                     .Set("blockedBy", pending["kind"].AsString() == "combat" ? "combat" : "decision")
                     .Set("pendingDecision", DecorateResolveHint(ctx, pending));
-                // Say WHY force didn't take this level-up: it is the agent's one-shot starting-trait
-                // (magic mastery) menu, which force never auto-spends (G16-#1).
-                if (masteryBlocks && pending["kind"].AsString() == "levelUp")
+                // Say WHY force didn't take this level-up: the starting-trait (magic mastery) menu
+                // (G16-#1) and regular level-ups (G18-#4) both block by default, with distinct
+                // labels so the caller knows which opt-out flag applies.
+                if (pending["kind"].AsString() == "levelUp")
                 {
-                    string who = null;
-                    try { who = masteryPicks[0].getName(); } catch { }
-                    result.Set("forceDenied", "startingTraitPick")
-                          .Set("forceDeniedNote", (who ?? "an agent") + " has an unspent skill point " +
-                              "whose next pick is its one-shot STARTING-TRAIT (magic mastery) menu - " +
-                              "force never auto-spends this (an AI pick would forfeit the mastery " +
-                              "permanently). Answer the level-up popup via resolveOptionIndex, then " +
-                              "force works again; pass forceSpendsStartingTraits:true only if you " +
-                              "deliberately want the old auto-spend.");
+                    if (masteryBlocks)
+                    {
+                        string who = null;
+                        try { who = masteryPicks[0].getName(); } catch { }
+                        result.Set("forceDenied", "startingTraitPick")
+                              .Set("forceDeniedNote", (who ?? "an agent") + " has an unspent skill point " +
+                                  "whose next pick is its one-shot STARTING-TRAIT (magic mastery) menu - " +
+                                  "force never auto-spends this (an AI pick would forfeit the mastery " +
+                                  "permanently). Answer the level-up popup via resolveOptionIndex, then " +
+                                  "force works again; pass forceSpendsStartingTraits:true only if you " +
+                                  "deliberately want the old auto-spend.");
+                    }
+                    else if (traitBlocks)
+                    {
+                        string who = null;
+                        try { who = traitPicks[0].Agent.getName(); } catch { }
+                        result.Set("forceDenied", "traitPick")
+                              .Set("forceDeniedNote", (who ?? "an agent") + " has an unspent skill " +
+                                  "point (regular level-up). Answer the popup via resolveOptionIndex " +
+                                  "to choose the trait yourself, then force works again - or pass " +
+                                  "forceSpendsRegularTraits:true to let force auto-spend regular picks " +
+                                  "on AI-chosen traits (reported in digest.autoResolvedLevelUps).");
+                    }
                 }
                 if (!resolved.IsNull) result.Set("resolved", resolved);
                 if (resolveWarning != null) result.Set("resolveWarning", resolveWarning);
@@ -1920,10 +2004,10 @@ namespace ShadowsMcp.Tools
                             : "(trait could not be identified)")
                         .Set("level", s.Agent.person.level)
                         .Set("skillPointsRemaining", s.Agent.person.skillPoints)
-                        // Only regular picks can reach this path now: a pending starting-trait
-                        // (mastery) pick denies force before bEndTurn (G16-#1).
-                        .Set("note", "regular skill point auto-spent by force (AI-picked trait); to " +
-                            "choose yourself next time, end_turn without force and answer the level-up popup"));
+                        // Only reachable with forceSpendsRegularTraits:true - by default any pending
+                        // pick (starting or regular) denies force before bEndTurn (G16-#1, G18-#4).
+                        .Set("note", "regular skill point auto-spent (forceSpendsRegularTraits, " +
+                            "AI-picked trait); omit that flag to choose level-up traits yourself"));
                 }
                 catch { }
             }
@@ -1949,8 +2033,9 @@ namespace ShadowsMcp.Tools
                     return u.getName() + " is under attack by " + u.engagedBy.getName() +
                         " - resolve the battle (get_pending_decision, then resolve_decision to fight, flee, or retreat)";
                 if (u is UA && u.person != null && u.person.skillPoints > 0 && !u.person.cachedOutOfTraits)
-                    return u.getName() + " has unspent skill points (force=true auto-spends regular " +
-                        "ones; a first-level-up starting-trait pick blocks force - answer the level-up popup)";
+                    return u.getName() + " has unspent skill points - answer the level-up popup to " +
+                        "choose the trait (force auto-spends them only with forceSpendsRegularTraits:true, " +
+                        "or forceSpendsStartingTraits:true for a first-level-up starting-trait pick)";
                 if (world.option_idleAlert && u.task == null && u.movesTaken == 0)
                     return u.getName() + " is idle and the idle-agent alert is on (give it an order, " +
                         "pass it via resolve_decision optionIndex 0, or fast-forward with end_turn passIdleAgents:true)";
