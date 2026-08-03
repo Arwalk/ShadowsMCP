@@ -111,7 +111,9 @@ resolve_decision, end_turn, new_game, wait_for_events.
 - B1: `game_overview` includes `agentCap`, `canRecruit`, `endOfGameAchieved`, `defeated`,
   `availableEnthrallments`.
 - B2: `get_player_state` includes `agentCap`, `canRecruit`, `endOfGameAchieved`, `enthralledCount` (and
-  `victoryMode` only once the game is WON — omitted while playing and on a defeat).
+  `victoryMode` only once the game is WON — omitted while playing and on a defeat), plus a numeric
+  `powerPerTurn` (your live regen incl. modifiers, G19-#2) — cross-check it once: `power` after one
+  quiet `end_turn` (no casts) should rise by ~`powerPerTurn`, capped at max.
 - B3: consistency — `canRecruit` == (`availableEnthrallments` > 0 AND `enthralledCount` < `agentCap`), and
   `defeated` == (`endOfGameAchieved` AND NOT `victoryAchieved`). Compute from the fields and compare.
 
@@ -206,14 +208,17 @@ resolve_decision, end_turn, new_game, wait_for_events.
   none available): assert it has `indefinite:true`, `menaceGain:0`/`profileGain:0` (no lump-sum heat), and
   a `heatNote` explaining the per-turn effect lives in `description`. A Lay Low entry must additionally
   carry a `locationNote` (its speed is location-dependent) and NO `etaTurns` (indefinite = no completion).
-- D10d (the Lay Low note tells the truth about wilderness — the G18-#1 agent-killer): a `Ch_LayLow`
-  entry's `locationNote` must (a) NOT claim the wilderness variant works from "any wilderness hex" or
-  that a city can "stop offering" Lay Low; (b) name the real 'Lay Low (Wilderness)' sites (orc camps,
-  ancient ruins/minor sites, covens, deep-one settlements), warn that EMPTY hexes offer no challenges,
-  and state the at-rest-army mechanic (1 HP/turn at menace/profile thresholds, waived at 100%
-  infiltration or >50% home-city shadow). Cross-check the claim itself once: `list_challenges` at a
-  truly empty wilderness hex returns `challenges:[]` (so sending an agent there to lay low is wrong),
-  while an orc camp or ancient-ruins site lists `Ch_LayLowWilderness`.
+- D10d (the Lay Low note tells the truth about wilderness — the G18-#1 agent-killer, re-tightened for
+  G19-#4): a `Ch_LayLow` entry's `locationNote` must (a) NOT claim the wilderness variant works from
+  "any wilderness hex", that a city can "stop offering" Lay Low, or that plain "temples"/"minor sites"
+  offer it; (b) name the real 'Lay Low (Wilderness)' sites — orc camps, ancient-ruins sites, witch
+  covens, temples of the WITCH faith ONLY, deep-one cities/sanctums — and state that ordinary
+  temples/Holy Sites and human minor VILLAGES never offer it, that elven/dwarven cities offer NEITHER
+  Lay Low variant, that EMPTY hexes offer no challenges, and the at-rest-army mechanic (1 HP/turn at
+  menace/profile thresholds, waived at 100% infiltration or >50% home-city shadow). Cross-check the
+  claim itself twice: `list_challenges` at a truly empty wilderness hex returns `challenges:[]`, an
+  orc camp or ancient-ruins site lists `Ch_LayLowWilderness`, and (opportunistic) a human minor
+  village whose only district is a Holy Site lists NO Lay Low of either kind.
 - D12 (per-unit ETA + rate breakdown): in a non-terse `list_challenges`, pick an entry with
   `progressPerTurn > 0` that is not `indefinite`: assert `etaTurns == ceil(complexity / progressPerTurn)`
   and that `progressBreakdown` is a `[{reason, value}]` array whose values sum to ~`progressPerTurn`
@@ -257,6 +262,18 @@ resolve_decision, end_turn, new_game, wait_for_events.
   entries (it instead appends a "(N heroes-only challenge(s)…)" note when any exist), and (c) when the
   stale id's TYPE (the `Ch_X` middle segment) is no longer offered at the location at all, carries the
   "no longer offers any 'Ch_X' challenge" explanation instead of a bare dead end.
+- D17 (live complexity is visible and volatile complexity says so — G19-#3): (a) `get_location` on any
+  human settlement returns a numeric `settlement.security` (and, when non-zero terms exist, a
+  `securityInfluences` `[{reason, value}]` array); (b) a security-scaled challenge entry (Infiltrate,
+  Access Vault, Assassinate families) carries a `complexityNote` stating complexity is recomputed live
+  from the settlement's security and quoting the current security — assert the entry's `complexity`
+  equals the note's formula (base + per-point × security) for Ch_Infiltrate (50 + 25/point); (c)
+  `perform_challenge` success on any definite challenge returns snapshot `complexity`,
+  `progressPerTurn` and (when the rate > 0) `etaTurns`; (d) `get_unit` on a unit mid-challenge shows
+  `taskDetail.complexity` and `etaTurnsRemaining` next to `progress`. Opportunistic: if a location holds
+  `Pr_BribedGuards`, its property entry carries `turnsRemaining` + `lapseNote`, and if the modifier
+  lapses while one of your units runs a security-scaled challenge there, the next `end_turn` digest
+  contains a `CHALLENGE_COMPLEXITY_CHANGED` event quoting old -> new.
 
 **E. Powers**
 - E1: `list_powers` returns powers with `cost` and a castable flag. Power ids are stable across turns
@@ -354,9 +371,18 @@ resolve_decision, end_turn, new_game, wait_for_events.
   the once and SKIP the other with a note.
 - G3b (resolve is never silent): call `end_turn {"resolveOptionIndex":0}` when NOTHING is pending (no ⚠
   banner). Assert the result carries `resolveWarning` saying the answer found no pending decision and was
-  ignored, AND that the warning instructs echoing `pendingDecision.decisionId` as `expectedDecisionId` to
-  arm the automatic retry (no `resolved` object) — a provided resolve that had nothing to act on, or that
-  failed, must always be reported, never silently dropped.
+  ignored, AND that the warning names BOTH remedies — echoing `pendingDecision.decisionId` as
+  `expectedDecisionId`, and `resolveAppliesToNextDecision:true` for a decision not yet seen (no
+  `resolved` object) — a provided resolve that had nothing to act on, or that failed, must always be
+  reported, never silently dropped.
+- G3e (bare resolves auto-pin — G19-#8): when a decision IS pending, answer it with a BARE
+  `end_turn {"resolveOptionIndex":N,"force":true}` (no `expectedDecisionId`). Assert the answer LANDS —
+  a `resolved` object carrying `autoPinnedTo` equal to the decision's `decisionId`, and NO "no decision
+  was pending" warning — i.e. force's informational sweep can no longer consume the popup you just
+  answered. Then, with NOTHING pending, call `end_turn {"count":3,"force":true,
+  "resolveOptionLabel":"<any plausible label>","resolveAppliesToNextDecision":true}`: if a decision
+  surfaces during the batch, assert `resolved.appliedTo` names it ({decisionId, kind, title}); if none
+  surfaces, assert `resolveWarning` says the armed answer went unused — never silence.
 - G3d (pinned resolves land, opportunistic): when a decision is pending, answer it via
   `end_turn {"resolveOptionIndex":N,"expectedDecisionId":"<its decisionId>","force":true}`. Assert the
   answer LANDS (a `resolved` object; no "no decision was pending" warning) even under force — the pin
@@ -809,8 +835,11 @@ resolve_decision, end_turn, new_game, wait_for_events.
   DRAINS Faith (5%/turn per point of awareness) and that Faith at 0% is silently deleted — the vanilla
   mechanics text mentions awareness only under Doubt; (b) `get_tips {"id":"ophanim_faith"}`'s body names
   the ruler-awareness drain, says the fear tiers do NOT stack (only the strongest applies), and mentions
-  the 100%+-charge self-spread. Do not report the vanilla text's silence as a mod defect — the mod
-  annotates rather than rewrites. SKIP on other gods.
+  the 100%+-charge self-spread; (c) `get_tips {"id":"ophanim_tenets"}` (new in 0.17.0, G19-#2) exists
+  and covers all three exclusive tenets — Sap Life Force's one-temple-city-per-turn drain + silent
+  destruction + flat-not-percent payoff, Inquisitors' cost living in the Inquisition challenge (not the
+  tenet), Paranoid Society's 15% temple prosperity hit. Do not report the vanilla text's silence as a
+  mod defect — the mod annotates rather than rewrites. SKIP on other gods.
 - K22 (stacked modifiers are annotated, opportunistic — G18-#5): if `get_location` ever returns two or
   more properties of the SAME `type` (e.g. `Pr_LingeringResentment` after repeated Brutal Crackdowns),
   assert each duplicated entry carries `stackCount` (= the number of instances) and exactly ONE of them
@@ -878,7 +907,10 @@ control (M0, M6–M9): move an agent onto a tile that holds a hostile hero — h
   per-row `hint` but the response carries a top-level `ordersLegend` explaining the calls once (and, if
   the target is mid-challenge, the row has `cancelsTheirTask`); and `get_threats.agentSafety` for that
   agent has a `hostilesOnTile` array naming the same hero (with its `dangerEstimate` and `task`) plus an
-  `attackHint`. Else SKIP (no co-located hero).
+  `attackHint`. Else SKIP (no co-located hero). Own-faith exception (Ophanim only, G19-#5): an acolyte
+  of YOUR OWN order (created with Call to Serve; its order `worshipsThePlayer`) sharing an agent's tile
+  must NOT appear in `hostilesOnTile`, while the `orders[].attack` entry the game genuinely offers for
+  it is kept but tagged `ownOrder:true` with an `ownOrderNote`.
 - M1 (opportunistic, signal agreement): the first turn an agent is under attack, assert the signal is
   consistent across surfaces — `game_overview.threats.agentsUnderAttack ≥ 1` with an `underAttack` list; the
   same unit shows `engagedThisTurn:true` (+ `underAttackBy`) in both `list_units {"scope":"mine"}` and
@@ -953,8 +985,12 @@ empty, mark N1–N8 SKIP. Spending influence is irreversible; that is fine on th
   tenet. For any **non-structural** tenet whose `status` is ≤ 0 and ≤ Alignment's `status`, assert
   `canInfluence.toward_elder` is `false` **and** a `blockedReason` mentioning Alignment is present. If no
   tenet meets that condition (Alignment already driven low), note it and PASS.
-- N3 (bulk listing stays lean): plain `list_holy_orders` (no args) still returns tenet objects with
-  `canInfluence`, but **without** `desc`. Assert absence of `desc` there and presence under N1.
+- N3 (bulk listing stays lean — except YOUR order): plain `list_holy_orders` (no args) still returns
+  tenet objects with `canInfluence`, but **without** `desc` — EXCEPT an order whose
+  `worshipsThePlayer` is `true` (your own faith, Ophanim only): its tenets keep `desc` and the
+  ready-to-paste `call` even in the bulk listing (G19-#2). Assert absence of `desc` on a foreign
+  order there, presence under N1, and (Ophanim only, else SKIP this clause) presence on your own
+  order's tenets in the bulk listing.
 - N4 (error, unknown order): `influence_holy_order_tenet {"orderId":"SG9999","tenet":"H_Alignment",
   "direction":"toward_elder"}` returns a clean "unknown social group id" error. Also call it with the id of
   a non-religious group (from `list_social_groups`) and assert a clean "is not a holy order" error.
@@ -977,6 +1013,15 @@ empty, mark N1–N8 SKIP. Spending influence is irreversible; that is fine on th
   `influenceElder` reset to `0` and `canChangeTenet:false`; and `game_overview.holyOrders` no longer lists
   that order (unless another is ready). If the result carried a `nowDarkenable` list, spot-check that one of
   those tenets now reports `canInfluence.toward_elder:true`.
+- N9 (Sap Life Force carries its warning — Ophanim only, else SKIP; G19-#2): in any serialization of
+  your own order's `H_SapLifeforce` tenet (bulk `list_holy_orders`, `{orderId}` detail, or an
+  `influence_holy_order_tenet` result), assert a `warning` field stating: one temple-city per turn
+  loses population while power is below max, destruction below 2 population ('Devoured by Ophanim')
+  is silent, and the payoff is a FLAT +0.02 power/turn per level (not 2%). If you darken it
+  (irreversible for the run — only do this on an expendable game), assert the result additionally
+  carries `tenetWarning` and a `sapDrain` block whose `templeCities` rows have `{location,
+  population, hitsToRuin}`, that `game_overview` then always carries `ophanimSapDrain`, and — if a
+  listed city is ever destroyed — that the `end_turn` digest contains a `DEVOURED_BY_OPHANIM` event.
 - N8 (divinity): if divine entities are OFF in this game (the default map option), `oppose_divinity` on
   any order must return a clean error saying they are DISABLED game-wide by the map option (not a
   per-order "has no divine entity") — assert that, then SKIP the rest of N8. Otherwise, if any order has

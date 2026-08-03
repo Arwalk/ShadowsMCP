@@ -420,6 +420,10 @@ namespace ShadowsMcp
                         JsonValue e = JsonValue.NewObject()
                             .Set("order", "drive_back")
                             .Set("target", UnitRef(ctx, ua));
+                        if (IsOwnOrderUnit(ua))
+                            e.Set("ownOrder", true)
+                             .Set("ownOrderNote", "this is an acolyte of YOUR OWN faith (its order " +
+                                 "worships you) - driving it back only hurts your own religion");
                         if (includeHints)
                             e.Set("hint", "command_army {unitId:" + UnitId(ctx, um) + ", order:\"drive_back\", targetUnitId:" +
                                 UnitId(ctx, ua) + "} forces this hero to retreat and drop its task");
@@ -490,6 +494,11 @@ namespace ShadowsMcp
                         if (!theirScreen.IsNull) e.Set("theirMinionScreen", theirScreen);
                         if (!yourScreen.IsNull) e.Set("yourMinionScreen", yourScreen);
                         if (breaksTask != null) e.Set("cancelsTheirTask", breaksTask);
+                        // The game UI genuinely offers this attack, so the entry stays - but flag it.
+                        if (IsOwnOrderUnit(target))
+                            e.Set("ownOrder", true)
+                             .Set("ownOrderNote", "this is an acolyte of YOUR OWN faith (its order " +
+                                 "worships you) - attacking it only hurts your own religion");
                         if (includeHints)
                             e.Set("hint", "command_agent {unitId:" + me + ", order:\"attack\", targetUnitId:" + tid +
                                 "} starts a duel with this hero" +
@@ -550,7 +559,7 @@ namespace ShadowsMcp
                 .Set("menace", Round2(u.menace))
                 .Set("profile", Round2(u.profile))
                 .Set("person", u.person != null ? PersonSummary(ctx, u.person) : JsonValue.Null)
-                .Set("taskDetail", u.isDead ? JsonValue.Null : TaskDetail(ctx, u.task))
+                .Set("taskDetail", u.isDead ? JsonValue.Null : TaskDetail(ctx, u.task, u))
                 .Set("engagedBy", UnitRef(ctx, u.engagedBy))
                 .Set("engagedThisTurn", u.engagedBy != null && u.turnLastEngaged == u.map.turn);
             if (u.rituals != null && u.rituals.Count > 0)
@@ -745,7 +754,7 @@ namespace ShadowsMcp
             return JsonValue.Of(desc);
         }
 
-        private static JsonValue TaskDetail(GameContext ctx, Task t)
+        private static JsonValue TaskDetail(GameContext ctx, Task t, Unit owner = null)
         {
             if (t == null) return JsonValue.Null;
             JsonValue o = JsonValue.NewObject().Set("type", t.GetType().Name);
@@ -756,6 +765,22 @@ namespace ShadowsMcp
                 o.Set("challenge", SafeName(() => pc.challenge.getName()))
                  .Set("progress", Round2(pc.progress))
                  .Set("turnsTaken", pc.turnsTaken);
+                // Progress and its target in ONE payload: the completion check is
+                // progress >= ceil(live complexity) each tick, so show the live value
+                // and the remaining ETA at this unit's rate (G19-#3).
+                double cx = Safe(() => pc.challenge.getComplexityAfterDifficulty(), 0.0);
+                bool indef = Safe(() => pc.challenge.isIndefinite(), false);
+                if (!indef && cx > 0.0)
+                {
+                    o.Set("complexity", Round2(cx));
+                    double ppt = 0.0;
+                    if (owner is UA oua) ppt = Safe(() => pc.challenge.getProgressPerTurn(oua, null), 0.0);
+                    else if (owner is UM oum) ppt = Safe(() => pc.challenge.getProgressPerTurn(oum, null), 0.0);
+                    if (ppt > 0.0)
+                        o.Set("etaTurnsRemaining", (int)Math.Ceiling(Math.Max(0.0, cx - pc.progress) / ppt));
+                }
+                string secNote = SecurityComplexityNote(pc.challenge);
+                if (secNote != null) o.Set("complexityNote", secNote);
             }
             Task_GoToLocation go = t as Task_GoToLocation;
             if (go != null)
@@ -842,6 +867,17 @@ namespace ShadowsMcp
                     // Fraction of infiltratable sub-districts infiltrated (0..1); 1.0 == fully infiltrated.
                     // Several challenges (Enshadow, Desecrate) gate on this reaching 1.0.
                     .Set("infiltration", Round2(Safe(() => st.infiltration, 0.0)));
+                // Security is the live input to the Infiltrate/Vault/Assassinate complexity formulas
+                // (e.g. Infiltrate = 50 + 25/point) - without it the agent can't see why a challenge's
+                // complexity moved (G19-#3). getSecurity is a pure read (sums property/ruler terms).
+                s.Set("security", Safe(() => st.getSecurity(null), 0));
+                try
+                {
+                    List<ReasonMsg> secReasons = new List<ReasonMsg>();
+                    st.getSecurity(secReasons);
+                    if (secReasons.Count > 0) s.Set("securityInfluences", InfluenceList(secReasons));
+                }
+                catch { }
                 // What this settlement is currently enacting (applies to any settlement type).
                 if (st.actionUnderway != null)
                     s.Set("action", JsonValue.NewObject()
@@ -919,6 +955,14 @@ namespace ShadowsMcp
                 }
                 if (p.influences != null && p.influences.Count > 0)
                     pv.Set("influences", InfluenceList(p.influences));
+                // Bribed Guards decays 1 charge/turn and the engine culls it below 0.1 with no
+                // message - the -2 security discount (and the lower Infiltrate-family complexity it
+                // bought) vanishes silently mid-challenge (G19-#3).
+                if (p is Pr_BribedGuards)
+                    pv.Set("turnsRemaining", (int)Math.Ceiling(Math.Max(0.0, p.charge - 0.1)))
+                      .Set("lapseNote", "decays 1 charge/turn and is removed SILENTLY below 0.1 - " +
+                          "its -2 security discount lapses with it, raising Infiltrate-family " +
+                          "complexity mid-challenge with no event");
                 props.Add(pv);
             }
             o.Set("properties", props);
@@ -1186,6 +1230,19 @@ namespace ShadowsMcp
             try { return c != null && c.isGoodTernary() == 1; } catch { return false; }
         }
 
+        /// <summary>True for a unit that belongs to the player's own faith: a UAA acolyte whose holy
+        /// order worships the player (only HolyOrder_Ophanim sets <c>worshipsThePlayer</c>; witch
+        /// acolytes stay neutral). Such a unit is not commandable but is NOT an enemy - never list
+        /// it among hostiles by default (G19-#5).</summary>
+        public static bool IsOwnOrderUnit(Unit u)
+        {
+            try
+            {
+                return u is UAA uaa && uaa.order != null && uaa.order.worshipsThePlayer;
+            }
+            catch { return false; }
+        }
+
         /// <summary>True when this challenge's type actually implements <c>validFor(UM)</c> rather than
         /// inheriting the base default (which returns true for everything). The game UI never offers
         /// location challenges to an army, so only explicit overrides are genuinely army-usable.</summary>
@@ -1322,19 +1379,24 @@ namespace ShadowsMcp
                     + "and (Ophanim god only) 100% Ophanim faith here. progressPerTurn is the actual "
                     + "per-turn menace AND profile reduction at this location (progressBreakdown names the "
                     + "active boosts); an infiltrated or enshadowed settlement can be 2-4x faster than an "
-                    + "untouched one. A city never stops offering Lay Low, but an army AT REST here deals "
+                    + "untouched one. A HUMAN city never stops offering Lay Low (elven and dwarven "
+                    + "cities are not 'cities' in code - they offer NEITHER Lay Low variant), but an "
+                    + "army AT REST here deals "
                     + "1 HP per turn to an agent with menace >= " + c.map.param.ua_armyBlockMenace
                     + " and profile >= " + c.map.param.ua_armyBlockProfile + " performing ANY challenge "
                     + "(waived at 100% infiltration, or if the army's home city is >50% shadow). To lay "
                     + "low out of an army's reach, use the variant 'Lay Low (Wilderness)' - offered ONLY "
-                    + "at non-city sites that still have a settlement: orc camps, ancient ruins/minor "
-                    + "sites, witch covens and temples, and deep-one cities/sanctums. Empty wilderness "
-                    + "hexes with no settlement offer NO challenges at all - don't go there.");
+                    + "at: orc camps, ancient-ruins sites (every ruin-type minor site has one, but human "
+                    + "minor VILLAGES never do), witch covens, temples of the WITCH faith only (ordinary "
+                    + "temples and Holy Sites do NOT offer it), and deep-one cities/sanctums. Empty "
+                    + "wilderness hexes with no settlement offer NO challenges at all - don't go there.");
             else if (c is Ch_LayLowWilderness)
                 o.Set("locationNote", "Wilderness Lay Low runs at a base rate, doubled only if the "
                     + "settlement here is 100% infiltrated; progressPerTurn is the actual rate at this "
-                    + "location. It exists only at non-city sites (orc camps, ancient ruins, covens, "
-                    + "deep-one settlements) - never on empty hexes.");
+                    + "location. It exists ONLY at: orc camps, ancient-ruins sites (every ruin-type "
+                    + "minor site has one, but human minor VILLAGES never do), witch covens, temples of "
+                    + "the WITCH faith only (ordinary temples and Holy Sites do NOT offer it), and "
+                    + "deep-one cities/sanctums - never on empty hexes.");
             // The description's "leading to your victory" is via VICTORY POINTS (insane rulers/heroes
             // score), NOT via the Iastur's Soul modifier - which no game code ever raises. Without this
             // note the vanilla text sends players grinding a meter that cannot move (G14-#12/#17).
@@ -1423,6 +1485,10 @@ namespace ShadowsMcp
                 try { item.Set("desc", stall.onSale.getShortDesc()); } catch { }
                 o.Set("itemForSale", item);
             }
+            // Security-scaled challenges recompute complexity live every read; emitted even in
+            // terse mode - like locationNote, it is the actionable line (G19-#3).
+            string secNote = SecurityComplexityNote(c);
+            if (secNote != null) o.Set("complexityNote", secNote);
             if (includeDescription)
             {
                 try { o.Set("description", c.getDesc()); } catch { }
@@ -1469,6 +1535,43 @@ namespace ShadowsMcp
                     o.Set("etaTurns", (int)Math.Ceiling(cx / ppt));
             }
             return o;
+        }
+
+        /// <summary>Volatility warning for the security-scaled challenge family (Infiltrate,
+        /// Access Vault, Assassinate): their getComplexity re-reads the settlement's LIVE
+        /// security on every call and challenge progress is compared against that live ceiling
+        /// each tick (Task_PerformChallenge), so a lapsing discount (Bribed Guards) silently
+        /// re-inflates an in-progress challenge (G19-#3). Null for every other type.</summary>
+        public static string SecurityComplexityNote(Challenge c)
+        {
+            int perPoint;
+            if (c is Ch_InfiltrateSimplified) perPoint = 7;
+            else if (c is Ch_Infiltrate) perPoint = Safe(() => c.map.param.ch_complexityPerSecurityPoint, 25);
+            else if (c is Ch_AccessVaultLimited) perPoint = 4;
+            else if (c is Ch_AccessVault) perPoint = 8;
+            else if (c is Ch_AssassinateSilent || c is Ch_AssassinateBrutal) perPoint = 5;
+            else return null;
+            int sec = Safe(() => c.location != null && c.location.settlement != null
+                ? c.location.settlement.getSecurity(null) : 0, 0);
+            string note = "complexity is NOT fixed: it is recomputed every turn as base + " + perPoint +
+                " per point of the settlement's LIVE security (now " + sec + "), and accumulated " +
+                "progress is measured against the live value - if security rises mid-challenge, the " +
+                "total climbs and your % completion drops with no message.";
+            try
+            {
+                if (c.location != null && c.location.properties != null)
+                    foreach (Property pr in c.location.properties)
+                        if (pr is Pr_BribedGuards)
+                        {
+                            note += " Bribed Guards is active here (-2 security): it lapses " +
+                                "SILENTLY in ~" + (int)Math.Ceiling(Math.Max(0.0, pr.charge - 0.1)) +
+                                " turn(s) (charge " + Round2(pr.charge) + "), which will raise this " +
+                                "complexity by " + (2 * perPoint) + ".";
+                            break;
+                        }
+            }
+            catch { }
+            return note;
         }
 
         // ---------- laughing tome ----------
@@ -2289,7 +2392,10 @@ namespace ShadowsMcp
 
             JsonValue tenets = JsonValue.NewArray();
             if (ho.tenets != null)
-                foreach (HolyTenet t in ho.tenets) tenets.Add(TenetSummary(ho, t, detail));
+                // YOUR OWN order's tenets always carry desc + the ready-to-paste call, even in the
+                // bulk listing: it is one order (~5-8 tenets) and its trap tenet (Sap Life Force)
+                // hid its cost behind the detail knob for a whole game (G19-#2).
+                foreach (HolyTenet t in ho.tenets) tenets.Add(TenetSummary(ho, t, detail || ho.worshipsThePlayer));
 
             JsonValue o = JsonValue.NewObject()
                 .Set("enshadowment", Round2(ho.enshadowment))
@@ -2342,6 +2448,10 @@ namespace ShadowsMcp
                     .Set("toward_elder", towardElder)
                     .Set("toward_human", towardHuman));
             if (blocked != null) o.Set("blockedReason", blocked);
+            // Sap Life Force's cost is easy to misread and its effects are invisible in play
+            // (G19-#2) - the warning rides EVERY serialization of this tenet, both detail modes.
+            string sapWarn = SapLifeforceWarning(t);
+            if (sapWarn != null) o.Set("warning", sapWarn);
             if (detail)
             {
                 o.Set("desc", SafeName(() => t.getDesc()));
@@ -2362,6 +2472,184 @@ namespace ShadowsMcp
             if (t.status == 0) return "Neutral (Inert)";
             if (t.status > 0) return (structural ? "Positive: +" : "Human: +") + t.status;
             return (structural ? "Negative: +" : "Elder Powers: +") + (-t.status);
+        }
+
+        /// <summary>The verified-against-code cost/benefit warning for H_SapLifeforce, null for any
+        /// other tenet. Mechanics (H_SapLifeforce.turnTickTemple): while overmind power is below max,
+        /// exactly ONE Ophanim temple-city per turn map-wide (shared lastTurnEffected guard - whichever
+        /// temple ticks first) takes population += status*2; below 2 population the settlement is
+        /// destroyed via fallIntoRuin("Devoured by Ophanim"). Neither the drain nor the destruction
+        /// produces a message the tools can pass through (fallIntoRuin uses map.addMessage, which
+        /// never reaches the digest). Payoff (God_Ophanim.getPowerPerTurn): a FLAT
+        /// holy_sapLifePowerGain (0.02) per darkened level - the desc's "2%" is not a percentage.</summary>
+        public static string SapLifeforceWarning(HolyTenet t)
+        {
+            if (!(t is H_SapLifeforce)) return null;
+            double gain = Safe(() => World.staticMap.param.holy_sapLifePowerGain, 0.02);
+            if (t.status < 0)
+            {
+                int lvl = -t.status;
+                return "DARKENED - drain is LIVE: while your power is below max, ONE Ophanim " +
+                    "temple-city per turn (whichever temple ticks first - you cannot choose it) " +
+                    "loses " + (2 * lvl) + " population, and a city dropping below 2 population is " +
+                    "DESTROYED outright ('Devoured by Ophanim'), temple, Faith and ruler included. " +
+                    "The game shows NO message for the drain or the destruction. The payoff is a " +
+                    "FLAT +" + Round2(gain * lvl) + " power/turn (the description's '" +
+                    (int)(100.0 * gain) + "%' is added as an absolute amount, not a percentage). " +
+                    "The drain pauses only while power is at max. Watch game_overview.ophanimSapDrain " +
+                    "for the cities at risk. See get_tips id=ophanim_tenets.";
+            }
+            return "WARNING before darkening: each level makes ONE Ophanim temple-city per turn " +
+                "(not choosable) lose 2 population while your power is below max, and a city " +
+                "below 2 population is DESTROYED outright ('Devoured by Ophanim') - silently, " +
+                "with no message anywhere. The payoff is a FLAT +" + Round2(gain) +
+                " power/turn per level (the description's '" + (int)(100.0 * gain) +
+                "%' is not a percentage). See get_tips id=ophanim_tenets.";
+        }
+
+        /// <summary>The god's power regen per turn, modifiers included (base regen scales with seals
+        /// broken and difficulty; Ophanim's Sap Life Force adds a flat bonus per darkened level).
+        /// Pure read - the game's own top-bar hover calls it every frame.</summary>
+        public static double SafePowerPerTurn(Overmind om)
+        {
+            try { return om != null && om.god != null ? om.god.getPowerPerTurn() : 0.0; }
+            catch { return 0.0; }
+        }
+
+        /// <summary>Live status of the Sap Life Force drain: JsonValue.Null unless the player god is
+        /// Ophanim AND its faith's tenet_sap is darkened. Lists every temple-city of the player's
+        /// faith with how many hits it can survive - ONE of them is drained each turn while power
+        /// is below max (G19-#2). Also fills <paramref name="atRisk"/> (may be null) with the
+        /// snapshot used by end_turn's DEVOURED_BY_OPHANIM detection.</summary>
+        public static JsonValue ComputeSapDrain(GameContext ctx, Map map, List<Location> atRisk = null)
+        {
+            try
+            {
+                if (map == null || map.overmind == null) return JsonValue.Null;
+                if (!(map.overmind.god is God_Ophanim g) || g.faith == null) return JsonValue.Null;
+                HolyTenet sap = g.faith.tenet_sap;
+                if (sap == null || sap.status >= 0) return JsonValue.Null;
+                int lvl = -sap.status;
+                int popLoss = 2 * lvl;
+                bool active = Safe(() => map.overmind.power < (double)map.overmind.getMaxPower(), true);
+
+                JsonValue cities = JsonValue.NewArray();
+                int nCities = 0;
+                if (map.locations != null)
+                    foreach (Location l in map.locations)
+                    {
+                        if (l == null || !(l.settlement is SettlementHuman sh)) continue;
+                        bool hasTemple = false;
+                        if (sh.subs != null)
+                            foreach (Subsettlement sub in sh.subs)
+                                if (sub is Sub_Temple temple && temple.order == g.faith) { hasTemple = true; break; }
+                        if (!hasTemple) continue;
+                        nCities++;
+                        // Hits until population < 2 destroys it (fallIntoRuin at pop < 2).
+                        int hitsToRuin = sh.population < 2 ? 0 : ((sh.population - 2) / popLoss) + 1;
+                        cities.Add(JsonValue.NewObject()
+                            .Set("location", LocationRef(l))
+                            .Set("population", sh.population)
+                            .Set("hitsToRuin", hitsToRuin));
+                        atRisk?.Add(l);
+                    }
+                if (nCities == 0) return JsonValue.Null;
+
+                return JsonValue.NewObject()
+                    .Set("tenetStatus", sap.status)
+                    .Set("popLossPerHit", popLoss)
+                    .Set("drainActive", active)
+                    .Set("powerPerTurnBonus", Round2(Safe(() => World.staticMap.param.holy_sapLifePowerGain, 0.02) * lvl))
+                    .Set("templeCities", cities)
+                    .Set("note", "Sap Life Force is darkened: ONE of these temple-cities takes -" +
+                        popLoss + " population each turn while your power is below max (whichever " +
+                        "temple ticks first - you cannot choose it), and a city below 2 population " +
+                        "is DESTROYED outright ('Devoured by Ophanim') with no game message. A city " +
+                        "with hitsToRuin 1 can die NEXT turn. To stop the drain: influence the " +
+                        "tenet back toward_human, or accept the losses for the flat power/turn bonus.");
+            }
+            catch { return JsonValue.Null; }
+        }
+
+        /// <summary>True when a ComputeSapDrain payload lists a temple-city within 3 hits of ruin -
+        /// the gate for attaching the drain block to end_turn (always on game_overview).</summary>
+        public static bool SapDrainImminent(JsonValue drain)
+        {
+            try
+            {
+                if (drain.IsNull) return false;
+                foreach (JsonValue c in drain["templeCities"].Items)
+                    if (c["hitsToRuin"].AsInt(int.MaxValue) <= 3) return true;
+            }
+            catch { }
+            return false;
+        }
+
+        /// <summary>A temple-city as it stood while the Sap Life Force drain was armed - enough to
+        /// name it after fallIntoRuin replaced its settlement object.</summary>
+        public sealed class SapCitySnap
+        {
+            public Location Location;
+            public string Name;
+            public int Population;
+        }
+
+        /// <summary>Snapshot the temple-cities exposed to the Sap Life Force drain (empty list when
+        /// the drain is not armed). Companion snapshot for <see cref="EvaluateSapDevoured"/>.</summary>
+        public static List<SapCitySnap> ComputeSapCitySnaps(GameContext ctx, Map map)
+        {
+            var result = new List<SapCitySnap>();
+            var atRisk = new List<Location>();
+            if (ComputeSapDrain(ctx, map, atRisk).IsNull) return result;
+            foreach (Location l in atRisk)
+            {
+                try
+                {
+                    if (!(l.settlement is SettlementHuman sh)) continue;
+                    result.Add(new SapCitySnap
+                    {
+                        Location = l,
+                        Name = SafeName(() => sh.getName()),
+                        Population = sh.population
+                    });
+                }
+                catch { }
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Compare a Sap-drain city snapshot to the live map: any snapshotted temple-city whose
+        /// settlement is now ruins gets a DEVOURED_BY_OPHANIM digest event. The game announces the
+        /// destruction only via map.addMessage (the threats stream), which never reaches the digest,
+        /// so the mod synthesizes the record (G19-#2). Returns JsonValue.Null when none fell.
+        /// </summary>
+        public static JsonValue EvaluateSapDevoured(GameContext ctx, Map map, List<SapCitySnap> before)
+        {
+            if (before == null || before.Count == 0 || map == null) return JsonValue.Null;
+            JsonValue arr = JsonValue.NewArray();
+            foreach (SapCitySnap b in before)
+            {
+                try
+                {
+                    if (b == null || b.Location == null) continue;
+                    if (b.Location.settlement is SettlementHuman) continue; // still standing
+                    string message = b.Name + " (population " + b.Population + " last turn) fell " +
+                        "into ruin - with Sap Life Force darkened the usual cause is 'Devoured by " +
+                        "Ophanim' (the drain took its population below 2). The settlement, its " +
+                        "temple, its Faith and its ruler are gone.";
+                    arr.Add(JsonValue.NewObject()
+                        .Set("turn", map.turn)
+                        .Set("type", "DEVOURED_BY_OPHANIM")
+                        .Set("title", "Temple-city devoured by Ophanim")
+                        .Set("message", message)
+                        .Set("mine", true)
+                        .Set("synthesized", true));
+                    try { ctx.Events.RecordPopup(map.turn, "DEVOURED_BY_OPHANIM", message, "synthesized"); } catch { }
+                }
+                catch { }
+            }
+            return arr.Count > 0 ? arr : JsonValue.Null;
         }
 
         /// <summary>Which way this tenet may be influenced right now, mirroring the button-visibility rules
@@ -2792,6 +3080,9 @@ namespace ShadowsMcp
                 if (other == null || other.isDead || other == ua) continue;
                 UA hero = other as UA;
                 if (hero == null || hero.isCommandable()) continue;
+                // Your own faith's acolytes share tiles with your agents constantly; they are not
+                // commandable but they are not about to kill anyone (G19-#5).
+                if (IsOwnOrderUnit(hero)) continue;
                 arr.Add(JsonValue.NewObject()
                     .Set("unit", UnitRef(ctx, hero))
                     .Set("dangerEstimate", Safe(() => hero.getDangerEstimate(), 0))
@@ -3188,6 +3479,82 @@ namespace ShadowsMcp
                     .Set("mine", true)
                     .Set("synthesized", true));
                 try { ctx.Events.RecordPopup(map.turn, "TASK_CANCELLED", message, "synthesized"); } catch { }
+            }
+            return arr.Count > 0 ? arr : JsonValue.Null;
+        }
+
+        /// <summary>An owned unit's in-progress challenge and the complexity it read at snapshot
+        /// time. Security-scaled challenges recompute complexity live, so the target can move
+        /// under banked progress with no game message (G19-#3).</summary>
+        public sealed class ChallengeSnap
+        {
+            public Unit Unit;
+            public string UnitName;
+            public Challenge Challenge;
+            public string ChallengeName;
+            public double Complexity;
+        }
+
+        /// <summary>Snapshot every commandable unit currently performing a definite challenge,
+        /// with the complexity quoted at snapshot time. Companion to <see cref="ComputeOwnedRoster"/>.</summary>
+        public static List<ChallengeSnap> ComputeChallengeSnaps(GameContext ctx, Map map)
+        {
+            var result = new List<ChallengeSnap>();
+            if (map == null || map.units == null) return result;
+            foreach (Unit u in map.units)
+            {
+                try
+                {
+                    if (u == null || u.isDead || !u.isCommandable()) continue;
+                    if (!(u.task is Task_PerformChallenge pc) || pc.challenge == null) continue;
+                    if (pc.challenge.isIndefinite()) continue;
+                    result.Add(new ChallengeSnap
+                    {
+                        Unit = u,
+                        UnitName = SafeName(() => u.getName()),
+                        Challenge = pc.challenge,
+                        ChallengeName = SafeName(() => pc.challenge.getName()),
+                        Complexity = pc.challenge.getComplexityAfterDifficulty()
+                    });
+                }
+                catch { }
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Compare a challenge snapshot to the live map and emit a digest-shaped event for every
+        /// owned in-progress challenge whose complexity moved (>= 1.0) since the snapshot — the
+        /// silent goalpost shift a lapsing security discount (Bribed Guards) causes (G19-#3).
+        /// Informational digest events only, never a stopReason; each is archived into
+        /// <c>ctx.Events</c> for get_recent_events. Returns <c>JsonValue.Null</c> when nothing moved.
+        /// </summary>
+        public static JsonValue EvaluateComplexityShift(GameContext ctx, Map map, List<ChallengeSnap> before)
+        {
+            if (before == null || before.Count == 0 || map == null) return JsonValue.Null;
+            JsonValue arr = JsonValue.NewArray();
+            foreach (ChallengeSnap b in before)
+            {
+                try
+                {
+                    if (b == null || b.Unit == null || b.Unit.isDead) continue;
+                    if (!(b.Unit.task is Task_PerformChallenge pc) || pc.challenge != b.Challenge) continue;
+                    double now = pc.challenge.getComplexityAfterDifficulty();
+                    if (Math.Abs(now - b.Complexity) < 1.0) continue;
+                    string message = b.UnitName + "'s '" + b.ChallengeName + "' complexity moved " +
+                        Round2(b.Complexity) + " -> " + Round2(now) + " (progress " + Round2(pc.progress) +
+                        ") - usually a security change, e.g. a Bribed Guards discount lapsing silently; " +
+                        "progress counts against the LIVE value, so re-check etaTurns.";
+                    arr.Add(JsonValue.NewObject()
+                        .Set("turn", map.turn)
+                        .Set("type", "CHALLENGE_COMPLEXITY_CHANGED")
+                        .Set("title", "Challenge complexity changed")
+                        .Set("message", message)
+                        .Set("mine", true)
+                        .Set("synthesized", true));
+                    try { ctx.Events.RecordPopup(map.turn, "CHALLENGE_COMPLEXITY_CHANGED", message, "synthesized"); } catch { }
+                }
+                catch { }
             }
             return arr.Count > 0 ? arr : JsonValue.Null;
         }

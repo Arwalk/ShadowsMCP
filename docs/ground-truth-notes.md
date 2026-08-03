@@ -829,3 +829,52 @@ bodies in `QueryTools.cs`.
   arrives on the DISCARD side and is lost on close (`ItemToWorldExchange.endTrading()` is empty).
   AI/non-commandable units get the item slotted directly. The mod hoists 'Take all and close' to
   option 0 on these windows since 0.15.0.
+- **Sap Life Force drain (Devoured by Ophanim, G19-#2)**: `H_SapLifeforce.turnTickTemple`
+  (H_SapLifeforce.cs:32-48) fires only while `overmind.power < getMaxPower()` and is throttled by
+  a single shared `lastTurnEffected` field — exactly ONE Ophanim temple-city map-wide per turn
+  (whichever temple ticks first) takes `population += status*2` (status 0..-2, player-darkened
+  only; nothing in the game AI darkens it — `HolyOrder.humanAIExpenditure` only does status++).
+  Below 2 population → `fallIntoRuin("Devoured by Ophanim")`. The drain writes NO Property/DEATH
+  record (unique among pop-loss paths; contrast `Ch_H_Inquisition.cs:94` and starvation), and
+  `Settlement.fallIntoRuin` (Settlement.cs:291-298) announces only via `map.addMessage` (threats
+  stream — never a unified message, so never the mod digest), replacing `location.settlement` with
+  a `Set_CityRuins` named "Ruins of X". Payoff: `God_Ophanim.getPowerPerTurn` adds a FLAT
+  `holy_sapLifePowerGain` (0.02, Params.cs:1970) per darkened level — the desc's "2%" is not a
+  percentage. `H_Inquisitors.getDesc` claims a population cost, but the tenet only adds AI attack
+  utility; the cost lives in `Ch_H_Inquisition.complete` (pop -= doubt-removed/4, ruin message
+  "Destroyed by inquisitors of Ophanim"). `H_ParanoidSociety` costs 15% temple prosperity
+  (`holy_h_paranoidSocietyProsperityHit` = 0.15). `God.getPowerPerTurn` is a pure read (the game's
+  top-bar hover calls it every frame) — safe to surface.
+- **Security-scaled complexity is live, progress is absolute (G19-#3)**: six challenges read
+  `settlement.getSecurity(null)` inside `getComplexity` — Ch_Infiltrate (50+25/pt via
+  `ch_infiltrateComplexityBase`/`ch_complexityPerSecurityPoint`), Ch_InfiltrateSimplified (7+7),
+  Ch_AccessVault (20+8; 1.0 in dark-empire/Ophanim-controlled societies), Ch_AccessVaultLimited
+  (10+4), Ch_AssassinateSilent (30+5), Ch_AssassinateBrutal (50+5). `getComplexityAfterDifficulty`
+  is just ceil() — no caching anywhere. `Task_PerformChallenge` stores absolute `progress` and
+  compares to the LIVE ceiling each tick (Task_PerformChallenge.cs:128), so a security change
+  silently re-targets banked progress. `Pr_BribedGuards` contributes -2 (`ch_bribeSecurityChange`)
+  live via `getSecurityChange`, decays 1 charge/turn, and `Location.turnTickInitial` culls it below
+  charge 0.1 with no message and no `endProperty` override. `Settlement.getSecurity` is a pure
+  read (base getInnerSecurity returns 0; SettlementHuman sums property/ruler terms).
+- **Lay Low (Wilderness) constructor sites (G19-#4, second pass)**: exhaustively — Set_OrcCamp,
+  Sub_AncientRuins, Sub_WitchCoven, Sub_Deep_City, Sub_Deep_Sanctum, and Sub_Temple ONLY via
+  `HolyOrder_Witches.newTempleCreated` (HolyOrder_Witches.cs:102-106; the base override is empty,
+  and Sub_Temple's own constructor adds no Lay Low). Sub_Cathedral ("Holy Site", source of "Abbey
+  of X" names) offers none. Set_MinorHuman's constructor only ever adds Sub_Farms/Sub_Fort/
+  Sub_Cathedral (+Sub_Catacombs) → human minor villages never offer it; Set_MinorOther ALWAYS gets
+  Sub_AncientRuins → ruin-type minor sites always do. City variant Ch_LayLow is constructed only
+  in Set_City.cs:37; Set_ElvenCity/Set_DwarvenCity extend SettlementHuman, not Set_City → neither
+  variant at elven/dwarven cities.
+- **Own-order acolytes and hostility (G19-#5)**: `P_Opha_CallToServe.cast` creates a `UAA` with
+  `order = society = god.faith`; `UAA.isCommandable()` is false unless corrupted, so any filter on
+  bare `!isCommandable()` marks your own acolytes hostile. The engine's friendliness signal is
+  `HolyOrder.worshipsThePlayer` (HolyOrder.cs:107) — set true ONLY by HolyOrder_Ophanim
+  (HolyOrder_Ophanim.cs:20); HolyOrder_Witches does not set it (witch acolytes belong to no god).
+  The game's own hostility ranking (`UA.getAttackUtility`) zeroes acolyte menace motivation and
+  only adds order-tenet terms, which is why the mirrored topHunter scan needs no filter.
+- **Decision ids across the popup queue (G19-#8)**: modal decision ids are per-popup-object
+  identity hashes (DecisionRegistry.ModalDecisionId); non-modal ids embed the turn and cannot
+  match across an advance. `checkBlockerQueue` promotes queued popups only into an EMPTY blocker
+  slot, so the blocker live BEFORE the call's PumpQueue is exactly the pendingDecision the
+  previous response reported — the safe auto-pin anchor; anything that first appears after the
+  pump is a popup the caller has never seen.

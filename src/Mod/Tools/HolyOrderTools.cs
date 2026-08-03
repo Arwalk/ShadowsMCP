@@ -159,6 +159,15 @@ namespace ShadowsMcp.Tools
                      .Set("nowDarkenableNote", "these became eligible for direction:toward_elder with this "
                         + "change - each still costs a full Elder influence bar");
             }
+            // The caller just armed (or deepened) the Sap Life Force drain: put the full verified
+            // warning and the cities that will bleed in THIS response, not only behind a later
+            // query (G19-#2 - a whole game was lost to this tenet's invisible cost).
+            if (t is H_SapLifeforce && t.status < 0)
+            {
+                o.Set("tenetWarning", Summaries.SapLifeforceWarning(t));
+                JsonValue drain = Summaries.ComputeSapDrain(ctx, map);
+                if (!drain.IsNull) o.Set("sapDrain", drain);
+            }
             return ToolResult.Ok(o);
         }
 

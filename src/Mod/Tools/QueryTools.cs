@@ -333,6 +333,9 @@ namespace ShadowsMcp.Tools
                     return ToolResult.Ok(JsonValue.NewObject()
                         .Set("god", om.god != null ? om.god.getName() : null)
                         .Set("power", Summaries.Round2Down(om.power)) // floored: displayed power never exceeds castable power (G17-#2)
+                        // Regen incl. modifiers (e.g. Ophanim's Sap Life Force flat bonus): without it
+                        // the benefit side of power-for-population trades is invisible (G19-#2).
+                        .Set("powerPerTurn", Summaries.Round2(Summaries.SafePowerPerTurn(om)))
                         .Set("sealsBroken", om.sealsBroken)
                         .Set("sealProgress", om.sealProgress)
                         // Countdown to the next seal (nextSealAt / turnsToNextSeal) on the fixed schedule.
@@ -955,6 +958,10 @@ namespace ShadowsMcp.Tools
             // game only says so once, in a message; without this an agent banks influence forever.
             JsonValue readyOrders = HolyOrdersReadyToInfluence(ctx, map);
             if (!readyOrders.IsNull) o.Set("holyOrders", readyOrders);
+            // Ophanim only, while Sap Life Force is darkened: the silent population drain and which
+            // temple-cities it can destroy (G19-#2). Always-read surface for an invisible mechanic.
+            JsonValue sapDrain = Summaries.ComputeSapDrain(ctx, map);
+            if (!sapDrain.IsNull) o.Set("ophanimSapDrain", sapDrain);
             // Contextual one-shot tips: explain a mechanic the first turn it becomes relevant, on the
             // tool the agent reads every turn (mirrors the game's own hint popups). See TipEngine.
             JsonValue tips = TipEngine.CollectContextual(ctx);

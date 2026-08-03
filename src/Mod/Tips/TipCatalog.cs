@@ -255,6 +255,28 @@ namespace ShadowsMcp.Tips
                 "Faith grows from fear of shadow but the LOCAL RULER'S AWARENESS drains it 5x harder - " +
                 "keep rulers unaware or remove them."),
 
+            Ctx("ophanim_tenets", "Ophanim: your own faith's three exclusive tenets", "god", GodIsOphanim,
+                "Sap Life Force EATS a temple-city per turn once darkened (destroys below 2 pop, silently); " +
+                "Inquisitors' pop cost is per-Inquisition; Paranoid Society trades prosperity for delayed Doubt.",
+                "Your own Holy Order (it worships you; worshipsThePlayer:true in list_holy_orders) carries " +
+                "three tenets no other faith has, all starting Neutral - only YOU can darken them, via " +
+                "influence_holy_order_tenet, and each is a real trade (verified against game code). " +
+                "SAP LIFE FORCE (H_SapLifeforce): while darkened and your power is below max, ONE of your " +
+                "temple-cities per turn (whichever temple ticks first - you cannot choose it) loses 2 " +
+                "population per darkened level, and a city dropping below 2 population is DESTROYED " +
+                "outright ('Devoured by Ophanim') - temple, Faith, and ruler included - with NO message " +
+                "for either the drain or the destruction. The payoff is a FLAT +0.02 power/turn per level: " +
+                "the description's '2%' is added as an absolute amount, not a percentage. While darkened, " +
+                "game_overview.ophanimSapDrain lists every exposed temple-city and how many hits it can " +
+                "survive. INQUISITORS (H_Inquisitors): the description's 'at the cost of decreasing " +
+                "population' is misleading - the tenet itself costs nothing; it makes your acolytes " +
+                "strongly favour the Inquisition challenge, and each COMPLETED Inquisition removes Doubt " +
+                "but kills population at that settlement (and can wipe it out entirely - 'Destroyed by " +
+                "inquisitors of Ophanim'). PARANOID SOCIETY (H_ParanoidSociety): Doubt arising within 2 " +
+                "links of one of your temples is delayed 5 turns, at the cost of each temple reducing its " +
+                "city's prosperity by 15%. Also note get_player_state.powerPerTurn now " +
+                "shows your live regen, including the Sap Life Force bonus."),
+
             // faction / world existence
             Ctx("dark_empire", "The Dark Empire", "faction", HasDarkEmpire,
                 "Your shadow's military force; its leader runs Dark Crusades. Re-crown via 'Dark Coronation'.",
@@ -376,8 +398,9 @@ namespace ShadowsMcp.Tips
                 "menace >= 40 with profile >= 30 lets a human army block and attack it " +
                 "mid-challenge (1 HP per turn; waived at 100% infiltration or if the army's home city is " +
                 ">50% shadow). If an at-rest army makes laying low in a city lethal, move to an orc camp, " +
-                "ancient ruin, coven or deep-one site and use 'Lay Low (Wilderness)' there (empty hexes " +
-                "offer no challenges), or go In Hiding. " +
+                "ruin-type minor site, witch coven, witch-faith temple or deep-one site and use " +
+                "'Lay Low (Wilderness)' there (ordinary temples/Holy Sites and human minor villages " +
+                "never offer it; empty hexes offer no challenges), or go In Hiding. " +
                 "You can only Redress Crimes (pay gold to cut menace) while menace is under 20. " +
                 "Enshadowed rulers are blind to menace - their urge to attack is scaled by (1 - their shadow) - so " +
                 "enshadowing the local ruler shields a menacing agent. Menace is sticky: a floor ratchets up with " +
@@ -565,7 +588,8 @@ namespace ShadowsMcp.Tips
                 foreach (Unit other in ua.location.units)
                 {
                     UA hero = other as UA;
-                    if (hero != null && hero != ua && !hero.isDead && !hero.isCommandable()) return true;
+                    if (hero != null && hero != ua && !hero.isDead && !hero.isCommandable() &&
+                        !Summaries.IsOwnOrderUnit(hero)) return true;
                 }
             }
             return false;
