@@ -25,7 +25,8 @@ namespace ShadowsMcp.Tools
                 "The world meters (victoryProgress toward 200 points, worldPanic, " +
                 "awarenessOfUnderground, avrgEnshadowment) are 0-1 fractions. threats.agentsUnderAttack = a " +
                 "battle is pending (blocks end_turn; resolve via pendingDecision); agentsInDanger = a hero is " +
-                "closing; agentsHuntable = exposed to assassination (profile>=50 & menace>25) - open " +
+                "closing; agentsHuntable = exposed to RULER-ordered hunts (profile>=50 & menace>25; free " +
+                "heroes attack on menace alone) - open " +
                 "get_threats when a danger signal is non-zero. A 'tips' array may explain a mechanic the " +
                 "moment it becomes relevant (get_tips is the full reference).",
                 Schema.Object(),
@@ -38,7 +39,8 @@ namespace ShadowsMcp.Tools
                 + "agent with motivation %, prophecy progress, seal/Iastur rituals, incoming wars, "
                 + "holy-order mood; sorted by severity) PLUS agentSafety: per agent its dangerEstimate, "
                 + "isHuntable, top hunter and verdict (favoured/even/outmatched) - the will-it-survive "
-                + "picture that lets you hide or retreat before it dies.",
+                + "picture that lets you hide or retreat before it dies. Playing Vinerva, 'hearts' adds "
+                + "the per-Heart raze danger (menace + which society is closest to sending an army).",
                 Schema.Object(),
                 a => WithMap(ctx, map =>
                 {
@@ -52,10 +54,29 @@ namespace ShadowsMcp.Tools
                     var safety = Summaries.ComputeAgentSafety(ctx, map);
                     JsonValue safetyArr = JsonValue.NewArray();
                     foreach (var s in safety) safetyArr.Add(Summaries.AgentSafetyJson(ctx, s));
-                    return ToolResult.Ok(JsonValue.NewObject()
+                    JsonValue result = JsonValue.NewObject()
                         .Set("count", threats.Count)
                         .Set("threats", arr)
-                        .Set("agentSafety", safetyArr));
+                        .Set("agentSafety", safetyArr);
+                    // Vinerva: each Heart's menace is a hidden raze countdown the vanilla UI only
+                    // shows in hover text - three Hearts died unseen in G17 before the number was
+                    // ever visible. Surface it exactly where an agent already looks for danger.
+                    var hearts = Summaries.ComputeHeartRisks(ctx, map);
+                    if (hearts.Count > 0)
+                    {
+                        JsonValue harr = JsonValue.NewArray();
+                        foreach (var h in hearts) harr.Add(Summaries.HeartRiskJson(ctx, h));
+                        result.Set("hearts", JsonValue.NewObject()
+                            .Set("count", hearts.Count)
+                            .Set("items", harr)
+                            .Set("note", "societies register a raze action against any Heart with menace > 0 " +
+                                "and dispatch an army the moment its utility exceeds 0: +menace, -35 base " +
+                                "reluctance, -distance penalty, -150 while at war, and -menace x rulerShadow " +
+                                "(an enshadowed sovereign is blind to Heart menace). motivationPct is the " +
+                                "game's own hover number; willRazeNow:true means an army is being sent. " +
+                                "Every harmful Vinerva power adds menace to the NEAREST Heart."));
+                    }
+                    return ToolResult.Ok(result);
                 })));
 
             host.Register(new ToolDefinition(
@@ -311,7 +332,7 @@ namespace ShadowsMcp.Tools
                     }
                     return ToolResult.Ok(JsonValue.NewObject()
                         .Set("god", om.god != null ? om.god.getName() : null)
-                        .Set("power", Summaries.Round2(om.power))
+                        .Set("power", Summaries.Round2Down(om.power)) // floored: displayed power never exceeds castable power (G17-#2)
                         .Set("sealsBroken", om.sealsBroken)
                         .Set("sealProgress", om.sealProgress)
                         // Countdown to the next seal (nextSealAt / turnsToNextSeal) on the fixed schedule.
@@ -425,7 +446,7 @@ namespace ShadowsMcp.Tools
                         powers.Add(Summaries.PowerSummary(map, list[i]));
                     }
                     return ToolResult.Ok(JsonValue.NewObject()
-                        .Set("power", Summaries.Round2(map.overmind.power))
+                        .Set("power", Summaries.Round2Down(map.overmind.power))
                         .Set("items", powers));
                 })));
 
@@ -769,17 +790,52 @@ namespace ShadowsMcp.Tools
             JsonValue threatsBlock = JsonValue.NewObject()
                 .Set("agentsInField", safety.Count)
                 .Set("agentsInDanger", agentsInDanger)
-                // Huntable = profile>=50 AND menace>25: exposed to a ruler's assassination even before
-                // a hunter is in range. The signal that most predicts losing an agent (surfaced here so
-                // an agent reading only game_overview sees it, not just get_threats.agentSafety).
+                // Huntable = profile>=50 AND menace>25 - the RULER-ordered escorted-hunt gate only
+                // (SettlementHuman.cs:432). Free heroes need no gate: they attack on menace alone
+                // (G17-#6), which agentSafety/worstThreat above covers. Surfaced here so an agent
+                // reading only game_overview sees it, not just get_threats.agentSafety.
                 .Set("agentsHuntable", agentsHuntable);
             if (worstThreat != null)
                 threatsBlock.Set("mostUrgent", Summaries.AgentSafetyLine(ctx, worstThreat));
             else if (agentsHuntable > 0)
-                threatsBlock.Set("mostUrgent", agentsHuntable + " agent(s) huntable (profile>=50 & menace>25) - " +
-                    "exposed to assassination; get_threats shows which and how to hide");
+                threatsBlock.Set("mostUrgent", agentsHuntable + " agent(s) huntable - exposed to RULER-ordered " +
+                    "hunts (profile>=50 & menace>25); free heroes attack on menace alone (~30 + distance, " +
+                    "within profile/10 sight); get_threats.agentSafety shows per-agent odds and how to hide");
             if (agentsInDanger > 0 || agentsHuntable > 0)
                 threatsBlock.Set("hint", "get_threats has per-agent odds");
+
+            // Vinerva: Heart raze danger on the always-read tool (G17-#5 - three Hearts and their
+            // settlements were lost before the menace number was ever seen). Details in get_threats.hearts.
+            var heartRisks = Summaries.ComputeHeartRisks(ctx, map);
+            if (heartRisks.Count > 0)
+            {
+                int heartsAtRisk = 0;
+                Summaries.HeartRiskInfo worstHeart = null;
+                foreach (var h in heartRisks)
+                {
+                    if (h.TopUtility > 0.0 || h.Menace > 25.0 || h.TopMotivation >= 0.7)
+                    {
+                        heartsAtRisk++;
+                        if (worstHeart == null || h.TopMotivation > worstHeart.TopMotivation) worstHeart = h;
+                    }
+                }
+                threatsBlock.Set("hearts", heartRisks.Count).Set("heartsAtRisk", heartsAtRisk);
+                if (worstHeart != null)
+                {
+                    string heartLoc; try { heartLoc = worstHeart.Loc.getName(); } catch { heartLoc = "L" + worstHeart.Loc.index; }
+                    string heartSoc = null;
+                    if (worstHeart.TopSociety != null)
+                        try { heartSoc = worstHeart.TopSociety.getName(); } catch { heartSoc = "a society"; }
+                    threatsBlock.Set("heartAlert", heartLoc +
+                        " Heart: menace " + Summaries.Round2(worstHeart.Menace) +
+                        (heartSoc != null
+                            ? ", " + heartSoc +
+                              " raze motivation " + (int)Math.Round(worstHeart.TopMotivation * 100.0) + "%" +
+                              (worstHeart.TopUtility > 0.0 ? " - AN ARMY IS BEING SENT" : "")
+                            : "") +
+                        " - get_threats.hearts has the full per-Heart picture");
+                }
+            }
             // Active combat takes priority over predictive danger: a pending battle blocks end_turn.
             if (agentsUnderAttack > 0)
                 threatsBlock.Set("agentsUnderAttack", agentsUnderAttack)
@@ -819,7 +875,7 @@ namespace ShadowsMcp.Tools
                 .Set("god", JsonValue.NewObject()
                     .Set("name", map.overmind.god != null ? map.overmind.god.getName() : null)
                     .Set("type", map.overmind.god != null ? map.overmind.god.GetType().Name : null))
-                .Set("power", Summaries.Round2(map.overmind.power))
+                .Set("power", Summaries.Round2Down(map.overmind.power))
                 // victoryMode is only recorded on a WIN (defeat leaves it at the default 0); null otherwise.
                 .Set("victoryMode", om.victoryAchieved ? Summaries.VictoryModeLabel(om.victoryMode) : null)
                 .Set("victoryProgress", Summaries.Round2(map.data_victoryProgess))

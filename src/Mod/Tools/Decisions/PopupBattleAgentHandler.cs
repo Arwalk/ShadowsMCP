@@ -254,6 +254,25 @@ namespace ShadowsMcp.Tools.Decisions
             UA you = youAtt ? b.att : (youDef ? b.def : null);
             bool alive = !b.att.isDead && !b.def.isDead;
 
+            // One-call escape hatch, born from a playtest where outmatched agents died stepping exchange
+            // by exchange: auto-step until fleeing becomes legal, then flee. PINNED at index 2 - it was
+            // previously appended last, which made the one option a panicking caller reaches for the
+            // MOST volatile index in the list (2, 3 or 4 depending on round and minion count; a
+            // remembered "2 = flee asap" clicked a minion reorder instead, G17-#3). The conditional
+            // options below occupy 3+ and legitimately come and go - pick those by optionLabel.
+            if (you != null && alive && b.outcome == BattleAgents.OUTCOME_UNRESOLVED)
+                acts.Add(new Act
+                {
+                    Action = "fleeAsap",
+                    Label = b.round <= 1
+                          ? "Flee as soon as possible (auto-steps through round 1, flees at round 2 — you " +
+                            "LOSE ALL your minions; if the battle ends first, the outcome applies instead)"
+                        : b.round == 2 && b.state == 0
+                          ? "Flee as soon as possible (flees right now — you LOSE ALL your minions)"
+                          : "Flee as soon as possible (steps to the next round top, then withdraws — " +
+                            "safe from round 3, minions kept)",
+                });
+
             // Flee/Retreat: only your side, only round 2+ at the top of a round (state 0), matching populate().
             if (you != null && alive && b.round > 1 && b.state == 0 && b.outcome == BattleAgents.OUTCOME_UNRESOLVED)
                 acts.Add(new Act
@@ -271,22 +290,6 @@ namespace ShadowsMcp.Tools.Decisions
                 acts.Add(new Act { Action = "minionUp", Label = "Reorder: swap your front minion with the 2nd (changes who absorbs blows first)" });
                 acts.Add(new Act { Action = "minionDown", Label = "Reorder: swap your front minion with the 3rd" });
             }
-
-            // One-call escape hatch, born from a playtest where outmatched agents died stepping exchange
-            // by exchange: auto-step until fleeing becomes legal, then flee. Appended LAST so the
-            // established indices (0=fight, 1=step, conditional flee/reorder) never shift.
-            if (you != null && alive && b.outcome == BattleAgents.OUTCOME_UNRESOLVED)
-                acts.Add(new Act
-                {
-                    Action = "fleeAsap",
-                    Label = b.round <= 1
-                          ? "Flee as soon as possible (auto-steps through round 1, flees at round 2 — you " +
-                            "LOSE ALL your minions; if the battle ends first, the outcome applies instead)"
-                        : b.round == 2 && b.state == 0
-                          ? "Flee as soon as possible (flees right now — you LOSE ALL your minions)"
-                          : "Flee as soon as possible (steps to the next round top, then withdraws — " +
-                            "safe from round 3, minions kept)",
-                });
 
             return acts;
         }

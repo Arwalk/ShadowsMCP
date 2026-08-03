@@ -601,8 +601,9 @@ namespace ShadowsMcp
                 // compares unit-vs-unit (UA.getDangerEstimate: hp + defence + attack + minions) — but it
                 // SUMS minions into one fungible scalar and hides screening: a favourable-looking number
                 // can still lose to a high-defence front minion (G16-#5). Read minionScreen on both sides
-                // alongside it. isHuntable is the human-ruler assassination trigger (profile >= 50 AND
-                // menace > 25).
+                // alongside it. isHuntable gates ONLY the ruler-ordered escorted hunt
+                // (SettlementHuman.cs:432: profile >= 50 AND menace > 25); the independent hero AI
+                // needs no gate at all (G17-#6 - see huntNote below).
                 JsonValue combat = JsonValue.NewObject()
                     .Set("dangerEstimate", Safe(() => ua.getDangerEstimate(), 0))
                     .Set("hp", u.hp)
@@ -619,6 +620,10 @@ namespace ShadowsMcp
                     // actual vision is the tighter profile/10 (UA.getVisibleUnits), ruler hunts are uncapped
                     .Set("huntRadius", (int)(u.profile / 5.0))
                     .Set("isHuntable", u.profile >= 50.0 && u.menace > 25.0)
+                    .Set("huntNote", "isHuntable (profile>=50 & menace>25) gates only RULER-ordered " +
+                        "escorted hunts; independent heroes attack on menace alone - worthwhile for " +
+                        "them from roughly menace > 30 + step distance - whenever this unit is within " +
+                        "profile/10 hexes of them. get_threats.agentSafety has the live per-hunter odds.")
                     .Set("inHiding", ua.task is Task_InHiding);
                 JsonValue screen = MinionScreen(ua);
                 if (!screen.IsNull) combat.Set("minionScreen", screen);
@@ -868,7 +873,11 @@ namespace ShadowsMcp
                         JsonValue sv = JsonValue.NewObject()
                             .Set("name", SafeName(() => sub.getName()))
                             .Set("infiltrated", sub.infiltrated);
-                        if (Safe(() => sub.menace, 0.0) != 0.0) sv.Set("menace", Round2(sub.menace));
+                        // Menace when non-zero - and ALWAYS for a Heart of the Forest, so the
+                        // countdown that gets a Heart razed is visible from turn one (G17-#5).
+                        double subMenace = Safe(() => sub.menace, 0.0);
+                        if (subMenace != 0.0 || sub is Sub_Vinerva_HeartOfForest)
+                            sv.Set("menace", Round2(subMenace));
                         subs.Add(sv);
                     }
                 }
@@ -1621,7 +1630,14 @@ namespace ShadowsMcp
         /// </summary>
         public static string ChallengeRequirementsText(Challenge c)
         {
-            JsonValue reqs = ChallengeRequirements(c);
+            return RenderRequirementClauses(ChallengeRequirements(c));
+        }
+
+        /// <summary>Shared renderer for requirement-clause tables ({clause, met, actual} entries),
+        /// failed clauses first: "[X] plague at this dock is at least 10% (now 4%); [OK] ...".
+        /// Null when the table is Null/empty.</summary>
+        private static string RenderRequirementClauses(JsonValue reqs)
+        {
             if (reqs.IsNull || reqs.Count == 0) return null;
             List<string> failed = new List<string>();
             List<string> met = new List<string>();
@@ -1634,6 +1650,197 @@ namespace ShadowsMcp
             }
             failed.AddRange(met);
             return string.Join("; ", failed);
+        }
+
+        // ---------- power requirements ----------
+
+        /// <summary>
+        /// Per-power-type decomposition of validTarget(Location) into observable clauses, same
+        /// pattern as <see cref="ChallengeRequirements"/>. Motivated by G17-#1: Heart of the
+        /// Forest's in-game restriction text is just "Must be cast on land" while validTarget
+        /// also enforces the heart-distance/seed rule, so a distance refusal read as a terrain
+        /// refusal and sent the playtester hunting for non-existent empty land. Returns Null for
+        /// power types without an evaluator - callers fall back to getRestrictionText().
+        /// Evaluators mirror the decompiled validTarget() exactly; they never call it.
+        /// </summary>
+        public static JsonValue PowerRequirements(Map map, Power p, Location loc)
+        {
+            try
+            {
+                if (map == null || p == null || loc == null) return JsonValue.Null;
+                if (p is P_Vinerva_HeartOfForest) return HeartOfForestRequirements(map, loc);
+                if (p is P_Vinerva_WildernessSpirits) return WildernessSpiritsRequirements(map, loc);
+                if (p is P_Vinerva_Manifestation) return ManifestationRequirements(map, loc);
+                if (p is P_Vinerva_Tempt_Gold) return TemptRequirements(map, loc, typeof(Pr_Vinverva_Gold), "Grove of Golden Roses");
+                if (p is P_Vinerva_Tempt_Nectar) return TemptRequirements(map, loc, typeof(Pr_Vinverva_Food), "Nectar Grove");
+                if (p is P_Vinerva_Tempt_PeaceLily) return TemptRequirements(map, loc, typeof(Pr_Vinverva_Peace), "Peace Lily grove");
+                if (p is P_Vinerva_Tempt_Health) return TemptRequirements(map, loc, typeof(Pr_Vinverva_Health), "healing grove");
+                if (p is P_Vinerva_Tempt_Might) return TemptRequirements(map, loc, null, null, landNotSettlement: true);
+                if (p is P_Vinerva_Tempt_Salvation) return TemptRequirements(map, loc, null, null, landNotSettlement: true);
+            }
+            catch { }
+            return JsonValue.Null;
+        }
+
+        /// <summary>Rendering of <see cref="PowerRequirements"/> for use_power refusals, failed
+        /// clauses first. Null when the power type has no evaluator.</summary>
+        public static string PowerRequirementsText(Map map, Power p, Location loc)
+        {
+            return RenderRequirementClauses(PowerRequirements(map, p, loc));
+        }
+
+        private static JsonValue HeartClause(Map map, Location loc, bool zeroHeartsPass, string zeroHeartsActual)
+        {
+            int maxDist = Safe(() => map.param.power_vinerva_growthMaxDist, 0);
+            God_Vinerva gv = map.overmind.god as God_Vinerva;
+            if (gv == null)
+                // Non-Vinerva casters (Eternity's borrowed powers) skip the heart clause entirely.
+                return JsonValue.NewObject()
+                    .Set("clause", "no Heart-distance limit for this god")
+                    .Set("met", true)
+                    .Set("actual", "not playing Vinerva");
+            if (gv.hearts.Count == 0)
+                return JsonValue.NewObject()
+                    .Set("clause", "within " + maxDist + " steps of an existing Heart of the Forest")
+                    .Set("met", zeroHeartsPass)
+                    .Set("actual", zeroHeartsActual);
+            int nearest = int.MaxValue;
+            foreach (int heart in gv.hearts)
+            {
+                int d = Safe(() => map.getStepDist(loc, map.locations[heart]), int.MaxValue);
+                if (d < nearest) nearest = d;
+            }
+            return JsonValue.NewObject()
+                .Set("clause", "within " + maxDist + " steps of an existing Heart of the Forest")
+                .Set("met", nearest <= maxDist)
+                .Set("actual", nearest == int.MaxValue
+                    ? "no reachable Heart"
+                    : "nearest Heart is " + nearest + " step(s) away");
+        }
+
+        private static JsonValue HeartOfForestRequirements(Map map, Location loc)
+        {
+            JsonValue reqs = JsonValue.NewArray();
+            reqs.Add(JsonValue.NewObject()
+                .Set("clause", "target is land")
+                .Set("met", !loc.isOcean)
+                .Set("actual", loc.isOcean ? "ocean" : "land (settlements count as land)"));
+            bool hasHeart = Safe(() =>
+            {
+                if (loc.settlement != null)
+                    foreach (Subsettlement sub in loc.settlement.subs)
+                        if (sub is Sub_Vinerva_HeartOfForest) return true;
+                return false;
+            }, false);
+            reqs.Add(JsonValue.NewObject()
+                .Set("clause", "no Heart of the Forest stands here already")
+                .Set("met", !hasHeart)
+                .Set("actual", hasHeart ? "a Heart is already here" : "no Heart here"));
+            // In-reach: first Heart is free of the distance rule; later ones can also piggyback on
+            // a Vinerva Seed carried by any unit standing at the target.
+            bool seedHere = Safe(() =>
+            {
+                foreach (Unit unit in loc.units)
+                {
+                    if (unit.person == null) continue;
+                    foreach (Item item in unit.person.items)
+                        if (item is I_VinervaSeed) return true;
+                }
+                return false;
+            }, false);
+            JsonValue heartClause = HeartClause(map, loc, zeroHeartsPass: true,
+                zeroHeartsActual: "no Hearts exist yet - the FIRST Heart has no distance limit");
+            if (!heartClause["met"].AsBool() && seedHere)
+                heartClause.Set("met", true)
+                    .Set("actual", heartClause["actual"].AsString() + ", but a unit here carries a Vinerva Seed");
+            else if (!heartClause["met"].AsBool())
+                heartClause.Set("note", "alternatively, a unit standing at the target carrying a " +
+                    "Vinerva Seed (Harvest Seed challenge at any Heart) satisfies this clause");
+            reqs.Add(heartClause);
+            return reqs;
+        }
+
+        private static JsonValue WildernessSpiritsRequirements(Map map, Location loc)
+        {
+            JsonValue reqs = JsonValue.NewArray();
+            reqs.Add(JsonValue.NewObject()
+                .Set("clause", "target is land")
+                .Set("met", !loc.isOcean)
+                .Set("actual", loc.isOcean ? "ocean" : "land"));
+            bool societyLand = Safe(() => loc.soc is Society, false);
+            reqs.Add(JsonValue.NewObject()
+                .Set("clause", "target is not part of a human Society")
+                .Set("met", !societyLand)
+                .Set("actual", societyLand
+                    ? "claimed by " + SafeName(() => loc.soc.getName())
+                    : "not Society land")
+                .Set("note", "the game text says 'empty location' but the actual check is Society " +
+                    "ownership: orc camps, ruins and Deep One sites ARE valid targets; any " +
+                    "human-settled hex is not"));
+            reqs.Add(HeartClause(map, loc, zeroHeartsPass: false,
+                zeroHeartsActual: "no Hearts exist yet - grow one with Heart of the Forest first"));
+            return reqs;
+        }
+
+        private static JsonValue ManifestationRequirements(Map map, Location loc)
+        {
+            JsonValue reqs = JsonValue.NewArray();
+            SettlementHuman sh = loc.settlement as SettlementHuman;
+            reqs.Add(JsonValue.NewObject()
+                .Set("clause", "target is a human settlement with a living ruler")
+                .Set("met", sh != null && Safe(() => sh.ruler != null, false))
+                .Set("actual", sh == null ? "not a human settlement"
+                    : Safe(() => sh.ruler != null, false) ? "ruled human settlement" : "the seat is empty"));
+            int need = Safe(() => map.param.power_vinervaManifestationReqGift, 0);
+            double gift = Safe(() =>
+            {
+                foreach (Property property in loc.properties)
+                    if (property is PR_Vinerva_GiftAccepted) return property.charge;
+                return 0.0;
+            }, 0.0);
+            reqs.Add(JsonValue.NewObject()
+                .Set("clause", "Vinerva's Gift accepted here at charge >= " + need)
+                .Set("met", gift >= (double)need)
+                .Set("actual", gift > 0.0 ? "Gift charge " + Round2(gift) : "no Gift accepted here"));
+            reqs.Add(HeartClause(map, loc, zeroHeartsPass: true,
+                zeroHeartsActual: "no Hearts exist yet - the distance rule is waived"));
+            return reqs;
+        }
+
+        private static JsonValue TemptRequirements(Map map, Location loc, Type existingProperty,
+            string groveName, bool landNotSettlement = false)
+        {
+            JsonValue reqs = JsonValue.NewArray();
+            if (landNotSettlement)
+            {
+                // Tempt_Might / Tempt_Salvation: any land within Heart reach.
+                reqs.Add(JsonValue.NewObject()
+                    .Set("clause", "target is land")
+                    .Set("met", !loc.isOcean)
+                    .Set("actual", loc.isOcean ? "ocean" : "land"));
+            }
+            else
+            {
+                bool already = Safe(() =>
+                {
+                    foreach (Property property in loc.properties)
+                        if (property != null && existingProperty.IsInstanceOfType(property)) return true;
+                    return false;
+                }, false);
+                reqs.Add(JsonValue.NewObject()
+                    .Set("clause", "no " + groveName + " here already")
+                    .Set("met", !already)
+                    .Set("actual", already ? "one is already growing here" : "none here"));
+                reqs.Add(JsonValue.NewObject()
+                    .Set("clause", "target is a human settlement")
+                    .Set("met", loc.settlement is SettlementHuman)
+                    .Set("actual", loc.settlement is SettlementHuman ? "human settlement"
+                        : loc.settlement != null ? SafeName(() => loc.settlement.getName()) : "empty land"));
+            }
+            reqs.Add(HeartClause(map, loc, zeroHeartsPass: false,
+                zeroHeartsActual: "no Hearts exist yet - the Tempt line is unusable until you grow " +
+                    "a first Heart with Heart of the Forest"));
+            return reqs;
         }
 
         // ---------- victory attribution ----------
@@ -1755,6 +1962,42 @@ namespace ShadowsMcp
             return any ? details : JsonValue.Null;
         }
 
+        /// <summary>
+        /// Pre-cast snapshot of who Vinerva's Manifestation is about to kill (G17-#11).
+        /// P_Vinerva_Manifestation.cast -> SettlementHuman.fallIntoRuin kills the whole
+        /// population and the ruler (SettlementHuman.cs:1188-1223), with no in-game preview.
+        /// countedInVictoryColumn mirrors VictoryAttribution's qualifier rule so the caller
+        /// sees when the cast will drop points from the insane/enshadowed-rulers columns.
+        /// Null when the target has no ruled human settlement.
+        /// </summary>
+        public static JsonValue NotableDeathsForManifestation(GameContext ctx, Map map, Location target)
+        {
+            try
+            {
+                SettlementHuman sh = target != null ? target.settlement as SettlementHuman : null;
+                if (sh == null) return JsonValue.Null;
+                JsonValue o = JsonValue.NewObject()
+                    .Set("population", sh.population);
+                Person ruler = Safe(() => sh.ruler, null);
+                if (ruler != null)
+                {
+                    bool scores = Safe(() =>
+                        target.soc is Society society && !society.isDarkEmpire &&
+                        !society.isOphanimControlled && ruler.isInsane(), false);
+                    o.Set("ruler", PersonRef(ruler)
+                        .Set("shadow", Round2(Safe(() => ruler.shadow, 0.0)))
+                        .Set("insane", Safe(() => ruler.isInsane(), false))
+                        .Set("countedInVictoryColumn", scores));
+                    if (scores)
+                        o.Set("note", "this ruler was scoring in the insane" +
+                            (Safe(() => ruler.shadow, 0.0) > 0.5 ? "-and-enshadowed" : "-only") +
+                            " rulers victory column - those points are gone now");
+                }
+                return o;
+            }
+            catch { return JsonValue.Null; }
+        }
+
         // ---------- player / god ----------
 
         public static JsonValue PowerSummary(Map map, Power p)
@@ -1777,7 +2020,39 @@ namespace ShadowsMcp
                 if (!string.IsNullOrEmpty(restriction)) o.Set("targetRestriction", restriction);
             }
             catch { }
+            string note = PowerRestrictionNote(map, p);
+            if (note != null) o.Set("restrictionNote", note);
             return o;
+        }
+
+        /// <summary>
+        /// Mod-side correction for powers whose in-game restriction text is known to be
+        /// incomplete or misleading (verified against the decompiled validTarget/cast). We
+        /// annotate rather than rewrite the game's text (targetRestriction stays verbatim).
+        /// </summary>
+        private static string PowerRestrictionNote(Map map, Power p)
+        {
+            try
+            {
+                int maxDist = Safe(() => map.param.power_vinerva_growthMaxDist, 0);
+                if (p is P_Vinerva_HeartOfForest)
+                    return "the in-game restriction text is incomplete: casting ALSO requires no " +
+                        "Heart already at the target, and - once any Heart exists - the target " +
+                        "within " + maxDist + " steps of an existing Heart OR a unit at the target " +
+                        "carrying a Vinerva Seed. The FIRST Heart has no distance limit. A refusal " +
+                        "names the exact failed clause.";
+                if (p is P_Vinerva_WildernessSpirits)
+                    return "'empty location' means not owned by a human Society: orc camps, ruins " +
+                        "and Deep One sites ARE valid targets; any human-settled hex is not.";
+                if (p is P_Vinerva_Manifestation)
+                    return "DESTRUCTIVE: casting this kills the settlement's ENTIRE population AND " +
+                        "its ruler outright - including an insane or enshadowed ruler currently " +
+                        "scoring in the insane/enshadowed-rulers victory column. The settlement is " +
+                        "replaced by a Manifestation plus a new Heart. No confirmation is asked; " +
+                        "the cast result lists the deaths under notableDeaths.";
+            }
+            catch { }
+            return null;
         }
 
         /// <summary>The god's win-condition sheet: time budget, seal thresholds, the agent-cap curve
@@ -2234,6 +2509,87 @@ namespace ShadowsMcp
 
             /// <summary>A nearby hunter is inclined AND you are not clearly stronger.</summary>
             public bool InDanger() { return TopHunter != null && Verdict() != "favoured"; }
+        }
+
+        /// <summary>
+        /// Per-Heart raze danger for Vinerva (G17-#5: the whole Heart economy was a hidden
+        /// countdown - menace lived only in a get_location subsettlement field, and the game
+        /// shows the "society most likely to attack" number only in hover text). Mirrors
+        /// Sub_Vinerva_HeartOfForest.getHoverOverText (decompiled :32-80): scan every Society's
+        /// razeActions for actions targeting this Heart, recompute getUtility with reasons, fold
+        /// ReasonMsg pos/neg into motivation = pos/neg (same folding as ComputeAgentSafety).
+        /// AN_RazeSubsettlement.getUtility is a pure computation (no state writes) - safe to call.
+        /// Empty list when not playing Vinerva or no Hearts exist.
+        /// </summary>
+        public sealed class HeartRiskInfo
+        {
+            public Location Loc;
+            public double Menace;
+            public Society TopSociety;
+            public double TopMotivation;
+            public double TopUtility;
+        }
+
+        public static List<HeartRiskInfo> ComputeHeartRisks(GameContext ctx, Map map)
+        {
+            var result = new List<HeartRiskInfo>();
+            God_Vinerva gv = map != null ? map.overmind.god as God_Vinerva : null;
+            if (gv == null || gv.hearts == null) return result;
+            foreach (int heartIdx in gv.hearts)
+            {
+                try
+                {
+                    Location loc = map.locations[heartIdx];
+                    Sub_Vinerva_HeartOfForest heart = null;
+                    if (loc != null && loc.settlement != null)
+                        foreach (Subsettlement sub in loc.settlement.subs)
+                            if (sub is Sub_Vinerva_HeartOfForest h) { heart = h; break; }
+                    if (heart == null) continue;
+
+                    var info = new HeartRiskInfo { Loc = loc, Menace = Safe(() => heart.menace, 0.0) };
+                    foreach (SocialGroup sg in map.socialGroups)
+                    {
+                        if (!(sg is Society society) || society.getSovreign() == null) continue;
+                        foreach (AN_RazeSubsettlement raze in society.razeActions.Values)
+                        {
+                            if (raze.target != heart) continue;
+                            var reasons = new List<ReasonMsg>();
+                            double utility = Safe(() => raze.getUtility(society, society.getSovreign(), reasons), double.MinValue);
+                            if (utility == double.MinValue) continue;
+                            double pos = 0.0, neg = 0.0;
+                            foreach (ReasonMsg r in reasons)
+                            {
+                                if (r.value > 0.0) pos += r.value; else neg -= r.value;
+                            }
+                            double motivation = neg > 0.0 ? pos / neg : 1.0;
+                            if (info.TopSociety == null || utility >= info.TopUtility)
+                            {
+                                info.TopSociety = society;
+                                info.TopUtility = utility;
+                                info.TopMotivation = motivation;
+                            }
+                        }
+                    }
+                    result.Add(info);
+                }
+                catch { }
+            }
+            return result;
+        }
+
+        public static JsonValue HeartRiskJson(GameContext ctx, HeartRiskInfo h)
+        {
+            JsonValue o = JsonValue.NewObject()
+                .Set("location", LocationRef(h.Loc))
+                .Set("menace", Round2(h.Menace));
+            if (h.TopSociety != null)
+                o.Set("topSociety", JsonValue.NewObject()
+                    .Set("society", SocialGroupRef(h.TopSociety))
+                    // The game's own hover number ("attack motivation at N%"), uncapped.
+                    .Set("motivationPct", (int)Math.Round(h.TopMotivation * 100.0))
+                    .Set("utility", Round2(h.TopUtility)))
+                 .Set("willRazeNow", h.TopUtility > 0.0);
+            return o;
         }
 
         public static List<AgentSafetyInfo> ComputeAgentSafety(GameContext ctx, Map map)
@@ -2763,9 +3119,15 @@ namespace ShadowsMcp
                 {
                     JsonValue subs = JsonValue.NewArray();
                     foreach (Subsettlement sub in st.subs)
-                        subs.Add(JsonValue.NewObject()
+                    {
+                        JsonValue sv = JsonValue.NewObject()
                             .Set("name", SafeName(() => sub.getName()))
-                            .Set("infiltrated", sub.infiltrated));
+                            .Set("infiltrated", sub.infiltrated);
+                        double subMenace = Safe(() => sub.menace, 0.0);
+                        if (subMenace != 0.0 || sub is Sub_Vinerva_HeartOfForest)
+                            sv.Set("menace", Round2(subMenace));
+                        subs.Add(sv);
+                    }
                     sset.Set("subs", subs);
                 }
                 o.Set("settlement", sset);
@@ -2791,6 +3153,18 @@ namespace ShadowsMcp
         public static double Round2(double v)
         {
             return Math.Round(v, 2);
+        }
+
+        /// <summary>
+        /// Floor at 2 decimals. Use for the player's POWER balance everywhere it is displayed:
+        /// the game floors its display (UITopLeft.cs:44 shows (int)power) while castability
+        /// compares the raw double, so Math.Round would show 0.996 as "1" and then refuse a
+        /// 1-cost cast with "costs 1, you have 1" (G17-#2). Displayed power must never exceed
+        /// castable power. Never use this for the &lt; cost comparison itself - that stays raw.
+        /// </summary>
+        public static double Round2Down(double v)
+        {
+            return Math.Floor(v * 100.0) / 100.0;
         }
 
         private static T Safe<T>(Func<T> get, T fallback)

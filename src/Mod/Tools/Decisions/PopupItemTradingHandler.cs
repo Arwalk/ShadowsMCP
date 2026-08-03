@@ -45,20 +45,34 @@ namespace ShadowsMcp.Tools.Decisions
 
             List<Button> buttons = PopupButtons.Enumerate(blocker);
             JsonValue options = JsonValue.NewArray();
+            // On a world-discard window (challenge rewards arrive this way: Person.gainItem pops the
+            // earned item on the DISCARD side) the safe claim verb goes FIRST, so the reflexive
+            // "pick option 0 / just close it" path collects the reward instead of destroying it
+            // (G17-#4). Hoisting is keyed on the trader type + button existence, never item count,
+            // so the layout cannot change between Describe and Resolve.
+            bool hoist = HoistTakeAll(p, buttons);
+            string takeAllLabel = "Take all and close (take ALL of side B's items + gold, then Done; stays " +
+                "open with a warning instead if side A's inventory can't fit everything)";
+            if (hoist)
+                options.Add(JsonValue.NewObject()
+                    .Set("index", 0)
+                    .Set("label", takeAllLabel + " - CLAIMS the reward/items sitting on the discard side")
+                    .Set("enabled", true)
+                    .Set("composite", true));
             for (int i = 0; i < buttons.Count; i++)
                 options.Add(JsonValue.NewObject()
-                    .Set("index", i)
+                    .Set("index", hoist ? i + 1 : i)
                     .Set("label", PopupButtons.LabelFor(buttons[i]))
                     .Set("enabled", true));
 
             // Composite one-click verbs at FIXED synthetic indices after the real buttons (count and
-            // count+1), each listed only while its underlying button exists. A playtest showed nearly
+            // count+1; when hoisted, Take-all sits at 0 instead and the real buttons occupy 1..count),
+            // each listed only while its underlying button exists. A playtest showed nearly
             // every trade ends in exactly these sequences, at 2-4 round trips apiece.
-            if (FindByMethod(buttons, "bTakeAll") != null)
+            if (!hoist && FindByMethod(buttons, "bTakeAll") != null)
                 options.Add(JsonValue.NewObject()
                     .Set("index", buttons.Count)
-                    .Set("label", "Take all and close (take ALL of side B's items + gold, then Done; stays " +
-                        "open with a warning instead if side A's inventory can't fit everything)")
+                    .Set("label", takeAllLabel)
                     .Set("enabled", true)
                     .Set("composite", true));
             if (FindByMethod(buttons, "swapTop") != null)
@@ -121,6 +135,17 @@ namespace ShadowsMcp.Tools.Decisions
             catch { return JsonValue.Null; }
         }
 
+        /// <summary>True when this window should list "Take all and close" FIRST (option 0): the
+        /// counterparty is the world-discard side, i.e. the window is how the game delivers earned
+        /// items (challenge rewards, loot) - the safe verb gets the primacy slot (G17-#4). Keyed on
+        /// trader type + button existence only, NEVER item count, so Describe and Resolve can't
+        /// disagree about the layout mid-window.</summary>
+        private static bool HoistTakeAll(PopupItemTrading p, List<Button> buttons)
+        {
+            try { return p != null && p.traderB is ItemToWorldExchange && FindByMethod(buttons, "bTakeAll") != null; }
+            catch { return false; }
+        }
+
         /// <summary>A loud warning while a world-discard side (ItemToWorldExchange, titled "Discard
         /// Items") still holds items: closing the window releases them to the world for good. Null
         /// when it does not apply.</summary>
@@ -134,8 +159,11 @@ namespace ShadowsMcp.Tools.Decisions
                 bool tome = false;
                 foreach (Item it in p.traderB.getItems())
                     if (it is I_LaughingTome) tome = true;
-                return "side B is a DISCARD side: any item still on it when this window closes is " +
-                    "released to the world and LOST to you (" + string.Join(", ", left.ToArray()) + ")." +
+                return "the item(s) on side B are NOT yet in your inventory - side B is a DISCARD side, " +
+                    "and any item still on it when this window closes is silently LOST to you (" +
+                    string.Join(", ", left.ToArray()) + "). This is how the game delivers earned items: " +
+                    "a challenge reward or purchase arrives HERE, not in your inventory. Claim it with " +
+                    "option 0, 'Take all and close', unless you deliberately want to discard it." +
                     (tome ? " That includes the LAUGHING TOME - dismissing this window drops it to " +
                         "fall asleep at a random location, undoing the summon. Take it (the 'Take all " +
                         "and close' option) unless you deliberately want to deploy it elsewhere." : "");
@@ -169,17 +197,26 @@ namespace ShadowsMcp.Tools.Decisions
             List<Button> buttons = PopupButtons.Enumerate(blocker);
             int wanted = args["optionIndex"].AsInt(-1);
 
-            // The composite verbs live at the fixed synthetic indices right after the real buttons.
-            if (wanted == buttons.Count || wanted == buttons.Count + 1)
-                return ResolveComposite(ui, blocker, buttons, wanted == buttons.Count ? "bTakeAll" : "swapTop", args);
+            // Same layout rule as Describe: on a discard-side window the Take-all composite is
+            // hoisted to index 0 and the real buttons occupy 1..count (G17-#4); otherwise the
+            // composites live at the fixed synthetic indices right after the real buttons.
+            bool hoist = HoistTakeAll(blocker.GetComponent<PopupItemTrading>(), buttons);
+            if (hoist && wanted == 0)
+                return ResolveComposite(ui, blocker, buttons, "bTakeAll", args);
+            if ((!hoist && wanted == buttons.Count) || wanted == buttons.Count + 1)
+                return ResolveComposite(ui, blocker, buttons,
+                    !hoist && wanted == buttons.Count ? "bTakeAll" : "swapTop", args);
+            int buttonIdx = hoist ? wanted - 1 : wanted;
+            if (buttonIdx < 0 || buttonIdx >= buttons.Count)
+                return ToolResult.Error("optionIndex " + wanted + " is out of range (" +
+                    (hoist
+                        ? "0 = Take all and close, the " + buttons.Count + " button option(s) are at 1.." +
+                          buttons.Count + ", and Swap-top-and-close is at " + (buttons.Count + 1)
+                        : "there are " + buttons.Count + " button option(s), plus the composite options " +
+                          "at indices " + buttons.Count + " and " + (buttons.Count + 1)) + ").");
 
-            if (wanted < 0 || wanted >= buttons.Count)
-                return ToolResult.Error("optionIndex " + wanted + " is out of range (there are " +
-                    buttons.Count + " button option(s), plus the composite options at indices " +
-                    buttons.Count + " and " + (buttons.Count + 1) + ").");
-
-            string label = PopupButtons.LabelFor(buttons[wanted]);
-            string method = PopupButtons.FirstPersistentMethod(buttons[wanted]);
+            string label = PopupButtons.LabelFor(buttons[buttonIdx]);
+            string method = PopupButtons.FirstPersistentMethod(buttons[buttonIdx]);
 
             // Snapshot both sides so the result can state what actually moved. The base game's bTakeAll()
             // silently skips every item when side A has no free slot (gold still transfers), so "clicked
@@ -196,7 +233,7 @@ namespace ShadowsMcp.Tools.Decisions
             int goldA0 = GoldOf(pre != null ? pre.traderA : null);
             int goldB0 = GoldOf(pre != null ? pre.traderB : null);
 
-            buttons[wanted].onClick.Invoke(); // the button's own bXxx() also refreshes the popup's item slots
+            buttons[buttonIdx].onClick.Invoke(); // the button's own bXxx() also refreshes the popup's item slots
 
             bool closed = blocker == null || ui == null || ui.blocker != blocker;
             JsonValue o = JsonValue.NewObject()
@@ -337,8 +374,8 @@ namespace ShadowsMcp.Tools.Decisions
             if (args["confirmDiscard"].AsBool()) return null;
             string warning = DiscardWarning(p);
             if (warning == null) return null;
-            return ToolResult.Error("not closed: " + warning + " To keep them, resolve the 'Take all and " +
-                "close' composite option; to discard DELIBERATELY, retry this close with confirmDiscard:true.");
+            return ToolResult.Error("not closed: " + warning + " To keep them, resolve option 0 ('Take all " +
+                "and close'); to discard DELIBERATELY, retry this close with confirmDiscard:true.");
         }
 
         /// <summary>The enumerated button whose persistent onClick target is <paramref name="method"/>.</summary>

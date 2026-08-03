@@ -258,11 +258,26 @@ resolve_decision, end_turn, new_game, wait_for_events.
   `get_player_state.power`; `use_power {"powerId":"PW...", ...}` (the param is `powerId`, not `power`);
   assert `remainingPower == before - cost`. If no power is castable right now, SKIP with reason.
 - E3 (error): calling `use_power` on a passive power, or with insufficient power, or with both/neither
-  target, errors cleanly.
+  target, errors cleanly. The insufficient-power error must never contradict itself: the "you have N"
+  number is FLOORED (a refusal reading "costs 1, you have 1" is a FAIL) and it names the shortfall.
 - E4 (unlisted power, conditional): if `list_powers` ids have a gap (e.g. PW4 listed but PW3 absent — the
   missing power is either behind an unbroken seal or passive-only), `use_power` on the missing id must
   return a "locked until N seals are broken" or "is passive" error, not "unknown power". SKIP if no gap
   exists.
+- E5 (power display never exceeds castability): everywhere the player's power balance appears
+  (`game_overview.power`, `get_player_state.power`, `list_powers.power`, `use_power.remainingPower`) the
+  value is floored at 2 decimals — so whenever the displayed `power` >= a power's `cost`, casting that
+  power must NOT be refused for insufficient power. Assert the invariant on at least one read.
+- E6 (clause-itemized refusals, Vinerva only — else SKIP): `use_power` on an INVALID location target of a
+  power with a requirements evaluator (Heart of the Forest, Wilderness Spirits, Manifestation, the Tempt
+  groves) returns an error listing `[X]`/`[OK]` clauses with the FAILED clause first and its actual value
+  (e.g. "nearest Heart is 7 step(s) away"), not just the game's one-line restriction text. Also assert
+  `list_powers` carries a `restrictionNote` for Heart of the Forest (names the heart-distance/seed rule the
+  game text omits), Wilderness Spirits (what "empty location" really means), and Manifestation (warns it
+  kills the settlement's population AND ruler, including victory-scoring rulers).
+- E7 (Manifestation kill report, Vinerva only + opportunistic — else SKIP): a successful Manifestation cast
+  returns `notableDeaths` naming the `population` and the `ruler` (with `shadow`, `insane`,
+  `countedInVictoryColumn`) plus a `warning` that the settlement was destroyed.
 
 **F. Recruitment**
 - F1: `list_recruitable_agents` returns `capacity` (availableEnthrallments, nEnthralled, agentCap,
@@ -319,9 +334,17 @@ resolve_decision, end_turn, new_game, wait_for_events.
   answers and then advances or surfaces the next decision). If only one decision type ever appears, do it
   the once and SKIP the other with a note.
 - G3b (resolve is never silent): call `end_turn {"resolveOptionIndex":0}` when NOTHING is pending (no ⚠
-  banner). Assert the result carries `resolveWarning` saying the index was ignored (and no `resolved`
-  object) — a provided resolve that had nothing to act on, or that failed, must always be reported, never
-  silently dropped.
+  banner). Assert the result carries `resolveWarning` saying the answer found no pending decision and was
+  ignored, AND that the warning instructs echoing `pendingDecision.decisionId` as `expectedDecisionId` to
+  arm the automatic retry (no `resolved` object) — a provided resolve that had nothing to act on, or that
+  failed, must always be reported, never silently dropped.
+- G3d (pinned resolves land, opportunistic): when a decision is pending, answer it via
+  `end_turn {"resolveOptionIndex":N,"expectedDecisionId":"<its decisionId>","force":true}`. Assert the
+  answer LANDS (a `resolved` object; no "no decision was pending" warning) even under force — the pin
+  makes the answer run before force's informational sweep, and if the decision only (re)appears during
+  turn processing the same call retries it automatically when the id matches. A response carrying BOTH
+  "no decision was pending" and a `pendingDecision` whose `decisionId` EQUALS the `expectedDecisionId`
+  you sent is a FAIL (the retry should have consumed it).
 - G3c (decisionId guards chained resolves): whenever a decision is pending, call `get_pending_decision`
   TWICE — assert both return the same non-empty `decisionId` (stable for one popup instance) and that
   `game_overview.pendingDecision` carries the same id. Then
@@ -361,9 +384,12 @@ resolve_decision, end_turn, new_game, wait_for_events.
   could NOT be taken (the base game silently skips them; gold still transfers). "clicked Take All" with no
   movement fields and no warning is a FAIL.
 - G6e (composite trade verbs, opportunistic): in any `kind:"itemTrading"` decision, assert the `options`
-  list ALSO carries synthetic entries after the real buttons — "Take all and close" at index
-  `<real button count>` and/or "Swap top items and close" at `<real button count>+1`, each flagged
-  `composite:true` (each is listed only when its underlying button exists). Resolve the take-all composite
+  list ALSO carries synthetic composite entries flagged `composite:true` (each listed only when its
+  underlying button exists). Layout depends on the window: on an ORDINARY trade, "Take all and close" sits
+  at index `<real button count>` and "Swap top items and close" at `<real button count>+1`; on a
+  DISCARD-side window (side B is "Discard Items" — how challenge rewards and purchases arrive), "Take all
+  and close" is HOISTED to index 0 (labelled as claiming the reward), the real buttons occupy 1..count,
+  and swap-top stays at count+1. Resolve the take-all composite
   and assert the result reports `steps:["bTakeAll","dismiss"]`, the movement fields of G6b, and
   `closed:true` (plus `nextDecision` if a follow-up popup chained). Exception: when side A's inventory
   can't fit everything, the composite must NOT close — assert `closed:false` with the leftover `warning`
@@ -459,12 +485,14 @@ resolve_decision, end_turn, new_game, wait_for_events.
   the cap is used up (never a bare success). An UNLIMITED vault (`Ch_AccessVault`) must carry no
   `goldTransferLimit`. SKIP if neither vault trade occurs.
 - G13 (opportunistic, discard-side close is guarded): when an `itemTrading` decision's side B is named
-  "Discard Items" and still holds items (the Summon Laughing Tome completion opens exactly this),
-  assert (a) the decision carries a `warning` that closing releases the items to the world (naming the
-  LAUGHING TOME specially when present), (b) closing it — Done button, or `resolve_decision
+  "Discard Items" and still holds items (the Summon Laughing Tome completion opens exactly this; so does
+  EVERY challenge reward / purchase — `Ch_HarvestSeed`, `Ch_BuyItem` deliver the earned item on side B),
+  assert (a) the decision carries a `warning` stating the items are NOT yet in your inventory and that
+  closing releases them to the world (naming the LAUGHING TOME specially when present), pointing at
+  option 0 'Take all and close' as the claim path, (b) closing it — Done button, or `resolve_decision
   {"force":true}` — is REFUSED with instructions, (c) `resolve_decision` with the same close plus
-  `confirmDiscard:true` then succeeds, OR taking the items via 'Take all and close' succeeds without any
-  guard. SKIP if no discard-side trade appears.
+  `confirmDiscard:true` then succeeds, OR taking the items via option 0 'Take all and close' succeeds
+  without any guard. SKIP if no discard-side trade appears.
 - G14 (opportunistic, challengeComplete repeat honesty): on a `kind:"challengeComplete"` decision, if
   option 2 ("Repeat this challenge immediately") shows `enabled:true`, resolving `{"optionIndex":2}`
   must SUCCEED (the flag is now computed from live game state, not a stale button); if it shows
@@ -619,7 +647,16 @@ resolve_decision, end_turn, new_game, wait_for_events.
   (safe/favoured/even/outmatched); when a hunter is near it also has `topHunter` with `motivationPct` and
   `dangerEstimate`. Assert the shape for every entry. Cross-check: an agent with a `topHunter` here should,
   via `get_unit`, expose a `combat` block whose `dangerEstimate` matches. (Empty `agentSafety` is PASS when
-  you have no agents in the field — note it.)
+  you have no agents in the field — note it.) NOTE: `isHuntable:false` does NOT mean safe from hero
+  attacks — it gates only ruler-ordered hunts; a low-profile agent with menace over ~30 can still be
+  attacked by an adjacent free hero (that risk shows up as `topHunter.motivationPct`). A `HERO_ATTACKING`
+  on a `isHuntable:false` agent whose `topHunter` was reported is therefore NOT a contradiction.
+- J5 (Heart raze danger, Vinerva only — else SKIP): once at least one Heart of the Forest exists,
+  `get_threats` carries a `hearts` object `{count, items:[{location, menace, topSociety?{society,
+  motivationPct, utility}, willRazeNow?}], note}` and `game_overview.threats` carries numeric `hearts` +
+  `heartsAtRisk` (and a `heartAlert` string when any Heart is at risk). Cross-check one entry's `menace`
+  against `get_location` on the Heart's location (`settlement.subsettlements[]` — a Heart entry always
+  carries `menace`, even at 0).
 
 **K. Analysis surfaces (enriched detail views + new tools)**
 - K1 (time budget & panic): `game_overview` includes an `endless` boolean, `maxTurns`, `turnsRemaining`
@@ -688,24 +725,29 @@ resolve_decision, end_turn, new_game, wait_for_events.
   `turnsToNextSeal == nextSealAt - sealProgress`. Advance a few turns and assert `sealProgress` increased
   and `turnsToNextSeal` shrank by the same amount.
 - K13 (danger breadcrumb + inventory): `game_overview.threats` has numeric `agentsInField`,
-  `agentsInDanger` and `agentsHuntable` (agents with profile>=50 & menace>25, exposed to assassination),
+  `agentsInDanger` and `agentsHuntable` (agents with profile>=50 & menace>25, exposed to RULER-ordered
+  hunts — free heroes attack on menace alone),
   plus a `mostUrgent` string whenever `agentsInDanger > 0` OR `agentsHuntable > 0` — assert all present.
   `get_unit` on
   one of your agents now includes a `combat` block ({dangerEstimate, hp, defence, attack, menace, profile,
-  menaceFloor, profileFloor, huntRadius, isHuntable, inHiding}) and an `items` array (possibly empty) — assert
+  menaceFloor, profileFloor, huntRadius, isHuntable, huntNote, inHiding}) — `huntNote` must state that
+  isHuntable covers only ruler-ordered hunts and that free heroes attack on menace alone —
+  and an `items` array (possibly empty) — assert
   both keys present, that `combat.huntRadius == floor(combat.profile / 5)`, and that `menaceFloor`/`profileFloor`
   are numeric. When the unit (yours OR a hostile hero's) has living minions, `combat` must also carry
   `minionScreen` `{count, front:{name,hp,defence,attack}, note}` whose `front` matches the first living
   entry of `agent.minions` (defence from getMaxDefence, the pre-battle number) — absent when no living
   minions.
 - K14 (infiltration detail): `get_location` on a settled human location includes `settlement.infiltration`
-  (0..1) and a `subsettlements` array whose entries are `{name, infiltrated}` objects (not bare strings).
-  Assert the object shape. If no settled location is handy, SKIP.
+  (0..1) and a `subsettlements` array whose entries are `{name, infiltrated}` objects (not bare strings),
+  with a `menace` number whenever the subsettlement's menace is non-zero — and ALWAYS on a Heart of the
+  Forest entry, even at 0. Assert the object shape. If no settled location is handy, SKIP.
 - K15 (mechanics tips): `get_tips` with no arguments returns a `tips` array whose entries are `{id, title,
   category, summary, core}` plus a `hint` string — assert non-empty, that an entry carries `id` and
   `summary`, and that the index includes the ids `menace`, `profile` and `enshadow_home`. Then `get_tips
   {"id":"infiltration"}` returns one tip with a `body` string, and `get_tips {"id":"menace"}` and `get_tips
-  {"id":"profile"}` each return a `body` that names the huntable thresholds (50 / 25); `get_tips
+  {"id":"profile"}` each return a `body` that names the huntable thresholds (50 / 25) AND notes that the
+  gate covers only ruler-ordered hunts (free heroes attack on menace alone within profile/10 sight); `get_tips
   {"category":"god"}` returns a `tips` array (all in that topic); `get_tips {"id":"nope"}` returns a clean
   "unknown tip id" error (isError). Assert all. If playing Iastur, also assert `get_tips {"id":"iastur_regen"}`
   returns a `body` noting that the in-game hint popup is WRONG about regen stopping while the Tome is unread
@@ -816,10 +858,13 @@ control (M0, M6–M9): move an agent onto a tile that holds a hostile hero — h
   `battles` + per-battle `verdict` via `get_pending_decision`), `resolve_decision {"optionIndex":0}`. Assert
   the result reports the battle opened, and a follow-up `get_pending_decision` now returns
   `popupType:"PopupBattleAgent"` with `attacker`/`defender` blocks (name, hp, attack, minions), `round`/
-  `state`, and an `options` list containing "fight to the end", "step", AND — appended LAST, so the
-  existing indices are unchanged — a "flee as soon as possible" option (id `fleeAsap`, present from round
+  `state`, and an `options` list containing "fight to the end" at 0, "step" at 1, AND — PINNED at
+  index 2 — a "flee as soon as possible" option (id `fleeAsap`, present from round
   1 while your side is alive and the battle undecided; its label spells out the round-2 "lose ALL minions"
-  cost vs the safe round-3+ retreat). Direct flee/retreat buttons still appear only from round 2. Else SKIP.
+  cost vs the safe round-3+ retreat). Direct flee/retreat and the minion-reorder options appear at
+  indices 3+ and come and go with the round — the decision `note` must say indices 0-2 are stable and
+  3+ should be picked by `optionLabel`. A menu where `fleeAsap` sits at any index other than 2 is a
+  FAIL. Else SKIP.
 - M4 (opportunistic, resolve the battle): from the open battle menu, `resolve_decision` with the fight-to-the-
   end option (or `{"force":true}`); assert it closes with an `outcome` and, on a win, a `victor`/`defeated`
   (and possibly a chained "Loot the Fallen Foe" `PopupItemTrading` as the next `pendingDecision`). Confirm the
@@ -892,8 +937,10 @@ empty, mark N1–N8 SKIP. Spending influence is irreversible; that is fine on th
   `influenceElder` reset to `0` and `canChangeTenet:false`; and `game_overview.holyOrders` no longer lists
   that order (unless another is ready). If the result carried a `nowDarkenable` list, spot-check that one of
   those tenets now reports `canInfluence.toward_elder:true`.
-- N8 (divinity): if any order has a `holyOrder.divinity` block (SKIP if divine entities are off in this
-  game), assert it has numeric `strength`, `presencesCorrupted`/`presencesTotal` and booleans
+- N8 (divinity): if divine entities are OFF in this game (the default map option), `oppose_divinity` on
+  any order must return a clean error saying they are DISABLED game-wide by the map option (not a
+  per-order "has no divine entity") — assert that, then SKIP the rest of N8. Otherwise, if any order has
+  a `holyOrder.divinity` block, assert it has numeric `strength`, `presencesCorrupted`/`presencesTotal` and booleans
   `canUndermine`/`canExile`. Then call `oppose_divinity {"orderId":"SG...","action":"exile"}` on an entity
   whose `canExile` is false and assert a clean error naming what is missing (strength and/or uncorrupted
   presences). Optionally, if `canUndermine` is true and you can spare 1 power, run `action:"undermine"` and

@@ -282,6 +282,32 @@ Needs a loaded game and a second terminal for the agent side (the `mcp` curl hel
 - [ ] Disable Observer mode → a blocked `wait_for_events` returns promptly with
       `observer_mode:false`; `end_turn` works again; `game_overview` drops the `observerMode` key
 
+## 10. Game-17 fixes (0.15.0 — Vinerva save where noted)
+
+- [ ] `mcp use_power` on an invalid Heart-of-the-Forest target far from any Heart → the error
+      itemizes `[X]`/`[OK]` clauses with the distance clause failed first (not "Must be cast on
+      land" alone); `list_powers` shows a `restrictionNote` on Heart of the Forest, Wilderness
+      Spirits and Manifestation (Vinerva)
+- [ ] With power at x.9-something: `game_overview.power` / `get_player_state.power` read x.9…
+      (floored, never rounded up to the next integer); a cast the displayed power can afford is
+      never refused for insufficient power, and a refused cast names the shortfall
+- [ ] Open an agent battle → "Flee as soon as possible" is at option index 2 in every round/state
+      until resolved; flee/retreat/reorder options appear at 3+ only
+- [ ] Complete a challenge that grants an item (e.g. Harvest Seed) → the trade window lists
+      "Take all and close" as option 0, and the warning says the item is NOT yet in your inventory
+- [ ] Grow a Heart, cast harmful powers near it → `get_threats.hearts` lists the Heart's menace and
+      a topSociety motivationPct; `game_overview.threats.heartAlert` appears as menace climbs;
+      `get_location` on the Heart shows `menace` even at 0 (Vinerva)
+- [ ] `end_turn` with `resolveOptionIndex` + `expectedDecisionId` echoed from the pending decision,
+      under `force:true` → the answer lands (a `resolved` object; no "no decision was pending"
+      warning followed by the same decisionId re-presented)
+- [ ] Cast Manifestation on a valid gifted settlement → success payload carries `notableDeaths`
+      naming the ruler (shadow/insane/countedInVictoryColumn) (Vinerva)
+- [ ] `mcp oppose_divinity` on a default map (divine entities off) → "DISABLED in this game" error
+      naming the map option, not a per-order refusal
+- [ ] `get_unit` on an agent → `combat.huntNote` present; get_tips `menace`/`profile` bodies name
+      the ruler-hunt-only scope of the 50/25 gate
+
 ## If something fails, collect:
 
 1. `Player.log` (path in step 2)

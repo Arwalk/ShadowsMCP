@@ -347,12 +347,16 @@ map.world.ui.checkData();
 - Each unit accumulates `menace` (how dangerous it seems) and `profile` (how visible it
   is); challenges add per-turn and on-completion amounts. Both are **sticky**: `addMenace`/
   `addProfile` ratchet up a floor (`inner_menaceMin`/`inner_profileMin`, always ≥ value/3)
-  that they can never fall below. An agent is **huntable** at `profile >= 50 && menace > 25`.
+  that they can never fall below. An agent is **huntable** at `profile >= 50 && menace > 25` — but
+  that gate covers only RULER-ordered escorted hunts (`SettlementHuman.cs:432`, `Act_AttackAgent`).
+  The independent hero AI has no gate at all: any hero that can SEE the agent attacks when
+  `getAttackUtility > 0`, which is roughly `menace > 30 + step distance` (`UA.cs:112-190`;
+  attack reluctance 30, menace capped at 100) regardless of profile.
   Hero AI sees it within `profile/10` hexes (`UA.getVisibleUnits`); the `profile/5` belt is the
   wider early-warning scan `Overmind.getThreats` runs (mirrored as `huntRadius`), and a ruler's
   hunt order has no range cap. The mod re-exports these on
   `get_unit`'s `combat` block (`menace`, `profile`, `menaceFloor`, `profileFloor`,
-  `huntRadius`, `isHuntable`) and, in prose, via `get_tips id=menace` / `id=profile`.
+  `huntRadius`, `isHuntable`, `huntNote`) and, in prose, via `get_tips id=menace` / `id=profile`.
 - People have `awareness` (they know something is wrong) and `shadow` (they belong to you).
 - `map.worldPanic` aggregates humanity's alarm; `ManagerAwareness` runs discovery;
   `map.awarenessOfUnderground` gates the underground layer's exposure.

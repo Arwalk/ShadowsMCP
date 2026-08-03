@@ -48,7 +48,9 @@ namespace ShadowsMcp.Tools
                 + "strength once ALL its worldly presences are corrupted; exile drives its acolytes to full "
                 + "shadow and zero sanity. Read strength/anger/corrupted presences and canUndermine/canExile "
                 + "from list_holy_orders {orderId}. Both raise a narrative event - answer it via "
-                + "resolve_decision (or end_turn resolveOptionIndex).",
+                + "resolve_decision (or end_turn resolveOptionIndex). NOTE: when the map option "
+                + "opt_divineEntities is off (the default), no order has an entity and this tool is "
+                + "permanently unusable for the whole game.",
                 Schema.Object(
                     Schema.Prop("orderId", Schema.String("The holy order's social group id, e.g. SG5"), required: true),
                     Schema.Prop("action", Schema.StringEnum(
@@ -194,10 +196,17 @@ namespace ShadowsMcp.Tools
             ToolResult err = ResolveOrder(ctx, a["orderId"].AsString(), out ho);
             if (err != null) return err;
 
+            // Say it once, game-wide: with the map option off NO order has an entity, so probing
+            // order after order (or game after game - 17 straight by one playtester) is wasted.
+            if (!map.opt_divineEntities)
+                return ToolResult.Error("divine entities are DISABLED in this game (map option "
+                    + "opt_divineEntities is off - the default): no holy order has one and "
+                    + "oppose_divinity can never do anything this game. Drop this line of play.");
+
             DivineEntity d = ho.divinity;
             if (d == null)
                 return ToolResult.Error(Summaries.SafeDisplayName(ho) + " has no divine entity"
-                    + " (divine entities are off in this game, or this order never had one)");
+                    + " (this order never had one)");
             if (d.exiled)
                 return ToolResult.Error(Summaries.DivinityName(d) + " is already exiled");
 
@@ -211,7 +220,7 @@ namespace ShadowsMcp.Tools
         {
             if (!(map.overmind.power >= 1.0))
                 return ToolResult.Error("undermining a divine entity costs 1 power; you have "
-                    + Summaries.Round2(map.overmind.power));
+                    + Summaries.Round2Down(map.overmind.power));
 
             map.overmind.power -= 1.0;
             d.strength -= 10;
@@ -231,7 +240,7 @@ namespace ShadowsMcp.Tools
             JsonValue o = JsonValue.NewObject()
                 .Set("order", Summaries.SocialGroupRef(ho))
                 .Set("action", "undermine")
-                .Set("powerRemaining", Summaries.Round2(map.overmind.power))
+                .Set("powerRemaining", Summaries.Round2Down(map.overmind.power))
                 .Set("divinity", Summaries.DivinityBlock(ctx, ho));
             if (startedWar)
                 o.Set("warInHeavenBegun", true)

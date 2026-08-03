@@ -87,7 +87,10 @@ namespace ShadowsMcp.Tips
                 "Each takes several turns (agent skill vs complexity) and grants the agent profile (detection: " +
                 "hero AI sees it within profile/10 hexes) and menace (how threatening heroes consider it). At " +
                 "profile >= 50 and menace > 25 an agent is huntable (get_unit's combat.isHuntable) and rulers " +
-                "send hunters - watch get_threats. Both stats are sticky: a floor ratchets up as the agent acts " +
+                "can order escorted hunts - but that gate covers ONLY ruler-ordered hunts: any free hero that " +
+                "SEES the agent (within profile/10 hexes) attacks on menace alone, worthwhile for it from " +
+                "roughly menace > 30 + distance, at any profile - watch get_threats. Both stats are sticky: " +
+                "a floor ratchets up as the agent acts " +
                 "and neither can drop below it, so don't build exposure you don't need; bleed them down with the " +
                 "Lay Low challenge or In Hiding, or enshadow the local ruler (blind to menace). get_tips " +
                 "id=menace / id=profile have the exact thresholds. Agents can also act on co-located agents " +
@@ -154,10 +157,12 @@ namespace ShadowsMcp.Tips
             Ctx("agent_exposed", "An agent is becoming huntable", "tactics", AgentBecomingExposed,
                 "An agent's profile & menace have entered the danger band - heroes can hunt it and rulers may send assassins.",
                 "One of your agents has built up profile and menace into the danger band (profile >= 40 and " +
-                "menace >= 20; at profile >= 50 and menace > 25 it is outright huntable - see get_unit's " +
-                "combat.isHuntable and get_threats). Hero AI can see and attack it within profile/10 hexes " +
-                "(get_threats scans a wider profile/5 belt as early warning), and human rulers may order hunts " +
-                "with no range limit. Options: pull it out of hunter range; run the Lay " +
+                "menace >= 20; at profile >= 50 and menace > 25 it is also huntable - see get_unit's " +
+                "combat.isHuntable and get_threats). isHuntable gates only RULER-ordered escorted hunts (no " +
+                "range limit); free heroes need no gate at all - any hero that sees the agent (within " +
+                "profile/10 hexes; get_threats scans a wider profile/5 belt as early warning) attacks on " +
+                "menace alone, worthwhile for it from roughly menace > 30 + distance even at single-digit " +
+                "profile. Options: pull it out of hunter range; run the Lay " +
                 "Low challenge or leave it In Hiding (combat.inHiding) to bleed profile and menace toward their " +
                 "floors; or enshadow the local ruler, who then ignores the menace. The floors themselves ratchet " +
                 "up permanently and nothing resets them, so exposure management is preventive: act BEFORE the " +
@@ -356,15 +361,18 @@ namespace ShadowsMcp.Tips
                 "(see get_tips id=magical_mastery). It is sticky: every gain also raises a minimum - at least a " +
                 "third of the current value - that profile can never drop below (get_unit combat.profileFloor). " +
                 "Reduce profile by lying low - the Lay Low challenge, or leaving the agent In Hiding. " +
-                "An agent is huntable only at profile >= 50 AND menace > 25."),
+                "An agent is huntable (ruler-ordered escorted hunts) only at profile >= 50 AND menace > 25 - " +
+                "but free heroes attack on menace alone within profile/10 sight, at any profile."),
 
             Ref("menace", "Menace (threat)", "tactics",
                 "Menace is how much heroes, armies and nations want to attack - it crosses fixed thresholds.",
                 "Menace is how threatening a target is considered, and it is the main term that makes something " +
                 "worth attacking. For an agent it raises how strongly heroes that can detect it (see profile) want " +
                 "to attack, crossing fixed thresholds: menace >= 20 with profile >= 20 gives the Infamous trait; " +
-                "menace > 25 with profile >= 50 makes it huntable, so rulers send assassins (get_unit's " +
-                "combat.isHuntable); menace >= 40 with profile >= 30 lets a human army block and attack it " +
+                "menace > 25 with profile >= 50 makes it huntable, so rulers can order escorted hunts (get_unit's " +
+                "combat.isHuntable) - though a free hero that SEES the agent (profile/10 hexes) needs no " +
+                "threshold: attacking is worthwhile for it from roughly menace > 30 + distance at any profile; " +
+                "menace >= 40 with profile >= 30 lets a human army block and attack it " +
                 "mid-challenge. You can only Redress Crimes (pay gold to cut menace) while menace is under 20. " +
                 "Enshadowed rulers are blind to menace - their urge to attack is scaled by (1 - their shadow) - so " +
                 "enshadowing the local ruler shields a menacing agent. Menace is sticky: a floor ratchets up with " +
@@ -511,7 +519,8 @@ namespace ShadowsMcp.Tips
         }
 
         // Fires when one of your agents has built profile/menace into the danger band - approaching the
-        // profile>=50 & menace>25 huntable threshold that ComputeAgentSafety and human rulers use. 40/20 is an
+        // profile>=50 & menace>25 RULER-hunt threshold that ComputeAgentSafety reports as isHuntable (free-hero
+        // attacks have no such gate - they trigger on menace alone within profile/10 sight, G17-#6). 40/20 is an
         // early-warning choice (like AwarenessRising's 0.1) so it fires before the agent is fully huntable.
         private static bool AgentBecomingExposed(GameContext c)
         {

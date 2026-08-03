@@ -34,6 +34,9 @@ namespace ShadowsMcp
             "rotate side A until that item is on top (item[0], marked \"top\"), then use the 'swap the " +
             "top item of each side' option. 'Take all' pulls every item + gold from side B to side A. " +
             "The composite options do a whole exchange in one click and then close the window. " +
+            "When side B is the 'Discard Items' world side (how challenge rewards and purchases " +
+            "arrive - NOT yet in your inventory), 'Take all and close' is option 0: claim before " +
+            "closing, because force/Done releases side B's items to the world for good. " +
             "Resolve with resolve_decision optionIndex; force=true just finishes/closes (Done).";
 
         public const string RwItemTrading =
@@ -57,7 +60,9 @@ namespace ShadowsMcp
             "(you lose ALL your minions), round 3+ is a safe Retreat. 'Flee as soon as possible' " +
             "auto-steps until fleeing is legal, then flees (at round 2 that costs ALL your minions) — " +
             "the one-call escape for an outmatched agent. Winning opens a 'Loot the Fallen Foe' trade " +
-            "next. force=true fights to the end.";
+            "next. force=true fights to the end. Option indices 0-2 are STABLE (0 fight, 1 step, " +
+            "2 flee-asap); options beyond 2 (Flee/Retreat, minion reorder) appear and disappear with " +
+            "the round - pick those by optionLabel, never a remembered index.";
 
         public const string RwCombat =
             "resolve_decision with optionIndex, or force=true to fight to the end";
@@ -109,7 +114,8 @@ namespace ShadowsMcp
             new Known { Kind = "idleAgents", Field = "resolveWith", Full = RwIdleAgents, Brief = null },
             new Known { Kind = "combat", Field = "note", Full = NoteCombat,
                 Brief = "flee unlocks at round 2 (costs ALL minions), round 3+ retreats safely; " +
-                        "'Flee as soon as possible' does it in one call." },
+                        "'Flee as soon as possible' does it in one call (always index 2; indices " +
+                        "3+ shift - use optionLabel)." },
             new Known { Kind = "combat", Field = "resolveWith", Full = RwCombat, Brief = null },
             new Known { Kind = "event", Field = "resolveWith", Full = RwEvent, Brief = null },
             new Known { Kind = "challengeComplete", Field = "resolveWith", Full = RwChallengeComplete, Brief = null },

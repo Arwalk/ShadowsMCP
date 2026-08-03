@@ -161,7 +161,7 @@ namespace ShadowsMcp.Tools
                     Schema.Prop("passRoutineEvents", Schema.Boolean("Auto-answer a curated whitelist of recurring low-stakes mid-challenge events ('Watched' -> Silence them, 'Life Continues' -> Subtly disrupt the party, 'Merchant of Antiquities' -> refuse) with a fixed sensible option so they don't stop the batch. Every auto-answer is reported in digest.autoResolvedEvents (title, chose, outcome). All other events still block normally.")),
                     Schema.Prop("resolveOptionIndex", Schema.Integer("Answer the blocking decision with this option index (from pendingDecision.options), then continue ending the turn.")),
                     Schema.Prop("resolveOptionLabel", Schema.String("Answer the blocking decision by option LABEL instead of index (exact match preferred, else unique substring; case-insensitive) - safer on lists whose indices shift between reads.")),
-                    Schema.Prop("expectedDecisionId", Schema.String("Optional, with resolveOptionIndex: only resolve if the pending decision still matches this decisionId (from pendingDecision); a mismatch clicks nothing and is reported in resolveWarning.")),
+                    Schema.Prop("expectedDecisionId", Schema.String("Strongly recommended with resolveOptionIndex/-Label: pass pendingDecision.decisionId. Guarantees the answer only ever lands on that exact decision (a mismatch clicks nothing, reported in resolveWarning) AND arms the retry that makes the answer land even when the decision is briefly absent when the call starts or only (re)appears during turn processing - without it, that situation wastes the answer with a 'no decision was pending' warning.")),
                     Schema.Prop("confirmDiscard", Schema.Boolean("With resolveOptionIndex/-Label on an item-trading decision: confirm closing a trade window whose 'Discard Items' side still holds items, deliberately releasing them to the world.")),
                     Schema.Prop("stopOnThreatMotivation", Schema.Integer("Your threat-stop threshold: when set (>0) the batch stops for threats ONLY once a hunter's motivation toward one of your agents is AT OR ABOVE this percent (level-triggered; can exceed 100 for a strongly-inclined hunter) - it REPLACES the default new-hunter/worse-odds stops, so batches no longer halt on every minor escalation. Omit or 0 for the default: stop on any meaningful danger change. The heroAttacking stop is separate and unaffected by this threshold.")),
                     Schema.Prop("stopOnHeroAttacking", Schema.Boolean("Default true: the batch stops (stopReason:\"heroAttacking\") the turn a hero STARTS an attack-pursuit of one of your agents or servants - the only window to react (reposition, Lay Low, bodyguard, or a power that targets attacking heroes) before it closes. Edge-triggered: a hunt already running when the batch starts does not re-stop it. Independent of stopOnThreatMotivation. Pass false to opt out."))),
@@ -520,8 +520,11 @@ namespace ShadowsMcp.Tools
                     " seals are broken (currently " + map.overmind.sealsBroken + ").");
             int cost = power.getCost();
             if (map.overmind.power < (double)cost)
+                // Raw compare (matches the game, UIE_GodPower.cs:38-42); display FLOORS so it can
+                // never read "costs 1, you have 1" while refusing (G17-#2).
                 return ToolResult.Error("not enough power: '" + power.getName() + "' costs " + cost +
-                    ", you have " + Summaries.Round2(map.overmind.power) + ".");
+                    ", you have " + Summaries.Round2Down(map.overmind.power) + " (short " +
+                    Summaries.Round2(cost - map.overmind.power) + "; power accrues each turn).");
 
             bool hasUnit = !a["targetUnitId"].IsNull;
             bool hasLoc = !a["targetLocationId"].IsNull;
@@ -530,13 +533,14 @@ namespace ShadowsMcp.Tools
                     (power.getRestrictionText() != null ? " (target: " + power.getRestrictionText() + ")" : ""));
 
             // Mirrors Sel_CastPower.onClick: validTarget then cast; castCommon deducts the cost.
+            JsonValue notableDeaths = JsonValue.Null;
             if (hasUnit)
             {
                 Unit target = Summaries.ResolveId(ctx, a["targetUnitId"].AsString()) as Unit;
                 if (target == null) return ToolResult.Error(QueryTools.StaleUnitIdError(ctx, a["targetUnitId"].AsString()));
                 if (!power.validTarget(target))
                     return ToolResult.Error(target.getName() + " is not a valid target for '" + power.getName() +
-                        "'. " + (power.getRestrictionText() ?? ""));
+                        "': " + (power.getRestrictionText() ?? "see list_powers targetRestriction"));
                 power.cast(target);
             }
             else
@@ -544,16 +548,39 @@ namespace ShadowsMcp.Tools
                 Location target = Summaries.ResolveId(ctx, a["targetLocationId"].AsString()) as Location;
                 if (target == null) return ToolResult.Error("unknown location id: " + a["targetLocationId"].AsString());
                 if (!power.validTarget(target))
+                {
+                    // Name the FAILED clause first (G17-#1: "Must be cast on land" for what was
+                    // actually a distance refusal sent the playtester hunting for empty land).
+                    // Falls back to the game's restriction text for powers without an evaluator.
+                    string clauses = Summaries.PowerRequirementsText(map, power, target);
                     return ToolResult.Error(target.getName() + " is not a valid target for '" + power.getName() +
-                        "'. " + (power.getRestrictionText() ?? ""));
+                        "': " + (clauses ?? power.getRestrictionText() ?? "see list_powers targetRestriction"));
+                }
+                // Destructive casts report who they are about to kill (G17-#11); snapshot BEFORE
+                // cast - afterwards the settlement and ruler are gone.
+                if (IsKnownDestructive(power))
+                    notableDeaths = Summaries.NotableDeathsForManifestation(ctx, map, target);
                 power.cast(target);
             }
             CheckUiData(map);
 
-            return ToolResult.Ok(JsonValue.NewObject()
+            JsonValue ok = JsonValue.NewObject()
                 .Set("cast", power.getName())
                 .Set("cost", cost)
-                .Set("remainingPower", Summaries.Round2(map.overmind.power)));
+                .Set("remainingPower", Summaries.Round2Down(map.overmind.power));
+            if (!notableDeaths.IsNull)
+                ok.Set("notableDeaths", notableDeaths)
+                  .Set("warning", "this cast destroyed the settlement: its population and ruler " +
+                      "died (see notableDeaths)");
+            return ToolResult.Ok(ok);
+        }
+
+        /// <summary>Powers whose cast destroys a settlement and kills its residents outright -
+        /// these get a pre-cast notableDeaths snapshot attached to the success payload (G17-#11).
+        /// Extend by adding cases here.</summary>
+        private static bool IsKnownDestructive(Power p)
+        {
+            return p is P_Vinerva_Manifestation;
         }
 
         // ---------- recruit ----------
@@ -1264,20 +1291,32 @@ namespace ShadowsMcp.Tools
             // agent that goes idle DURING the tick (its challenge completed, its travel ended), and the
             // resulting idleAgents block used to halt a passIdleAgents batch anyway (G14-#21).
             bool idleRetried = false;
+            bool resolveConsumed = false;
             int attempt = 0;
             for (int i = 0; i < count; i++)
             {
                 attempt++;
                 StepStatus st;
-                JsonValue payload = AdvanceOneTurn(ctx, map, world, force, applyResolve: attempt == 1, args, digest, out st);
-                // Harvest the first turn's resolve outcome HERE, whatever branch follows: the Blocked /
+                // Beyond the first iteration a resolve is only re-armed when the caller pinned the
+                // decision (expectedDecisionId) and no earlier iteration consumed it - the pin makes
+                // a mid-batch decision answerable without any risk of clicking an unrelated popup
+                // (G17-#7; the guard inside DecisionRegistry.Resolve enforces the id match).
+                bool allowResolve = attempt == 1 ||
+                    (!args["expectedDecisionId"].IsNull && !resolveConsumed);
+                JsonValue payload = AdvanceOneTurn(ctx, map, world, force, applyResolve: allowResolve, args, digest, out st);
+                // Harvest the resolve outcome HERE, whatever branch follows: the Blocked /
                 // NotAdvanced / GameOver / Error exits below used to drop it, making a consumed
                 // resolveOptionIndex look like a silent no-op ("advancedBy:0, no resolved, no warning").
                 // Captured before the transient retry too - the retry runs applyResolve:false and its
                 // payload never carries the resolve fields.
-                if (attempt == 1)
+                if (allowResolve && !payload["resolved"].IsNull)
                 {
-                    if (!payload["resolved"].IsNull) firstResolved = payload["resolved"];
+                    firstResolved = payload["resolved"];
+                    firstResolveWarning = payload["resolveWarning"].AsString();
+                    resolveConsumed = true;
+                }
+                else if (attempt == 1)
+                {
                     firstResolveWarning = payload["resolveWarning"].AsString();
                 }
                 if (st == StepStatus.Error && payload["transient"].AsBool())
@@ -1429,6 +1468,32 @@ namespace ShadowsMcp.Tools
             // old ordering read ui.blocker directly and silently skipped a queued decision's resolve.
             Decisions.DecisionRegistry.PumpQueue(ctx);
 
+            // The caller's answer to a pending decision (first iteration of a batch only, unless the
+            // expectedDecisionId retry below re-arms it). This lets an agent resolve popups through
+            // end_turn alone, without loading the get_pending_decision / resolve_decision tools
+            // (which some MCP clients never load). A resolve that had nothing to act on or failed is
+            // reported (resolveWarning), never silent.
+            JsonValue resolved = JsonValue.Null;
+            string resolveWarning = null;
+            bool wantResolve = applyResolve &&
+                (!args["resolveOptionIndex"].IsNull || !args["resolveOptionLabel"].IsNull);
+            bool resolveIgnoredNoDecision = false;
+            string expectedId = args["expectedDecisionId"].AsString();
+
+            // G17-#7 (repeat of the G15-#3 pattern): the force auto-dismiss and routine-event sweep
+            // below can consume the very decision the caller is answering, after which the resolve
+            // found "no decision pending" and the turn burned a round-trip. When the caller pinned
+            // WHICH decision they are answering (expectedDecisionId) and it is the live blocker right
+            // now, answer it FIRST - the pin makes this safe (it can only land on the popup they
+            // actually read). Without the pin the sweeps keep running first, so a stale notice can't
+            // swallow a blind resolveOptionIndex meant for the real choice underneath.
+            if (wantResolve && expectedId != null && string.Equals(
+                    Decisions.DecisionRegistry.CurrentDecisionId(ctx), expectedId, StringComparison.Ordinal))
+            {
+                ApplyResolve(ctx, args, ref resolved, ref resolveWarning);
+                wantResolve = false;
+            }
+
             // Under force, also clear leftover informational popups before the guards run, so a stale notice
             // can't block this call (last turn's sweep ran before the game raised it) or swallow a
             // resolveOptionIndex meant for the real choice underneath.
@@ -1443,36 +1508,22 @@ namespace ShadowsMcp.Tools
             bool passRoutine = args["passRoutineEvents"].AsBool();
             if (passRoutine && digest != null) digest.AbsorbAutoResolved(SweepRoutineEvents(ctx));
 
-            // If the caller passed a choice for a blocking decision, answer it before advancing (first
-            // iteration of a batch only). This lets an agent resolve popups through end_turn alone, without
-            // loading the get_pending_decision / resolve_decision tools (which some MCP clients never load).
-            // A resolve that had nothing to act on or failed is reported (resolveWarning), never silent:
-            // "advancedBy:0 with the same decision re-presented" is indistinguishable from a no-op otherwise.
-            JsonValue resolved = JsonValue.Null;
-            string resolveWarning = null;
-            if (applyResolve && (!args["resolveOptionIndex"].IsNull || !args["resolveOptionLabel"].IsNull))
+            if (wantResolve)
             {
                 if (Decisions.DecisionRegistry.FullOrNull(ctx).IsNull)
                 {
-                    resolveWarning = "resolveOptionIndex/resolveOptionLabel was provided but no decision was pending - it was ignored.";
+                    resolveIgnoredNoDecision = true;
+                    resolveWarning = "resolveOptionIndex/resolveOptionLabel was provided but no decision " +
+                        "was pending when it was applied - most likely the decision you answered was " +
+                        "already consumed (a force sweep, or it resolved itself), or it only appears " +
+                        "during turn processing. Echo pendingDecision.decisionId as expectedDecisionId " +
+                        "and the answer is retried automatically the moment that exact decision " +
+                        "(re)appears" + (expectedId == null ? " - none was provided this call, so it was ignored."
+                            : " (no match this call).");
                 }
                 else
                 {
-                    JsonValue rargs = JsonValue.NewObject();
-                    if (!args["resolveOptionIndex"].IsNull) rargs.Set("optionIndex", args["resolveOptionIndex"]);
-                    if (!args["resolveOptionLabel"].IsNull) rargs.Set("optionLabel", args["resolveOptionLabel"]);
-                    if (!args["confirmDiscard"].IsNull) rargs.Set("confirmDiscard", args["confirmDiscard"]);
-                    // Optional stale-decision guard: with expectedDecisionId the resolve refuses (and
-                    // reports via resolveWarning) when the pending decision is no longer the one read.
-                    if (!args["expectedDecisionId"].IsNull)
-                        rargs.Set("expectedDecisionId", args["expectedDecisionId"]);
-                    ToolResult rr = Decisions.DecisionRegistry.Resolve(ctx, rargs);
-                    resolved = JsonValue.NewObject()
-                        .Set("ok", rr != null && !rr.IsError)
-                        .Set("detail", rr != null ? rr.Text : null);
-                    if (rr == null || rr.IsError)
-                        resolveWarning = "resolving the pending decision failed: " +
-                            (rr != null ? rr.Text : "no result");
+                    ApplyResolve(ctx, args, ref resolved, ref resolveWarning);
                 }
             }
 
@@ -1593,6 +1644,20 @@ namespace ShadowsMcp.Tools
                 if (resolveWarning != null) result.Set("resolveWarning", resolveWarning);
                 if (!autoDismiss.IsNull && autoDismiss["count"].AsInt(0) > 0)
                     result.Set("autoDismissed", CompactDismiss(autoDismiss));
+                // Deferred resolve retry (G17-#7): the caller's answer found nothing pre-tick, but the
+                // decision it pinned surfaced DURING processing - same decisionId means provably the
+                // same popup (modal ids are per-popup-object), so land the answer now instead of
+                // burning a round-trip re-presenting it.
+                if (resolveIgnoredNoDecision && expectedId != null && string.Equals(
+                        Decisions.DecisionRegistry.CurrentDecisionId(ctx), expectedId, StringComparison.Ordinal))
+                {
+                    ApplyResolve(ctx, args, ref resolved, ref resolveWarning);
+                    resolveIgnoredNoDecision = false;
+                    if (!resolved.IsNull) result.Set("resolved", resolved);
+                    if (resolveWarning != null) result.Set("resolveWarning", resolveWarning);
+                    else result.Remove("resolveWarning");
+                }
+
                 // A fresh decision may have popped during processing (e.g. an event's follow-up). When the
                 // caller opted into passIdleAgents, don't surface the idle alert they'll re-raise next turn
                 // (Task_PassTurn clears each turnTick) — else a passIdleAgents batch would stop on it every turn.
@@ -1610,6 +1675,17 @@ namespace ShadowsMcp.Tools
             JsonValue pending = Decisions.DecisionRegistry.FullOrNull(ctx);
             if (pending.IsNull)
             {
+                Decisions.DecisionRegistry.PumpQueue(ctx);
+                pending = Decisions.DecisionRegistry.FullOrNull(ctx);
+            }
+            // Deferred resolve retry (G17-#7), non-advanced side: the pinned decision was absent
+            // pre-tick but is the blocker now - land the answer instead of re-presenting it.
+            if (!pending.IsNull && resolveIgnoredNoDecision && expectedId != null && string.Equals(
+                    Decisions.DecisionRegistry.CurrentDecisionId(ctx), expectedId, StringComparison.Ordinal))
+            {
+                ApplyResolve(ctx, args, ref resolved, ref resolveWarning);
+                resolveIgnoredNoDecision = false;
+                // Resolving can chain into a follow-up popup still in the delayed queue.
                 Decisions.DecisionRegistry.PumpQueue(ctx);
                 pending = Decisions.DecisionRegistry.FullOrNull(ctx);
             }
@@ -1661,6 +1737,28 @@ namespace ShadowsMcp.Tools
             JsonValue err = JsonValue.NewObject().Set("error", "the turn did not advance: " + diag);
             if (resolveWarning != null) err.Set("resolveWarning", resolveWarning);
             return err;
+        }
+
+        /// <summary>The one place end_turn's resolveOptionIndex/resolveOptionLabel is actually clicked
+        /// (pre-tick, guarded-early, and the post-tick expectedDecisionId retries all funnel here).
+        /// On success clears any prior "was ignored" warning; on failure reports via resolveWarning.</summary>
+        private static void ApplyResolve(GameContext ctx, JsonValue args, ref JsonValue resolved, ref string resolveWarning)
+        {
+            JsonValue rargs = JsonValue.NewObject();
+            if (!args["resolveOptionIndex"].IsNull) rargs.Set("optionIndex", args["resolveOptionIndex"]);
+            if (!args["resolveOptionLabel"].IsNull) rargs.Set("optionLabel", args["resolveOptionLabel"]);
+            if (!args["confirmDiscard"].IsNull) rargs.Set("confirmDiscard", args["confirmDiscard"]);
+            // Optional stale-decision guard: with expectedDecisionId the resolve refuses (and
+            // reports via resolveWarning) when the pending decision is no longer the one read.
+            if (!args["expectedDecisionId"].IsNull)
+                rargs.Set("expectedDecisionId", args["expectedDecisionId"]);
+            ToolResult rr = Decisions.DecisionRegistry.Resolve(ctx, rargs);
+            resolved = JsonValue.NewObject()
+                .Set("ok", rr != null && !rr.IsError)
+                .Set("detail", rr != null ? rr.Text : null);
+            resolveWarning = rr == null || rr.IsError
+                ? "resolving the pending decision failed: " + (rr != null ? rr.Text : "no result")
+                : null;
         }
 
         /// <summary>Answer consecutive whitelisted routine events (passRoutineEvents): each successful

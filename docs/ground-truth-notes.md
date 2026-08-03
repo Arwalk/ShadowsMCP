@@ -774,3 +774,58 @@ bodies in `QueryTools.cs`.
 - **Well of Shadows existence**: `Ch_WellOfShadows` is constructed against a `SettlementHuman`
   (`hum`, used unguarded in `valid()`, Ch_WellOfShadows.cs:77-85), so the challenge object never
   exists at ruins/wilderness — the vanilla restriction text omits that precondition.
+
+## Vinerva powers, Heart raze economy, hero-attack gates, power display (verified 0.15.0)
+
+- **Vinerva power restriction texts are incomplete/misleading**: `P_Vinerva_HeartOfForest.
+  getRestrictionText()` says only "Must be cast on land" while `validTarget(Location)`
+  (P_Vinerva_HeartOfForest.cs:32-78) also rejects a location that already has a Heart sub and —
+  once any Heart exists — requires the target within `param.power_vinerva_growthMaxDist` steps of
+  a Heart OR a unit at the target carrying an `I_VinervaSeed`; with ZERO hearts the distance rule
+  is waived entirely. `P_Vinerva_WildernessSpirits.validTarget` (:32-53) checks `loc.soc is
+  Society` (and ocean), not emptiness — orc camps (`SG_Orc` derives from `SG_ActionTakingMonster`,
+  not `Society`), ruins and Deep One sites are valid targets despite the "empty location" text,
+  and with zero hearts it is uncastable. The Tempt powers split into two shapes:
+  Gold/Nectar/PeaceLily/Health = own-property exclusion + `SettlementHuman` + heart distance
+  (zero hearts ⇒ false); Might/Salvation = just !ocean + heart distance. `P_Vinerva_Manifestation.
+  validTarget` (:33-70) = `SettlementHuman` with `ruler != null` + a `PR_Vinerva_GiftAccepted`
+  charge >= `param.power_vinervaManifestationReqGift` + heart distance with a ZERO-HEARTS
+  AUTO-PASS. The mod decomposes these as `PowerRequirements` clause tables since 0.15.0.
+- **Manifestation kills silently**: `P_Vinerva_Manifestation.cast` (:77-100) calls
+  `SettlementHuman.fallIntoRuin` (SettlementHuman.cs:1188-1223), which kills the WHOLE population
+  (`Complete Destruction` DEATH property) and `ruler.die(...)`; the null killer skips town
+  vengeance. The settlement is then replaced by `Set_VinervaManifestation` + a new Heart and
+  `loc.soc = null`. No game UI previews the casualties — the mod snapshots `notableDeaths`
+  pre-cast since 0.15.0.
+- **Heart raze economy**: every harmful Vinerva power adds menace to the NEAREST Heart
+  (`God_Vinerva.addMenaceToNearestTree`, God_Vinerva.cs:151-171; menace is the inherited
+  `Subsettlement.menace`). Each Society registers an `AN_RazeSubsettlement` per foreign
+  subsettlement with `menace > 0` (Society.cs:274-282) and acts when `getUtility > 0`
+  (AN_RazeSubsettlement.cs:49-87): `+target.menace`, `-param.utility_soc_razeSubsettlementExternal`
+  (= 35, Params.cs:2798), `-distance penalty` (capped), `-150` at war, and
+  `-target.menace * ruler.shadow` — an enshadowed sovereign is blind to Heart menace. On
+  completion the nearest idle `UM_HumanArmy` gets `Task_GoRazeSubsettlement` (RAZE_ORDER_ISSUED).
+  The game exposes the per-Heart "society most likely to attack ... motivation N%" ONLY in
+  `Sub_Vinerva_HeartOfForest.getHoverOverText` (:32-80), whose pos/neg ReasonMsg folding the mod
+  mirrors as `get_threats.hearts` since 0.15.0. `getUtility` is a pure computation — safe to call.
+- **Two separate hero-attack paths** (the isHuntable trap, G17-#6): the profile>=50 & menace>25
+  gate exists ONLY in the ruler-ordered escorted hunt (`SettlementHuman.cs:432` → `Act_AttackAgent`,
+  base reluctance `utility_soc_huntHeroReluctance` = 75, spawns `UM_CavalryEscort` +
+  `HERO_WITH_ESCORT_ATTACKING`). The independent hero AI (`UA.turnTickAI`, UA.cs:112-190) attacks
+  any VISIBLE agent (`getVisibleUnits`: `profile/10 >= stepDist`, UA.cs:1209-1224) when
+  `getAttackUtility > 0` (UA.cs:668-757): `+min(100, menace)` `-30` reluctance (`utility_UA_
+  attackReluctance`) `-stepDist` ± danger/war/relations/tags — i.e. roughly menace > 30 + distance
+  at ANY profile, emitting `HERO_ATTACKING` (UA.cs:182). Profile never enters the utility; it only
+  sets sight radius.
+- **The game FLOORS power for display and compares raw**: `UITopLeft.cs:44` shows `(int)power`;
+  castability is `overmind.power < (double)cost` raw (`UIE_GodPower.cs:38-42`; `Sel_CastPower.
+  onClick` does no cost check at all, and `Power.castCommon` would drive power negative).
+  `overmind.power` is a double accruing fractionally (`overmind_powerRegen` = 0.035/turn,
+  Params.cs:2186). The mod used `Math.Round` for display (0.996 → "1" while a 1-cost cast
+  refused, G17-#2); floored via `Round2Down` since 0.15.0.
+- **Reward delivery is a discard-side trade**: `Person.gainItem` (Person.cs:1058-1086) pops
+  `popItemTrade(person, new ItemToWorldExchange(item))` for any commandable unit — every
+  challenge reward/purchase (`Ch_HarvestSeed.complete`, `Ch_BuyItem.complete`, `Ch_BindTome`)
+  arrives on the DISCARD side and is lost on close (`ItemToWorldExchange.endTrading()` is empty).
+  AI/non-commandable units get the item slotted directly. The mod hoists 'Take all and close' to
+  option 0 on these windows since 0.15.0.
