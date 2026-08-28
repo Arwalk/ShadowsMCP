@@ -165,7 +165,8 @@ is set), `subs: List<Subsettlement>`, `getChallenges()`, `turnTick()`.
 | `name` / `getName()` | string | display name |
 | `relations` | `Dictionary<SocialGroup, DipRel>` | diplomacy; `getRel(other)` lazily creates |
 | `isAtWar()` | bool | any relation in state war |
-| `currentMilitary` / `maxMilitary` / `militaryRegen` | double | army capacity |
+| `currentMilitary` / `maxMilitary` / `militaryRegen` | double | army capacity; recomputed by `computeMilitary()` (sum of UM hp/maxHp) — call before reading mid-turn |
+| `data_highestAttackThreat` | double | 0..1 "Risk of Attack" (Aug 2025 UI); written ONLY by `Overmind.getThreats`, and only for infiltrated/watched orc camps, Deep Ones and the Dark Empire |
 | `menace` | double | how threatening this group looks |
 | `turnTick()` | | per-turn AI + upkeep |
 

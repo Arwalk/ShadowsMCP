@@ -105,7 +105,10 @@ resolve_decision, end_turn, new_game, wait_for_events.
   Assert the id round-trips (the detail's id matches the one you asked for).
 - A8 (societies): `list_social_groups` returns factions; `get_social_group` on your own faction (the one
   owning your commandable agents, e.g. from `list_units`.society) returns a detail object. Assert it
-  round-trips.
+  round-trips. Every item has `military.current`/`military.max`; `riskOfAttack` (0..1, the game's
+  "Risk of Attack" %) appears ONLY on groups the game tracks a threat for (infiltrated/watched orc
+  camps, Deep Ones, a Dark Empire) — assert no item carries `riskOfAttack: 0` (the field is omitted
+  at zero, never emitted as 0).
 
 **B. New state fields (recruitment + end-of-game)**
 - B1: `game_overview` includes `agentCap`, `canRecruit`, `endOfGameAchieved`, `defeated`,

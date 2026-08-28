@@ -284,10 +284,14 @@ namespace ShadowsMcp.Tools
 
             host.Register(new ToolDefinition(
                 "list_social_groups",
-                "List all societies and factions with their wars and military strength.",
+                "List all societies and factions with their wars, military strength and risk of attack.",
                 Schema.Object(),
                 a => WithMap(ctx, map =>
                 {
+                    // riskOfAttack (data_highestAttackThreat) is only written inside getThreats,
+                    // which the game runs when its threats panel refreshes; run it here so the
+                    // value is current rather than left over from an earlier panel/list_threats.
+                    try { if (map.overmind != null) map.overmind.getThreats(); } catch { }
                     JsonValue arr = JsonValue.NewArray();
                     foreach (SocialGroup sg in map.socialGroups)
                     {
@@ -304,6 +308,7 @@ namespace ShadowsMcp.Tools
                 {
                     SocialGroup sg = Summaries.ResolveId(ctx, a["socialGroupId"].AsString()) as SocialGroup;
                     if (sg == null) return ToolResult.Error("unknown social group id: " + a["socialGroupId"].AsString());
+                    try { if (map.overmind != null) map.overmind.getThreats(); } catch { }
                     return ToolResult.Ok(Summaries.SocialGroupDetail(ctx, sg));
                 })));
 

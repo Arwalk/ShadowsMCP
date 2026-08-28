@@ -443,7 +443,8 @@ namespace ShadowsMcp.Tips
                 "Magic is mostly optional. If you never pursue magical research or magical agents, the world's " +
                 "mages stay weak and cautious. But once they detect a new power gaining magical strength, they " +
                 "start a magical arms race - racing to uncover Arcane Secrets to deny them to you and boost " +
-                "themselves. Arcane Secrets are found in libraries, or produced by researching them for gold, by " +
+                "themselves (the game caps this drive, so mages keep their other duties rather than studying " +
+                "nonstop). Arcane Secrets are found in libraries, or produced by researching them for gold, by " +
                 "the Plague Doctor's experiments, or by studying the souls of dying heroes."),
 
             Ref("magical_mastery", "Magical schools & channelling", "magic",
@@ -626,7 +627,7 @@ namespace ShadowsMcp.Tips
             Map m = c != null ? c.Map : null;
             if (m == null || m.socialGroups == null) return false;
             foreach (SocialGroup sg in m.socialGroups)
-                if (sg is Society s && s.isDarkEmpire) return true;
+                if (sg is Society s && s.isDarkEmpire && !s.isGone()) return true;
             return false;
         }
 
@@ -695,8 +696,11 @@ namespace ShadowsMcp.Tips
         {
             Map m = c != null ? c.Map : null;
             if (m == null || m.socialGroups == null) return false;
+            // Skip gone (absorbed/defunct) societies, matching the game's own scan fix in
+            // AN_FormAlliance/AN_JoinDarkEmpire: an absorbed society can linger in socialGroups
+            // with its flag still set.
             foreach (SocialGroup sg in m.socialGroups)
-                if (sg is Society s && s.isAlliance) return true;
+                if (sg is Society s && s.isAlliance && !s.isGone()) return true;
             return false;
         }
 

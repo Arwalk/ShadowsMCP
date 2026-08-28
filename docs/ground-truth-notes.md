@@ -5,7 +5,9 @@ Every game API the mod touches, verified in the decompiled sources (`tools/decom
 
 ## Game version
 
-`World.versionNumber = 2`, `subversionNumber = 0` → version string **"2.0"** (`World.cs:103`).
+`World.versionNumber = 2`, `subversionNumber = 0` → version string **"2.0"** (`World.cs:104`).
+The Aug 2025 game update kept these constants, so `versionsSupported: ["2.0"]` and the
+save-header pin `Version;2;0` (`SaveFileReader.cs`) both remain correct.
 `mod_desc.json.versionsSupported` entries are compared by **exact string equality** to
 `versionNumber + "." + subversionNumber` (`EventManager.loadModSurface`). A mismatch only pops
 an "incompatible" warning and flags the mod — it still loads. If a folder named `v2.0` exists
@@ -25,6 +27,11 @@ inside the mod folder, content is loaded from there instead (per-version packagi
 - Exceptions during DLL load are swallowed → popup "Mod failed to load". **Never throw from
   onModsInitiallyLoaded**; catch and log instead.
 - `map.mods = loadedModKernels` at game start (`World.startup`, `World.cs:451`).
+- Aug 2025 update: `EventManager.shuffleCommunityUp` now forces any mod whose title contains
+  "community library" to the FRONT of the load order (applied to both the scan list and the
+  saved-order list). That was the whole "mod version incompatibility" critical fix — the
+  version-string comparison and the kernel pipeline above are unchanged. ShadowsMCP has no
+  load-order dependency, so this is inert for us.
 
 ## Mod config (ModConfigOptList.cs, PopupModConfig.cs)
 
@@ -696,7 +703,12 @@ bodies in `QueryTools.cs`.
   `Ch_DriveBackShadow.cs:134,138` and `Ch_Consacrate.cs:91`; the mod's `RecentEventLog.CountSince`
   (0.8.0) counts them per turn-window for the `shadow_treadmill` tip (3+ in 20 turns).
   `Society.isAlliance` is a plain public bool (Society.cs:38); Alliance razing of enshadowed
-  settlements raises `ALLIANCE_OUTPOST` (Society.cs:653).
+  settlements raises `ALLIANCE_OUTPOST` (Society.cs:653). Aug 2025 update: absorbed societies
+  can linger in `map.socialGroups` with flags still set, so the game's alliance/dark-empire
+  scans now filter `!isGone()` (AN_FormAlliance.cs / AN_JoinDarkEmpire.cs), and
+  `AN_JoinDarkEmpire.complete` sets `isDarkEmpire` on the absorbed society (it wrongly set
+  `isAlliance` before — the "another nation marked as the alliance" bug). The mod's
+  `AllianceActive`/`HasDarkEmpire` tip triggers mirror the same `!isGone()` filter since 0.18.0.
 
 ## Ritual placement, unique archetypes, channelled heat, mid-challenge events (verified 0.9.0)
 
@@ -878,3 +890,45 @@ bodies in `QueryTools.cs`.
   slot, so the blocker live BEFORE the call's PumpQueue is exactly the pendingDecision the
   previous response reported — the safe auto-pin anchor; anything that first appears after the
   pump is a popup the caller has never seen.
+
+## Aug 2025 game update — full compatibility audit (verified 0.18.0)
+
+The update changed only `Assembly-CSharp.dll` (all other Managed DLLs byte-identical) and was
+**purely additive at the API level** — nothing the mod names was removed, renamed or re-signed;
+the mod compiled against it unchanged. Per-system findings, from a full old-vs-new decompile diff:
+
+- **Mod loading**: only `shuffleCommunityUp` added (see the mod-loading section above). Version
+  check, kernel instantiation, `onModsInitiallyLoaded` timing all unchanged. `ModKernel` gained
+  no new virtuals.
+- **Resolution fix**: `World.setResolution` rewritten (only applies when values differ; picks
+  `FullScreenWindow`/`Windowed` — the game never sets `ExclusiveFullScreen`), a startup
+  `InitResolutionNextFrame` coroutine, and a `World.Update` watchdog that re-applies ONLY on
+  width/height mismatch — mode-only flips are ignored. `McpBridgeBehaviour`'s focus-time
+  exclusive→borderless downgrade therefore cannot ping-pong with it and matches the game's own
+  canonical fullscreen mode; left as is. `Map.gen*` methods now call `setResolution` on entry
+  (harmless on the mod's `new_game` path).
+- **`World.bEndTurn`**: guard order unchanged (only a semantically identical `||`→`|` compile
+  artifact). `UIMainMenu`/`PopupGameOptions`/`World.startup` unchanged → `new_game` replication
+  in LifecycleTools untouched.
+- **Popups**: no new or renamed `Popup*` classes → `GenericButtonHandler` classification lists
+  unchanged. `PopupBattleArmy.setup` now appends " (SocietyName)" to army hp rows (the "army
+  names in battle screen" item) — informational only.
+- **Civil war messages**: the `CIVIL_WAR` UnifiedMessage moved from the END of
+  `Society.triggerCivilWar(List<Location>)` to the START, so it now precedes the war
+  declarations it causes in `turnUnifiedMessages`. `CIVIL_WAR` is in the observer whitelist and
+  ObserverCapture is order-agnostic — feed order just reads more naturally now.
+- **Learn Arcane Secret**: the `Ch_LearnSecret.getUtility` "Magical Arms Race" term is now
+  capped at 50 (`num > 50.0 → 50.0`); params unchanged. The `magic` tip mentions the cap since
+  0.18.0.
+- **Threats/side panel**: `Overmind.getThreats` now tracks attack threat for more groups
+  (SG_Orc with ANY infiltrated last-turn location — was capital-at-1.0 — plus all SG_DeepOnes
+  and Dark Empire societies). `UILeftLocation` shows `soc.currentMilitary` (after a fresh
+  `computeMilitary()`) and `data_highestAttackThreat` as "Risk of Attack" % when > 0;
+  `smallDescTitles/Descs` grew 8→10. The mod surfaces both since 0.18.0 (see
+  `SocialGroupSummary`); `data_highestAttackThreat` is written ONLY inside `getThreats`, so the
+  list/get social-group tools call it first to refresh.
+- **Map layers**: new static `Assets.Code.Modding.ModMapGenTools` (`addLayer`/`populateLayer`),
+  cheat `addLayer`; `MapMaskManager` unchanged. Docs-only for us (modding-tutorial).
+- Everything else in the diff was decompiler-version noise (`x -= 1.0`→`x--`, `&&`→`&` on
+  side-effect-free bools) or player-facing-only (UIMusic robustness, GraphicalMap unit picking,
+  windowScale double→float).

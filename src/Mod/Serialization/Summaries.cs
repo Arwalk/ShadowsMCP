@@ -1081,6 +1081,9 @@ namespace ShadowsMcp
                     if (l.soc == sg) locationCount++;
                 }
             }
+            // currentMilitary/maxMilitary are otherwise only recomputed on the game's turn tick;
+            // the side panel (UILeftLocation.setTo) recomputes right before display, so match it.
+            try { sg.computeMilitary(); } catch { }
             JsonValue o = JsonValue.NewObject()
                 .Set("id", SocialGroupId(sg))
                 .Set("name", SafeName(() => sg.getName()))
@@ -1090,6 +1093,13 @@ namespace ShadowsMcp
                 .Set("military", JsonValue.NewObject()
                     .Set("current", Round2(sg.currentMilitary))
                     .Set("max", Round2(sg.maxMilitary)));
+
+            // The side panel's "Risk of Attack": highest motivation (0..1) of any nation to attack
+            // this group. Overmind.getThreats maintains it only for groups the dark player has a
+            // stake in (infiltrated/watched orc camps, Deep Ones, the Dark Empire); omitted at 0,
+            // matching the panel's visibility gate.
+            if (sg.data_highestAttackThreat > 0.0)
+                o.Set("riskOfAttack", Round2(sg.data_highestAttackThreat));
 
             JsonValue wars = JsonValue.NewArray();
             foreach (KeyValuePair<SocialGroup, DipRel> kv in sg.relations)

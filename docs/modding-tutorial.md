@@ -134,6 +134,13 @@ Two things to know about the loader (both verified in the decompiled loader code
 | `receiveModConfigOpts_int/_bool(string, value)` | user changed your mod's config |
 | `mapMask_*` | draw custom map overlay modes |
 
+Since the Aug 2025 game update mods can also add whole new **map layers** (grid z-levels):
+`Assets.Code.Modding.ModMapGenTools.addLayer(map)` appends an empty layer and returns its z
+index, and `ModMapGenTools.populateLayer(map, layerZ, connectToGround)` scatters connected
+locations across it (it ends by re-running `map.checkConnectivity()` and
+`map.recomputeStepDistMap()`). Call them from a mapgen hook such as
+`afterMapGenBeforeHistorical`. The cheat console command `addLayer` demos the pair.
+
 ## 3. Lesson 2 — reading game state
 
 Everything hangs off the `Map` you receive in hooks (see
